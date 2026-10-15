@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .board_reader import BoardReadError, _json, _text
 from .worker_client import WorkerBoardClient
+from .human_client import HumanWorkerClient
 
 
 class EventBoardClient(WorkerBoardClient):
@@ -44,3 +45,11 @@ class EventBoardClient(WorkerBoardClient):
                 or any(not isinstance(item, dict) for item in value)):
             raise BoardReadError('invalid_response')
         return value
+
+
+class HumanEventBoardClient(HumanWorkerClient, EventBoardClient):
+    """Explicit opt-in: the scoped event feed plus bounded question/lookup.
+
+    Both parent clients retain their argument validation. Queue selection,
+    approvals, actions, messages and autonomous registration remain unavailable.
+    """

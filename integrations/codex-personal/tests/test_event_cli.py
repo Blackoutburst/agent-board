@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 from blackoutburst_agents.cli import main
 from blackoutburst_agents.event_cli import _public_result
+from blackoutburst_agents.event_journal import EventJournalError
 
 
 class EventCliTests(unittest.TestCase):
@@ -77,6 +78,25 @@ class EventCliTests(unittest.TestCase):
             runs.return_value.close.assert_called_once()
             self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
 
+    def test_human_option_uses_opt_in_client_and_pins_recipient_in_preview(self):
+        with patch('blackoutburst_agents.event_cli.HumanEventBoardClient.from_connection_file', return_value=self.client) as human, \
+                patch('blackoutburst_agents.event_cli.EventBoardClient.from_connection_file') as plain, \
+                patch('blackoutburst_agents.event_cli.EventJournal'), \
+                patch('blackoutburst_agents.event_cli.BoardWorker') as worker, \
+                patch('blackoutburst_agents.event_cli.EventDrainer') as drain:
+            drain.return_value.drain.return_value=self.receipt
+            code,output=self.invoke(self.args+['--human-owner','named-human'])
+            self.assertEqual((code,output['status']),(0,'pending'))
+            self.assertEqual(drain.return_value.drain.call_args.kwargs['human_owner_id'],'named-human')
+            human.assert_called_once();plain.assert_not_called();worker.assert_not_called()
+
+    def test_invalid_human_recipient_is_rejected_before_any_connection(self):
+        with patch('blackoutburst_agents.event_cli.HumanEventBoardClient.from_connection_file') as human, \
+                patch('blackoutburst_agents.event_cli.EventBoardClient.from_connection_file') as plain:
+            for value in ('',' ','x\ny','\ud800','x'*257):
+                self.assertEqual(self.invoke(self.args+['--human-owner',value])[0],2)
+            human.assert_not_called();plain.assert_not_called()
+
     def test_invalid_bounds_do_not_connect(self):
         with patch('blackoutburst_agents.event_cli.EventBoardClient.from_connection_file') as client:
             for extra in (['--after', '-1'], ['--limit', '201'], ['--max-pages', '0'],
@@ -122,6 +142,56 @@ class EventCliTests(unittest.TestCase):
             events.resolve_batch.assert_called_once_with('batch', operation)
             client.assert_not_called()
             worker.assert_not_called()
+
+    def test_reconcile_lookup_is_explicit_read_only_and_uses_original_session(self):
+        scope={'ticket_id':'ticket','board_session_id':'original-session','board_endpoint':'https://board.test/mcp'}
+        configuration={'instruction':'PRIVATE_LOCAL_INSTRUCTION'}
+        operation={'id':'operation','stage':'abandoned','scope':scope,'request_id':'request','configuration':configuration}
+        request={'id':'known-request'}
+        args=['events','--journal',str(self.root/'events'),'--work-journal',str(self.root/'work'),
+            'reconcile','--batch','batch','--operation','operation','--connection-file',str(self.root/'connection.json')]
+        with patch('blackoutburst_agents.event_cli.EventJournal') as journal, \
+                patch('blackoutburst_agents.event_cli.WorkJournal') as work, \
+                patch('blackoutburst_agents.event_cli.HumanEventBoardClient.from_connection_file',return_value=self.client) as connect, \
+                patch('blackoutburst_agents.event_cli.BoardWorker') as worker, \
+                patch('blackoutburst_agents.event_cli.RunStore') as runs:
+            events=journal.return_value.__enter__.return_value
+            events.get_batch.return_value={'subscription_id':'subscription','request_id':'request'}
+            events.get_subscription.return_value={'scope':scope,'configuration':configuration}
+            events.resolve_batch.return_value={'id':'batch'}
+            work.return_value.__enter__.return_value.get.return_value=operation
+            worker.return_value.lookup_human_question.return_value=request
+            code,output=self.invoke(args)
+            self.assertEqual((code,output['decision']),(0,'abandoned'))
+            self.assertEqual(connect.call_args.kwargs['session_id'],'original-session')
+            events.resolve_batch.assert_called_once_with('batch',operation,verified_human_request=request)
+            worker.return_value.run.assert_not_called();runs.assert_not_called()
+            events.resolve_batch.reset_mock()
+            worker.return_value.lookup_human_question.return_value=None
+            code,output=self.invoke(args)
+            self.assertEqual((code,output['status'],output['reason']),(2,'needs_review','human_request_unresolved'))
+            events.resolve_batch.assert_not_called()
+            worker.return_value.lookup_human_question.reset_mock()
+            connect.reset_mock()
+            for changed in ({'scope':{**scope,'ticket_id':'another-ticket'}}, {'request_id':'another-request'},
+                            {'configuration':{'instruction':'another instruction'}}):
+                work.return_value.__enter__.return_value.get.return_value={**operation,**changed}
+                self.assertEqual(self.invoke(args)[0],2)
+            connect.assert_not_called();worker.return_value.lookup_human_question.assert_not_called()
+
+    def test_ambiguous_local_reconcile_reports_actionable_review_state(self):
+        with patch('blackoutburst_agents.event_cli.EventJournal') as journal, \
+                patch('blackoutburst_agents.event_cli.WorkJournal') as work, \
+                patch('blackoutburst_agents.event_cli.HumanEventBoardClient.from_connection_file') as connect:
+            events=journal.return_value.__enter__.return_value
+            events.get_batch.return_value={'subscription_id':'subscription'}
+            events.get_subscription.return_value={'scope':{'ticket_id':'ticket'}}
+            events.resolve_batch.side_effect=EventJournalError('human_request_unresolved')
+            work.return_value.__enter__.return_value.get.return_value={'scope':{'ticket_id':'ticket'}}
+            code,output=self.invoke(['events','--journal',str(self.root/'events'),'--work-journal',str(self.root/'work'),
+                'reconcile','--batch','batch','--operation','operation'])
+            self.assertEqual((code,output['status'],output['reason']),(2,'needs_review','human_request_unresolved'))
+            connect.assert_not_called()
 
 
 if __name__ == '__main__':

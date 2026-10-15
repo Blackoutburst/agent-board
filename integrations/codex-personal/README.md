@@ -34,7 +34,7 @@ La preuve ne valide pas encore le compte d’un second propriétaire, l’éligi
 
 Ce module complète les intégrations de fournisseurs du board. La création et la personnalisation des agents, le choix des fournisseurs, les déclencheurs et l’orchestration restent du côté du board. Cet adaptateur se concentre sur l’exécution Codex personnelle et ses preuves de fonctionnement.
 
-Le raccordement en lecture utilise maintenant les identités persistantes et le MCP 2.0 du board, publié dans `0a601f2`. Le contexte vérifie les relations propriétaire, agent, projet, ticket et conversation, puis la fraîcheur des sources. Le board fournit aussi des réservations, une file de travail, des délégations et des demandes humaines ; `worker` raccorde une réservation explicite et une publication de texte. Avec le board 2.0.3, `worker run --human-owner` autorise une question au participant choisi puis une reprise explicite dans la même session après sa réponse. La sélection automatique et la délégation restent à intégrer. Les libellés d’un work local ne constituent pas des autorisations.
+Le raccordement en lecture utilise maintenant les identités persistantes et le MCP 2.0 du board, publié dans `0a601f2`. Le contexte vérifie les relations propriétaire, agent, projet, ticket et conversation, puis la fraîcheur des sources. Le board fournit aussi des réservations, une file de travail, des délégations et des demandes humaines ; `worker` raccorde une réservation explicite et une publication de texte. Avec le board 2.0.3, `worker run --human-owner` et `events drain --human-owner` autorisent une question au participant choisi puis une reprise explicite dans la même session après sa réponse. La sélection automatique et la délégation restent à intégrer. Les libellés d’un work local ne constituent pas des autorisations.
 
 L’[interface du module et la répartition proposée](INTEGRATION.md) permettent de le raccorder à un fournisseur du board sans créer un second système de profils.
 
@@ -44,7 +44,7 @@ L’[interface du module et la répartition proposée](INTEGRATION.md) permetten
 python3 -m unittest discover -s tests -v
 ```
 
-Les **310 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
+Les **352 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
 
 - [Reçu du diagnostic local](docs/local-doctor-2026-10-15.json)
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
@@ -62,3 +62,5 @@ Le pilote `worker` sur le MCP 2.0.1 a réservé un ticket choisi, transmis son c
 Ces reçus ne contiennent ni jeton de connexion, ni transcription, ni sortie brute du client.
 
 La version 0.7 lit les préférences du profil du board 2.1 et vérifie leur version avant composition du contexte. La langue, le style et la spécialisation peuvent guider la réponse dans le périmètre demandé ; fournisseur/modèle restent des préférences et ne changent pas automatiquement l’exécutant. Les droits, connexions et tâches hors portée ne sont pas transmis au modèle.
+
+La version 0.8 raccorde les questions au journal événements : la réponse reprend le lot et la session d’origine, et son événement est dédupliqué même après coupure ou abandon. Le rapprochement optionnel d’une question dont l’accusé a été perdu reste en lecture seule. Les scénarios utilisent un vrai Board temporaire et des modèles simulés ; la question/réponse avec un humain réel reste une preuve distincte.
