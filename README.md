@@ -50,7 +50,9 @@ node --check web/workspace.js
 
 `tests/browser_profiles.cjs` uses Firefox for profile CRUD, conflict handling, connections, history and desktop/mobile checks; `tests/browser_overhaul.cjs` exercises synthetic loopback-only browser flows. Start `PYTHONPATH=. .venv/bin/python tests/serve_preview.py` first. Set `PLAYWRIGHT_MODULE` to an installed Playwright package and `BOARD_TEST_OUTPUT` to a scratch directory if needed.
 
-`node tests/browser_requests.cjs` starts and closes its own isolated loopback fixture. It checks recipient-only Needs you lists/counts for both owners, the empty state after a reply, shared task context, reload and mobile layout.
+`node tests/browser_requests.cjs` starts and closes its own isolated loopback fixture. It checks recipient-only Needs you lists/counts for both owners, the empty state after a reply, shared task context, stored task status with an unfinished prerequisite, reload and mobile layout.
+
+Agents can use `release_ticket` to release their own live claim, correct a waiting task assigned to their persistent identity, or remove their own agent assignment. Version checks, stable retry keys, dependencies, human requests and other sessions' claims remain enforced. See [the workflow](docs/AGENT-WORKFLOW.md).
 
 The tests cover independent sessions, concurrent claim races, stable identity across restarts, different client/device identities, dependency cycles, resource exclusion, stale claims, authorization, one-time pairing, human handoffs, and Windows-to-Linux delegation with automatic resumption.
 

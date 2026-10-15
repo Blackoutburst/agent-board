@@ -90,19 +90,31 @@ def test_unfinished_expired_claim_blocks_new_selection_across_projects(space):
     assert board.claim_next_ticket(first, 'explicit-new-attempt', another['id'])['ticket']['id'] == ready['id']
 
 
-def test_pending_human_request_blocks_another_selection_and_negative_key_stays_pinned(space):
+def test_pending_request_only_blocks_its_ticket_and_negative_key_stays_pinned(space):
     board, human, _, project, first, *_ = space
     task = new(space)
     selected = board.claim_next_ticket(first, 'first', project['id'])['ticket']
     question = board.request_human_input(first, task['id'], human['owner_id'], 'Which input?', 'question',
                                          expected_version=selected['version'])
-    other = new(space, 'Ready other task', priority='urgent')
     result = board.claim_next_ticket(first, 'during-question', project['id'])
     assert result == {'claimed': False, 'reason': 'waiting_on_human', 'retried': False}
+    other = new(space, 'Ready other task', priority='urgent')
     assert board.get_ticket(first, other['id'])['ticket']['claimant'] is None
     board.resolve_human_request(human, question['id'], 'This input.')
     assert board.claim_next_ticket(first, 'during-question', project['id']) == {**result, 'retried': True}
     assert board.claim_next_ticket(first, 'after-human-reconciliation', project['id'])['ticket']['id'] == other['id']
+
+
+def test_ready_work_can_be_selected_while_an_unrelated_human_request_is_open(space):
+    board, human, _, project, first, *_ = space
+    task = new(space)
+    selected = board.claim_next_ticket(first, 'first', project['id'])['ticket']
+    board.request_human_input(first, task['id'], human['owner_id'], 'Which input?', 'question',
+                              expected_version=selected['version'])
+    other = new(space, 'Ready other task')
+    result = board.claim_next_ticket(first, 'while-waiting', project['id'])
+    assert result['claimed'] and result['ticket']['id'] == other['id']
+    assert board.get_ticket(first, task['id'])['ticket']['waiting_on_human']
 
 
 def test_lookup_key_is_bound_to_actor_session_device_and_project(space):
@@ -184,11 +196,11 @@ def test_lookup_does_not_require_queue_autonomy(space):
     assert error.value.status == 403
 
 
-def test_other_session_of_same_profile_cannot_bypass_expired_claim_or_human_wait(space):
+def test_other_session_fences_expired_claim_but_can_work_after_human_handoff(space):
     board, human, _, project, first, second, _ = space
     task = new(space)
     selected = board.claim_next_ticket(first, 'original', project['id'])['ticket']
-    new(space, 'Other ready work')
+    other = new(space, 'Other ready work')
     with sqlite3.connect(board.db_path) as db:
         db.execute('UPDATE tickets SET lease_expires_at=0 WHERE id=?', (task['id'],))
         # Migration-compatible fallback for older stored author records.
@@ -199,7 +211,7 @@ def test_other_session_of_same_profile_cannot_bypass_expired_claim_or_human_wait
     board.request_human_input(first, task['id'], human['owner_id'], 'Question?', 'question', expected_version=selected['version'])
     with sqlite3.connect(board.db_path) as db:
         db.execute("UPDATE human_requests SET requested_by=json_remove(requested_by,'$.agent_id')")
-    assert board.claim_next_ticket(second, 'waiting-after-restart', project['id'])['reason'] == 'waiting_on_human'
+    assert board.claim_next_ticket(second, 'waiting-after-restart', project['id'])['ticket']['id'] == other['id']
 
 
 def test_another_bound_device_cannot_bypass_profile_work_but_distinct_profile_can(space):

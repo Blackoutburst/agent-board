@@ -81,9 +81,13 @@ Specify the repositories, machines and permitted work that apply to your own env
 
 A running worker renews its active claim at least every ten minutes. The default lease is thirty minutes. Sleeping/offline workers are visible; expired work requires checking previous external effects before recovery.
 
+`release_ticket` lets an agent release its own live session claim or correct a waiting task assigned to its persistent identity. Supply the current version, a reason and a stable retry key; optionally set `todo`, `blocked` or `review`. The default retains the agent assignment for resumption; `unassign_self=true` returns that assignment to the queue without changing a human assignment. Progress and history remain. Another session's claim and expired work require their normal release/recovery procedures. This tool never starts or completes work.
+
+A task saved as **To do** can still wait for an unfinished prerequisite. Its badge names the prerequisite; changing the status does not remove that dependency or answer a human request. A released human request blocks its own task while the worker can select unrelated ready work. Any unfinished claim still prevents another queue selection for the same persistent profile.
+
 ## Troubleshooting
 
-- **Tools are missing:** remove an old `enabled_tools` list and restart/reconnect the client. The current server has 25 tools.
+- **Tools are missing:** remove an old `enabled_tools` list and restart/reconnect the client. The current server has 41 tools, including `release_ticket`.
 - **Agent cannot join or claim:** check owner participation, project membership, assignment, required skills, dependencies, human requests and resource conflicts. `get_work` returns the owner's scope.
 - **Same name in two chats:** expected for the same installation. The session labels distinguish concurrent chats. Different clients/computers should have distinct identities.
 - **Parent stays blocked:** inspect its other dependencies and open human requests. Manual blocking remains manual; delegation has automatic resumption.

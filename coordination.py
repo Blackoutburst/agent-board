@@ -231,6 +231,62 @@ class CoordinationMixin(ProjectsMixin):
             actor = self._actor(db, actor, 'allow_requests')
             return self._claim_ticket_tx(db, actor, self._ticket_member(db, actor, ticket_id), expected_version, recovery_evidence)
 
+    def release_ticket(self, actor, ticket_id, expected_version, idempotency_key, reason,
+                       status='', unassign_self=False):
+        """Release only this session's live claim or this profile's unclaimed task.
+
+        This is waiting-state maintenance, never permission to execute or finish
+        work. A different session's claim, including an expired one, is fenced.
+        """
+        _version(expected_version)
+        _text(idempotency_key, 'idempotency_key', 1, 200)
+        reason = _text(reason, 'reason', 1, 20000).strip()
+        if not reason or status not in ('', 'todo', 'blocked', 'review'):
+            _fail('Supply a reason and an optional todo, blocked or review status')
+        if type(unassign_self) is not bool:
+            _fail('unassign_self must be a boolean')
+        payload = dict(ticket_id=ticket_id, reason=reason, status=status, unassign_self=unassign_self)
+        with self._tx() as db:
+            actor = self._actor(db, actor, 'allow_requests')
+            row = self._ticket_member(db, actor, ticket_id)
+            if actor['kind'] != 'agent':
+                _fail('Use the human task editor instead', 403)
+            previous = self._retry(db, actor, 'release_ticket', idempotency_key, payload)
+            if previous:
+                return self._ticket(self._ticket_member(db, actor, previous), db)
+            if row['version'] != expected_version:
+                _fail('Task changed; reread before releasing', 409)
+            identity = self._author(db, actor)['agent_id']
+            claimant = json.loads(row['claimant']) if row['claimant'] else None
+            if row['assignee_owner_id'] not in (None, actor['owner_id']) or row['assignee_agent_id'] not in (None, identity):
+                _fail('Task has been assigned elsewhere', 403)
+            if claimant:
+                if not _same_claim(claimant, actor):
+                    _fail('Another session owns this claim', 403)
+                if (row['lease_expires_at'] or 0) <= time.time():
+                    _fail('Claim expired; inspect and recover before releasing', 409)
+            elif row['assignee_agent_id'] != identity:
+                _fail('Only your own claimed or assigned task can be released', 403)
+            if row['status'] == 'done':
+                _fail('A completed task must be reopened by a human', 409)
+            project = self._project_member(db, actor, row['project_id'])
+            if project['archived'] and status:
+                _fail('Project is archived; release without changing its status', 409)
+            ticket = self._ticket(row, db)
+            next_status = status or ('todo' if row['status'] == 'in_progress' else row['status'])
+            if next_status == 'review' and (ticket['blocked_by'] or ticket['waiting_on_human']):
+                _fail('Resolve prerequisite tasks and human requests before review', 409)
+            now = time.time()
+            db.execute('''UPDATE tickets SET status=?,claimant=NULL,claim_started_version=NULL,
+                lease_expires_at=NULL,assignee_agent_id=?,waiting_for_dependencies=?,version=version+1,
+                updated_at=? WHERE id=? AND version=?''',
+                (next_status, None if unassign_self else identity,
+                 0 if status else row['waiting_for_dependencies'], now, ticket_id, expected_version))
+            db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
+            self._remember(db, actor, 'release_ticket', idempotency_key, payload, ticket_id)
+            self._audit(db, actor, 'ticket_released', dict(payload, version=expected_version+1))
+            return self._ticket(self._ticket_member(db, actor, ticket_id), db)
+
     def renew_ticket(self, actor, ticket_id, expected_version, progress=''):
         _version(expected_version)
         _text(progress, 'progress', 0, 20000)
@@ -440,11 +496,13 @@ class CoordinationMixin(ProjectsMixin):
                               (*own_profile, terminal)).fetchone():
                     reason = 'unfinished_work'
                     break
-            if reason is None and db.execute(f"""SELECT 1 FROM human_requests WHERE status='open'
-                AND {same_profile('requested_by')} LIMIT 1""", own_profile).fetchone():
-                reason = 'waiting_on_human'
             candidate = next(self._work_candidates(db, actor, project_id), None) if reason is None else None
             if candidate is None:
+                # A released request blocks its ticket, not unrelated ready
+                # work. Keep the explanatory negative result when none is ready.
+                if reason is None and db.execute(f"""SELECT 1 FROM human_requests WHERE status='open'
+                    AND {same_profile('requested_by')} LIMIT 1""", own_profile).fetchone():
+                    reason = 'waiting_on_human'
                 reason = reason or 'no_ready_ticket'
                 self._remember(db, actor, 'claim_next_ticket', idempotency_key, payload, _QUEUE_EMPTY_PREFIX + reason)
                 return {'claimed': False, 'reason': reason, 'retried': False}

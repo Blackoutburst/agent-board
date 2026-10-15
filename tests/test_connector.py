@@ -153,11 +153,11 @@ def test_bridge_confirms_selected_identity_and_caches_only_success(monkeypatch,t
     def request(url,message,token):
         calls.append(message['params']['name'])
         return {'jsonrpc':'2.0','id':message['id'],'result':{'ok':True}}
-    messages=[{'jsonrpc':'2.0','id':i,'method':'tools/call','params':{'name':'get_work','arguments':{'session_id':'selected-session'}}} for i in (1,2)]
+    messages=[{'jsonrpc':'2.0','id':i,'method':'tools/call','params':{'name':name,'arguments':{'session_id':'selected-session'}}} for i,name in enumerate(('get_work','release_ticket'),1)]
     monkeypatch.setattr(connector,'rpc',rpc);monkeypatch.setattr(connector,'request',request)
     monkeypatch.setattr(connector.sys,'stdin',io.StringIO('\n'.join(map(json.dumps,messages))))
     connector.bridge(config)
-    assert calls==['preregister','get_work','get_work']
+    assert calls==['preregister','get_work','release_ticket']
     assert all(json.loads(line)['result']=={'ok':True} for line in capsys.readouterr().out.splitlines())
     response['structuredContent']['identity']['identity_key']='different-bound-key'
     with pytest.raises(RuntimeError):connector.confirm_registration(response,config,'selected-session')

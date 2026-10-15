@@ -11,7 +11,9 @@ const Workspace = (() => {
   let includeArchivedProfiles = false;
   const guard = (action) => (...args) => Promise.resolve().then(() => action(...args)).catch(workError);
   const badge = (label, kind = "") => el("span", { class: `badge ${kind}` }, label);
-  const status = (task) => badge(workStates[task.work_state] || ticketStatuses[task.status], `status-${task.work_state || task.status}`);
+  const status = (task) => task.blocked_by?.length && task.status !== "blocked"
+    ? badge(`${ticketStatuses[task.status]} · waiting for ${task.blocked_by.map(t => "#" + t.number).join(", ")}`, "status-blocked")
+    : badge(workStates[task.work_state] || ticketStatuses[task.status], `status-${task.work_state || task.status}`);
   const tabs = (items, active, change) => el("nav", { class: "tabs", "aria-label": "Project sections" }, items.map(([key, label]) => btn(label, () => change(key), key === active ? "selected" : "", { "aria-current": key === active ? "page" : null })));
   const panel = (title, ...content) => el("section", { class: "panel" }, el("div", { class: "panel-heading" }, el("h2", {}, title)), ...content);
   const box = (title, text, action) => el("div", { class: "empty-state" }, el("h2", {}, title), el("p", {}, text), action);

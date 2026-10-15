@@ -591,7 +591,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @mcp.tool()
     async def update_ticket(session_id: str, ticket_id: str, expected_version: Version,
                             changes: TicketChanges) -> dict:
-        """Update a ticket claimed by this session, requiring work-request permission and the current version. Omit unchanged fields; reassignment and clearing assignee_owner_id are reserved to human members. Done requires outcome and evidence. release_claim explicitly releases responsibility. Does not execute work; do not retry conflicts without rereading."""
+        """Update a ticket claimed by this session, requiring work-request permission and the current version. Omit unchanged fields; reassignment and clearing assignee_owner_id are reserved to human members. Done requires outcome and evidence. release_claim explicitly releases responsibility; use release_ticket to retain self-assignment for later status correction or to remove your own agent assignment. Does not execute work; do not retry conflicts without rereading."""
         return board.update_ticket(session_actor(session_id), ticket_id, expected_version,
                                    **changes.model_dump(exclude_unset=True))
 
@@ -599,6 +599,15 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     async def claim_ticket(session_id: str, ticket_id: str, expected_version: Version, recovery_evidence: str = "") -> dict:
         """Explicitly take responsibility for an unassigned ticket or one assigned to your owner, requiring work-request permission. One session/human may hold the claim; conflicts require rereading. Never claim automatically from inbox polling. A claim grants no command execution or deployment authorization."""
         return board.claim_ticket(session_actor(session_id), ticket_id, expected_version, recovery_evidence)
+
+    @mcp.tool()
+    async def release_ticket(session_id: str, ticket_id: str, expected_version: Version,
+                             idempotency_key: str, reason: str,
+                             status: Literal["", "todo", "blocked", "review"] = "",
+                             unassign_self: bool = False) -> dict:
+        """Release your own live session claim or maintain your persistent profile's unclaimed task. Optionally set todo/blocked/review or remove your agent assignment. Requires current work-request permission, version and a stable retry key. Retains progress/history, human requests and dependencies. Never clears another session's claim or an expired claim, changes human assignment, or completes/starts work. Retry the same key after an uncertain response; reread conflicts before a new attempt."""
+        return board.release_ticket(session_actor(session_id), ticket_id, expected_version,
+                                    idempotency_key, reason, status, unassign_self)
 
     @mcp.tool()
     async def register_agent(session_id: str, label: str, agent_kind: str, identity_key: str = "default",
@@ -613,7 +622,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def claim_next_ticket(session_id: str, idempotency_key: str, project_id: str = "") -> dict:
-        """In explicitly authorized autonomous worker mode, atomically claim the next ready task by priority/age. Dependencies, human requests, skills, resource locks, assignment and existing work gate selection. One persistent profile may not select around any unfinished claim or open human request, even from another session/device. Retain the retry key: positive and negative results are durable; expired claims require explicit recovery instead."""
+        """In explicitly authorized autonomous worker mode, atomically claim the next ready task by priority/age. Dependencies, human requests, skills, resource locks, assignment and existing work gate selection. One persistent profile may not select around an unfinished claim from any session/device. A released human request blocks its ticket while unrelated ready work remains eligible. Retain the retry key: positive and negative results are durable; expired claims require explicit recovery instead."""
         return board.claim_next_ticket(session_actor(session_id), idempotency_key, project_id)
 
     @mcp.tool()

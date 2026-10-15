@@ -49,6 +49,25 @@ def test_pairing_and_mcp_project_workflow(browser):
     assert agents[0]['name']=='Codex · Work Mac'
 
 
+def test_mcp_release_status_correction_and_self_unassignment(browser):
+    client, board = browser
+    human = {'kind': 'human', 'owner_id': 'blackoutburst'}
+    project = board.create_project(human, 'Release API', ['blackoutburst'], idempotency_key='release-project')
+    task = board.create_ticket(human, project['id'], 'Work', idempotency_key='release-task')
+    token = board.create_device(human, 'Release worker', [])['token']
+    rpc(client, token, 'register_agent', {'session_id': 'release-api', 'label': 'Release', 'agent_kind': 'codex'})
+    base = {'session_id': 'release-api', 'ticket_id': task['id']}
+    claimed = rpc(client, token, 'claim_ticket', {**base, 'expected_version': task['version']})
+    args = {**base, 'expected_version': claimed['version'], 'idempotency_key': 'block',
+            'reason': 'Waiting on environment', 'status': 'blocked'}
+    released = rpc(client, token, 'release_ticket', args)
+    assert released['status'] == 'blocked' and released['claimant'] is None
+    assert rpc(client, token, 'release_ticket', args) == released
+    fixed = rpc(client, token, 'release_ticket', {**args, 'expected_version': released['version'],
+                'idempotency_key': 'fix', 'reason': 'Environment ready', 'status': 'todo', 'unassign_self': True})
+    assert fixed['ready'] and fixed['assignee_agent_id'] is None
+
+
 def test_human_requests_csrf_and_pairing_throttling(browser):
     client,_=browser
     p=client.post('/api/projects',json={'name':'Team','participants':['blackoutburst'],'idempotency_key':'p'}).json()

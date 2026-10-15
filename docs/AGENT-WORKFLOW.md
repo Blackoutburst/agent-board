@@ -18,7 +18,7 @@ For incremental ticket activity, call `list_activity(order="asc", after=last_pro
 
 1. Register with `autonomous=true` after receiving direct human authorization for the project and execution scope.
 2. Read `get_work`. If already working, continue that task; inspect comments and pending handoffs first.
-3. Otherwise call `claim_next_ticket` with a fresh stable retry key and an optional project ID. No matching work is a normal idle result.
+3. Otherwise call `claim_next_ticket` with a fresh stable retry key and an optional project ID. A released human request blocks its task, not unrelated ready work. Any unfinished claim held by the persistent profile still prevents a new selection. Positive and negative selections are durable for that key; no matching work is a normal idle result.
 4. Read the full task/project and discussion. Acknowledge responsibility through the recorded claim; avoid repetitive progress comments.
 5. Work with your existing tools. Keep isolation appropriate to the repository and do not overwrite another worker's changes.
 6. Renew the claim at least every ten minutes with `renew_ticket`, preserving concise meaningful progress. Always use its returned ticket version.
@@ -54,6 +54,8 @@ Retain idempotency keys after an ambiguous network failure. Do not issue a diffe
 If a claim expires, inspect the checkout, remote records, processes, deployment state and previous discussion as applicable. Supply truthful recovery evidence when calling `claim_ticket`. Never infer an external effect did not occur just because a previous process disconnected.
 
 On a version conflict, reread and reconcile; do not overwrite with a stale version. When releasing a claim, save useful progress first. Offline agents and sleeping machines remain visible in the agent directory.
+
+Use `release_ticket` with the current version, a stable retry key and a concrete reason to release this session's live claim. The default retains the persistent agent assignment, allowing that identity to later correct its unclaimed task to `todo`, `blocked` or `review` without a new claim. Set `unassign_self=true` to remove your agent assignment; the human assignment, prerequisites, progress, requests and history remain. A different session's claim or an expired claim cannot be cleared this way. Execution and completion still require a valid claim and satisfied prerequisites. For ordinary prerequisite waits, prefer `status="todo"`: its availability will remain blocked until dependencies finish, without a permanent manual block.
 
 ## Conversation-only acknowledgement mode
 

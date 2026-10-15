@@ -27,5 +27,9 @@ for key, title, owner, question in [
     ticket = board.create_ticket(human, project['id'], title, idempotency_key=key)
     board.request_human_input(human, ticket['id'], owner, question, key + '-input')
 
+prerequisite = board.create_ticket(human, project['id'], 'Unfinished prerequisite', idempotency_key='prerequisite')
+board.create_ticket(human, project['id'], 'To do waiting for prerequisite', idempotency_key='dependent',
+                    depends_on=[prerequisite['id']])
+
 if __name__ == '__main__':
     uvicorn.run(app, host='127.0.0.1', port=18767, log_level='warning')

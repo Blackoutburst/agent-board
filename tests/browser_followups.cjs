@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'/Users/florianchanson/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const origin='http://127.0.0.1:18766';
-const output=path.resolve(__dirname,'../../..','outputs');
+const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','outputs');
 (async()=>{
  const browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1512,height:1100}});
@@ -36,7 +36,7 @@ const output=path.resolve(__dirname,'../../..','outputs');
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6kL8AAAAASUVORK5CYII=','base64');
  await dialog.getByLabel('Task attachments',{exact:true}).setInputFiles([
   {name:'reference.png',mimeType:'image/png',buffer:png},
-  {name:'preview.mp4',mimeType:'video/mp4',buffer:fs.readFileSync('/tmp/board-followup-preview.mp4')},
+  {name:'preview.mp4',mimeType:'video/mp4',buffer:fs.readFileSync(process.env.BOARD_TEST_VIDEO||'/tmp/board-followup-preview.mp4')},
   {name:'details.custom',mimeType:'application/octet-stream',buffer:Buffer.from('Any extension is allowed.')}
  ]);
  assert.equal(await dialog.getByLabel('Task attachments',{exact:true}).getAttribute('accept'),null);

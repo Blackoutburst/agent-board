@@ -75,6 +75,20 @@ async function needsYou(page, count) {
     assert.equal(await first.page.getByText('Waiting for TheScreamer to respond.', { exact: true }).count(), 1);
     assert.equal(await first.page.getByLabel('Your response', { exact: true }).count(), 0);
 
+    const tickets = await (await first.context.request.get(origin + '/api/projects/' + encodeURIComponent(shared[0].project_id) + '/tickets')).json();
+    const dependent = tickets.find(t => t.title === 'To do waiting for prerequisite');
+    assert.equal(dependent.status, 'todo');
+    assert.equal(dependent.work_state, 'blocked');
+    await first.page.goto(origin + '/?ticket=' + encodeURIComponent(dependent.id));
+    await first.page.getByRole('heading', { name: dependent.title, exact: true }).waitFor();
+    assert.equal(await first.page.locator('.task-state-line').innerText().then(t => t.includes('To do · waiting for #4')), true);
+    assert.equal(await first.page.getByRole('button', { name: 'Start work', exact: true }).count(), 0);
+    await first.page.screenshot({ path: path.join(output, 'dependency-status-desktop.png'), fullPage: true });
+    await first.page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await first.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await first.page.screenshot({ path: path.join(output, 'dependency-status-mobile.png'), fullPage: true });
+    await first.page.setViewportSize({ width: 1440, height: 1000 });
+
     await needsYou(first.page, 1);
     await first.page.getByLabel('Your response', { exact: true }).fill('First owner answered the fixture.');
     await first.page.getByRole('button', { name: 'Answer & unblock', exact: true }).click();
@@ -94,7 +108,7 @@ async function needsYou(page, count) {
     await second.page.screenshot({ path: path.join(output, 'needs-you-second-owner-mobile.png'), fullPage: true });
     assert.deepEqual(pageErrors, []);
     const result = { pass: true, browser: browser.version(), ownersChecked: 2,
-      flows: ['recipient-only inbox', 'matching request count', 'other-recipient shared task context', 'answer and empty inbox', 'reload', 'second owner isolation', 'mobile layout'],
+      flows: ['recipient-only inbox', 'matching request count', 'other-recipient shared task context', 'stored status and prerequisite wait', 'answer and empty inbox', 'reload', 'second owner isolation', 'mobile layout'],
       javascriptErrors: pageErrors };
     fs.writeFileSync(path.join(output, 'needs-you-verification.json'), JSON.stringify(result, null, 2) + '\n');
     console.log(JSON.stringify(result));
