@@ -11,7 +11,8 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-from projects import ProjectsMixin, migrate_projects
+from projects import migrate_projects
+from coordination import CoordinationMixin, migrate_coordination
 
 
 class BoardError(Exception):
@@ -42,19 +43,22 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(ProjectsMixin):
+class Board(CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         (self.data_dir / "attachments").mkdir(exist_ok=True)
         self.db_path = self.data_dir / "board.sqlite3"
         self.base_url = base_url.rstrip("/")
+        self.ticket_lease_seconds = float(os.environ.get("BOARD_TICKET_LEASE_SECONDS", "1800"))
+        if self.ticket_lease_seconds <= 0:
+            raise ValueError("BOARD_TICKET_LEASE_SECONDS must be positive")
         self.lease_seconds = float(lease_seconds)
         if self.lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 2:
+            if version > 3:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -112,6 +116,9 @@ class Board(ProjectsMixin):
             if version < 2:
                 migrate_projects(db)
                 db.execute("PRAGMA user_version=2")
+            if version < 3:
+                migrate_coordination(db)
+                db.execute("PRAGMA user_version=3")
 
     @contextmanager
     def _connection(self):
@@ -138,8 +145,12 @@ class Board(ProjectsMixin):
                 db.execute("COMMIT")
 
     def _audit(self, db, actor, event, detail):
-        return db.execute("INSERT INTO audit(timestamp,actor,event,detail) VALUES(?,?,?,?)",
+        event_id = db.execute("INSERT INTO audit(timestamp,actor,event,detail) VALUES(?,?,?,?)",
                           (time.time(), _json(actor), event, _json(detail))).lastrowid
+        if detail.get("ticket_id"):
+            db.execute("INSERT INTO ticket_events(ticket_id,actor,event,detail,created_at) VALUES(?,?,?,?,?)",
+                       (detail["ticket_id"], _json(self._author(db, actor)), event, _json(detail), time.time()))
+        return event_id
 
     def _queue_notification(self, db, thread_id, kind, event_key, target_owners, title):
         participants = {row[0] for row in db.execute("SELECT owner_id FROM thread_members WHERE thread_id=?", (thread_id,))}
@@ -209,6 +220,9 @@ class Board(ProjectsMixin):
         if actor["kind"] == "agent":
             result["device_label"] = db.execute("SELECT label FROM devices WHERE id=?", (actor["device_id"],)).fetchone()[0]
             result["session_label"] = db.execute("SELECT label FROM sessions WHERE id=?", (actor["session_id"],)).fetchone()[0]
+            identity = db.execute("SELECT a.id,a.name,a.agent_kind FROM agent_identities a JOIN sessions s ON s.agent_id=a.id WHERE s.id=?", (actor["session_id"],)).fetchone()
+            if identity:
+                result.update(agent_id=identity["id"], agent_name=identity["name"], agent_kind=identity["agent_kind"])
         return result
 
     def _actor_key(self, actor):
@@ -320,7 +334,8 @@ class Board(ProjectsMixin):
     def _session(self, row):
         return {"id": row["id"], "owner_id": row["owner_id"], "device_id": row["device_id"], "label": row["label"],
                 "capabilities": _decode(row["capabilities"]), "last_seen_at": row["last_seen_at"],
-                "online": row["last_seen_at"] is not None and row["last_seen_at"] > time.time() - 300}
+                "online": row["last_seen_at"] is not None and row["last_seen_at"] > time.time() - 900,
+                "skills": _decode(row["skills"]), "agent_kind": row["agent_kind"], "autonomous": bool(row["autonomous"]), "agent_id": row["agent_id"]}
 
     def create_device(self, actor, label, capabilities):
         if not isinstance(label, str) or not label.strip() or len(label) > 200:
@@ -364,7 +379,7 @@ class Board(ProjectsMixin):
             if row:
                 db.execute("UPDATE sessions SET label=?,capabilities=? WHERE id=?", (label.strip(), _json(capabilities), session_id))
             else:
-                db.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,NULL)",
+                db.execute("INSERT INTO sessions(id,owner_id,device_id,label,capabilities,created_at,last_seen_at) VALUES(?,?,?,?,?,?,NULL)",
                            (session_id, actor["owner_id"], actor["device_id"], label.strip(), _json(capabilities), time.time()))
             return {**actor, "session_id": session_id}
 
@@ -684,13 +699,13 @@ class Board(ProjectsMixin):
             raise BoardError("Limit must be between 1 and 200")
         return limit
 
-    def read_inbox(self, actor, cursor=None, limit=50):
+    def read_inbox(self, actor, cursor=None, limit=50, reader_id=""):
         limit = self._limit(limit)
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_read")
             reader = self._actor_key(actor)
-            if actor["kind"] == "human" and not actor.get("session_id"):
-                raise BoardError("A browser session is required for an independent inbox", 403)
+            if actor["kind"] == "human" and reader_id:
+                reader += ":" + reader_id
             previous = db.execute("SELECT seq FROM reader_state WHERE reader=?", (reader,)).fetchone()
             boundary = previous[0] if previous else 0
             if cursor:
@@ -716,7 +731,8 @@ class Board(ProjectsMixin):
                     task = self._task(db, row)
                     task["authorized"] = self._task_authorized(db, actor, row)
                     tasks.append(task)
-            return {"messages": [self._message(db, row) for row in rows], "tasks": tasks, "cursor": token, "session": session}
+            return {"messages": [self._message(db, row) for row in rows], "tasks": tasks, "cursor": token, "session": session,
+                    "work": self.get_work(actor, limit=limit)}
 
     def _attachment(self, row):
         return {"id": row["id"], "filename": row["filename"], "size": row["size"], "content_type": row["content_type"],

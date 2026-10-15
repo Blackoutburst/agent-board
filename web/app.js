@@ -30,7 +30,7 @@ function el(tag, props = {}, ...children) {
 const btn = (label, action, className = "", props = {}) => el("button", { type: "button", class: className, onClick: action, ...props }, label);
 const empty = (text) => el("p", { class: "empty" }, text);
 function field(label, name, { type = "text", value = "", hint, required = false, placeholder = "", rows = 3 } = {}) {
-  const input = type === "textarea" ? el("textarea", { name, rows, required, placeholder }) : el("input", { name, type, required, placeholder });
+  const input = type === "textarea" ? el("textarea", { name, rows, required, placeholder, "aria-label": label }) : el("input", { name, type, required, placeholder, "aria-label": label });
   input.value = value;
   return el("label", {}, label, input, hint ? el("span", { class: "field-hint" }, hint) : null);
 }
@@ -93,6 +93,8 @@ function head(title, subtitle, ...actions) {
 }
 function setView(view) {
   state.view = view;
+  document.body.dataset.view = view;
+  document.querySelectorAll('.workspace-nav .nav-button').forEach(node => node.classList.remove('active'));
   $("projects-nav").classList.toggle("active", ["projects", "project", "ticket"].includes(view));
   $("inbox-nav").classList.toggle("active", view === "inbox");
   $("settings-nav").classList.toggle("active", view === "settings");
@@ -121,6 +123,7 @@ async function authenticated(result) {
   if ($("setup-view")) $("setup-view").hidden = true;
   $("app").hidden = false;
   $("guide-link").href = basePath + "?page=setup";
+  Workspace.refreshRequestCount().catch(() => {});
   await loadThreads();
   await loadRoute();
 }
@@ -195,7 +198,7 @@ function renderThread() {
 function authorLabel(author = {}) {
   if (author.kind === "system") return "Board";
   const name = author.display_name || ownerName(author.owner_id);
-  return author.kind === "agent" ? `${name}'s Codex` : name;
+  return author.kind === "agent" ? author.agent_name || `${name} · Agent` : name;
 }
 function authorMeta(author = {}, createdAt) {
   return el("div", { class: "message-meta" }, el("strong", {}, authorLabel(author)), el("span", { class: "badge" }, author.kind === "agent" ? "AGENT" : "HUMAN"), author.device_label ? el("span", { class: "muted" }, author.device_label) : null, author.session_label ? el("span", { class: "muted" }, `· ${author.session_label}`) : null, el("time", { class: "message-time", title: date(createdAt) }, date(createdAt)));
@@ -257,7 +260,8 @@ function composer() {
     draft.sentPayload = payloadText;
     await api(`/threads/${encodeURIComponent(threadId)}/messages`, { method: "POST", data: { ...payload, idempotency_key: draft.key } });
     state.drafts.delete(String(threadId));
-    await openThread(threadId, false);
+    if (state.view === "ticket" && state.ticket) await openTicket(state.ticket.id, false);
+    else await openThread(threadId, false);
   });
   return form;
 }
@@ -329,65 +333,14 @@ function updateTask(task) {
   openModal("Update task", form);
 }
 
-async function loadInbox() {
-  const request = ++state.request;
-  setView("inbox");
-  route(null);
-  $("main").replaceChildren(empty("Checking your inbox…"));
-  const result = await api(`/inbox${state.inboxCursor ? `?cursor=${encodeURIComponent(state.inboxCursor)}` : ""}`);
-  if (request !== state.request) return;
-  state.inboxCursor = result.cursor;
-  const messages = new Map(state.inboxMessages.map((message) => [message.id, message]));
-  result.messages.forEach((message) => messages.set(message.id, message));
-  state.inboxMessages = [...messages.values()].sort((a, b) => b.created_at - a.created_at);
-  state.inboxTasks = result.tasks;
-  $("main").replaceChildren(head("Your inbox", "Shared updates, mentions, and tasks you can take responsibility for.", btn("Check again", () => loadInbox().catch((error) => notify(error.message, true)), "quiet")),
-    el("div", { class: "page-body" }, el("section", { class: "inbox-section" }, el("h2", {}, "Tasks for you"), state.inboxTasks.length ? el("div", { class: "inbox-grid" }, state.inboxTasks.map(taskCard)) : empty("No tasks are waiting for you.")),
-      el("section", { class: "inbox-section" }, el("h2", {}, "Shared messages"), state.inboxMessages.length ? state.inboxMessages.map((message) => {
-        const button = btn("", () => openThread(message.thread_id).catch((error) => notify(error.message, true)), "inbox-message");
-        button.append(authorMeta(message.author, message.created_at), el("p", {}, message.body), message.mentions?.includes(state.actor.owner_id) ? el("span", { class: "badge" }, "MENTIONED YOU") : null);
-        return button;
-      }) : empty("No shared updates yet. Mention someone in a conversation to draw their attention."))));
-  await loadThreads();
-}
+async function loadInbox() { return Workspace.inbox(); }
 function sessionPresence(session) {
   if (typeof session.available === "boolean") return session.available;
   if (typeof session.online === "boolean") return session.online;
   const lastSeen = session.last_seen_at || session.last_seen || session.presence_at || 0;
   return Number(lastSeen) > Date.now() / 1000 - 300;
 }
-async function loadSettings() {
-  const request = ++state.request;
-  setView("settings");
-  route(null);
-  $("main").replaceChildren(empty("Loading your agent settings…"));
-  const [settingsResult, notificationsResult] = await Promise.allSettled([api("/settings"), api("/notifications")]);
-  if (request !== state.request) return;
-  if (settingsResult.status === "rejected") throw settingsResult.reason;
-  const settings = settingsResult.value;
-  state.settings = settings;
-  const policy = settings.policy || {};
-  const policyForm = el("form", {}, check("Enable my agents on this board", "enabled", !!policy.enabled), check("Allow reading shared conversations and projects", "allow_read", !!policy.allow_read), check("Allow replies in shared conversations", "allow_reply", !!policy.allow_reply), check("Allow handling requests and managing projects / tickets", "allow_requests", !!policy.allow_requests), el("p", { class: "help-note", lang: "fr" }, "Cette permission autorise aussi la création et la modification des projets ainsi que la prise en charge des tickets. Un agent ne peut modifier un ticket qu’après l’avoir pris en charge. Les actions sur vos serveurs restent soumises à leurs autorisations propres."), el("hr"),
-    field("Allowed actions", "actions", { type: "textarea", value: readable(policy.actions), placeholder: "inspect_dns\nverify_application", hint: "One exact action per line. A task must use one of these values." }),
-    field("Allowed resources", "resources", { type: "textarea", value: readable(policy.resources), placeholder: "games.blackoutburst.com", hint: "One exact resource per line. No wildcard or inherited access." }),
-    el("p", { class: "help-note" }, "Only you can change your agents' authorization. Leave actions and resources empty to allow discussion without permitting task execution."), el("button", { type: "submit", class: "primary" }, "Save my authorization"));
-  submit(policyForm, async (data) => {
-    await api("/settings/policy", { method: "PUT", data: { enabled: data.has("enabled"), allow_read: data.has("allow_read"), allow_reply: data.has("allow_reply"), allow_requests: data.has("allow_requests"), actions: lines(data.get("actions")), resources: lines(data.get("resources")) } });
-    notify("Your agent authorization was saved.");
-  });
-  const deviceForm = el("form", {}, field("Computer name", "label", { required: true, placeholder: "Mac · Server management" }), field("Available capabilities", "capabilities", { type: "textarea", placeholder: "inspect_public_dns\nrepository:games", hint: "One per line. Each chat can register a subset of this computer's capabilities." }), el("button", { type: "submit", class: "primary" }, "Register computer"));
-  submit(deviceForm, async (data) => {
-    const device = await api("/settings/devices", { method: "POST", data: { label: data.get("label").trim(), capabilities: lines(data.get("capabilities")) } });
-    await loadSettings();
-    showToken(device);
-  });
-  const devices = settings.devices || [];
-  const sessions = settings.sessions || [];
-  $("main").replaceChildren(head("Your Codex agents", `Authorization and computers belonging to ${ownerName(state.actor.owner_id)}.`, btn("Refresh", () => loadSettings().catch((error) => notify(error.message, true)), "quiet")),
-    el("div", { class: "page-body settings-grid" }, el("section", { class: "settings-card" }, el("h2", {}, "What my agents may do"), el("p", {}, "Choose the scope your agents may use when responding to shared project requests."), policyForm),
-      el("div", {}, notificationCard(notificationsResult), el("section", { class: "settings-card" }, el("h2", {}, "Connected computers"), el("p", {}, "Each computer gets a separate, revocable credential. It never grants access as another owner."), devices.length ? devices.map(deviceCard) : empty("No computers registered yet."), el("hr"), el("h3", {}, "Add a computer"), deviceForm),
-        el("section", { class: "settings-card" }, el("h2", {}, "Registered Codex chats"), el("p", {}, "A chat appears available after explicitly checking its inbox. Presence expires after five minutes."), sessions.length ? sessions.map((session) => el("div", { class: "session" }, el("strong", {}, session.label || session.session_label || session.id), el("span", { class: "badge", style: "margin-left:8px" }, sessionPresence(session) ? "AVAILABLE" : "OFFLINE"), el("p", {}, `${session.device_label || devices.find((device) => device.id === session.device_id)?.label || "Computer"} · ${readable(session.capabilities).replaceAll("\n", ", ") || "No capabilities"}`))) : empty("Chats register when they connect and check their inbox.")))));
-}
+async function loadSettings() { return Workspace.settings(); }
 function notificationCard(result) {
   const card = el("section", { class: "settings-card notification-card" }, el("h2", {}, "Discord alerts"));
   if (result.status === "rejected") {
@@ -471,11 +424,15 @@ async function loadRoute() {
   if (params.get("project")) return openProject(params.get("project"), false);
   if (params.get("page") === "projects") return loadProjects(false);
   if (params.get("page") === "settings") return loadSettings();
+  if (params.get("page") === "inbox") return loadInbox();
+  if (params.get("page") === "agents") return Workspace.agents();
+  if (params.get("page") === "requests") return Workspace.requests();
+  if (params.get("page") === "setup") return Workspace.setup();
   if (params.get("thread")) return openThread(params.get("thread"), false);
-  showWelcome();
+  return loadProjects(false);
 }
 function workBack(project, ticket = null) {
-  return el("nav", { class: "work-breadcrumb", "aria-label": "Fil d’Ariane" }, workLink("Projets", { page: "projects" }), project ? el("span", { "aria-hidden": "true" }, " / ") : null, project ? workLink(project.name, { project: project.id }) : null, ticket ? el("span", {}, ` / Ticket #${ticket.number}`) : null);
+  return el("nav", { class: "work-breadcrumb", "aria-label": "Breadcrumb" }, workLink("Projects", { page: "projects" }), project ? el("span", { "aria-hidden": "true" }, " / ") : null, project ? workLink(project.name, { project: project.id }) : null, ticket ? el("span", {}, ` / Task #${ticket.number}`) : null);
 }
 function workText(title, value, fallback = "Non renseigné.") {
   return el("section", { class: "work-section" }, el("h2", {}, title), el("p", { class: `work-text${value ? "" : " muted"}` }, value || fallback));
@@ -485,120 +442,26 @@ function repositoryLink(value) {
     const url = new URL(value);
     if (url.protocol === "https:" && !url.username && !url.password) return el("a", { href: url.href, target: "_blank", rel: "noopener noreferrer", class: "work-repository" }, value, " ↗");
   } catch { /* Invalid or absent repository links are rendered as text. */ }
-  return el("span", { class: "muted work-text" }, value || "Aucun dépôt renseigné.");
+  return el("span", { class: "muted work-text" }, value || "No repository linked.");
 }
 function projectStats(project) {
   const counts = project.ticket_counts || {};
   return Object.entries(ticketStatuses).map(([status, label]) => el("span", { class: `ticket-stat status-${status}` }, el("strong", {}, Number(counts[status]) || 0), ` ${label.toLowerCase()}`));
 }
-async function loadProjects(push = true) {
-  const request = ++state.request;
-  setView("projects");
-  workRoute({ page: "projects" }, push);
-  const search = field("Rechercher un projet", "query", { type: "search", value: state.projectQuery, placeholder: "Nom ou description" });
-  const archived = check("Inclure les projets archivés", "archived", state.includeArchived);
-  const form = el("form", { class: "work-filters project-filters" }, search, archived, el("button", { type: "submit" }, "Rechercher"));
-  const results = el("div", { class: "project-grid", "aria-live": "polite" }, empty("Chargement des projets…"));
-  $("main").replaceChildren(el("div", { lang: "fr" }, head("Projets", "Un contexte partagé et des tickets pour avancer ensemble.", btn("Créer un projet", () => projectEditor(), "primary")), el("div", { class: "page-body" }, form, results)));
-  let filterRequest = 0;
-  const refresh = async () => {
-    const serial = ++filterRequest;
-    results.setAttribute("aria-busy", "true");
-    try {
-      const params = new URLSearchParams({ query: state.projectQuery, include_archived: String(state.includeArchived) });
-      const projects = await api(`/projects?${params}`);
-      if (request !== state.request || serial !== filterRequest) return;
-      state.projects = projects;
-      results.replaceChildren(...(projects.length ? projects.map((project) => el("article", { class: "project-card" },
-        el("div", { class: "work-card-heading" }, el("h2", {}, workLink(project.name, { project: project.id })), project.archived ? el("span", { class: "badge" }, "Archivé") : null),
-        el("p", { class: "project-description" }, project.description || "Ajoutez une description pour présenter ce projet."),
-        el("div", { class: "project-counts" }, projectStats(project)),
-        el("p", { class: "small muted" }, (project.participants || []).map(ownerName).join(" · ")),
-        el("div", { class: "work-card-foot" }, el("span", { class: "small muted" }, `Mis à jour ${date(project.updated_at)}`), workLink("Ouvrir →", { project: project.id })))) : [empty(state.projectQuery || state.includeArchived ? "Aucun projet ne correspond à cette recherche." : "Aucun projet pour le moment. Créez-en un pour partager le contexte et organiser les premiers tickets.")]));
-    } finally { if (request === state.request && serial === filterRequest) results.removeAttribute("aria-busy"); }
-  };
-  submit(form, async (data) => { state.projectQuery = String(data.get("query")).trim(); state.includeArchived = data.has("archived"); await refresh(); });
-  await refresh();
-}
+async function loadProjects(push = true) { return Workspace.projects(push); }
 function getTicketFilters(projectId) {
   if (!state.ticketFilters.has(projectId)) state.ticketFilters.set(projectId, { query: "", status: "", priority: "", assignee_owner_id: "" });
   return state.ticketFilters.get(projectId);
 }
-async function openProject(projectId, push = true) {
-  const request = ++state.request;
-  setView("project");
-  workRoute({ project: projectId }, push);
-  $("main").replaceChildren(empty("Chargement du projet…"));
-  const project = await api(`/projects/${workPath(projectId)}`);
-  if (request !== state.request) return;
-  state.project = project;
-  const filter = getTicketFilters(project.id);
-  const filterForm = el("form", { class: "work-filters ticket-filters" },
-    field("Rechercher un ticket", "query", { type: "search", value: filter.query, placeholder: "Titre ou description" }),
-    select("Statut", "status", [["", "Tous les statuts"], ...workOptions(ticketStatuses)], filter.status),
-    select("Priorité", "priority", [["", "Toutes les priorités"], ...workOptions(ticketPriorities)], filter.priority),
-    select("Responsable", "assignee_owner_id", [["", "Tous les responsables"], ...(project.participants || []).map((id) => [id, ownerName(id)])], filter.assignee_owner_id),
-    el("button", { type: "submit" }, "Filtrer"));
-  const ticketList = el("div", { class: "ticket-list", "aria-live": "polite" }, empty("Chargement des tickets…"));
-  const ticketCount = el("span", { class: "muted small" });
-  const shared = el("details", { class: "project-context", open: "" }, el("summary", {}, "Contexte partagé"),
-    workText("Brief et décisions", project.context, "Précisez l’objectif, les décisions prises, les contraintes et la prochaine étape."),
-    el("div", { class: "project-context-grid" }, workText("Environnement", project.environment), el("section", { class: "work-section" }, el("h2", {}, "Dépôt"), repositoryLink(project.repository_url), el("h2", { class: "work-members-title" }, "Participants"), el("p", { class: "work-text" }, (project.participants || []).map(ownerName).join(" · ")))));
-  $("main").replaceChildren(el("div", { class: "project-view", lang: "fr" }, workBack(project), head(project.name, project.description || "Contexte et tickets du projet.", btn("Modifier le projet", () => projectEditor(project)), btn("Créer un ticket", () => ticketEditor(null, project), "primary", { disabled: project.archived })),
-    el("div", { class: "page-body" }, project.archived ? el("p", { class: "work-callout" }, "Projet archivé. Restaurez-le depuis « Modifier le projet » pour créer de nouveaux tickets.") : null,
-      el("div", { class: "project-counts project-counts-large", "aria-label": "Tickets par statut" }, projectStats(project)), shared,
-      el("section", { class: "work-section" }, el("div", { class: "work-section-head" }, el("h2", {}, "Tickets"), ticketCount), filterForm, ticketList))));
-  let filterRequest = 0;
-  const refresh = async () => {
-    const serial = ++filterRequest;
-    ticketList.setAttribute("aria-busy", "true");
-    try {
-      const tickets = await api(`/projects/${workPath(project.id)}/tickets?${new URLSearchParams(filter)}`);
-      if (request !== state.request || serial !== filterRequest) return;
-      ticketCount.textContent = `${tickets.length} affiché${tickets.length > 1 ? "s" : ""}`;
-      ticketList.replaceChildren(...(tickets.length ? tickets.map(ticketRow) : [empty(Object.values(filter).some(Boolean) ? "Aucun ticket ne correspond aux filtres." : "Aucun ticket pour le moment. Décrivez le premier résultat attendu avec « Créer un ticket ».")]));
-    } finally { if (request === state.request && serial === filterRequest) ticketList.removeAttribute("aria-busy"); }
-  };
-  submit(filterForm, async (data) => { Object.keys(filter).forEach((key) => { filter[key] = String(data.get(key) || "").trim(); }); await refresh(); });
-  await refresh();
-}
+async function openProject(projectId, push = true) { return Workspace.project(projectId, push); }
 function ticketRow(ticket) {
   return el("article", { class: "ticket-row" }, el("div", { class: "ticket-row-title" }, el("span", { class: "ticket-number" }, `#${ticket.number}`), el("h3", {}, workLink(ticket.title, { ticket: ticket.id }))),
     el("div", { class: "ticket-row-meta" }, ticketStatusBadge(ticket.status), el("span", { class: `ticket-priority priority-${ticket.priority}` }, `Priorité ${ticketPriorities[ticket.priority]?.toLowerCase() || ticket.priority}`),
       el("span", { class: "ticket-owner" }, ticket.assignee_owner_id ? ownerName(ticket.assignee_owner_id) : "Non attribué"), ticket.claimant ? el("span", { class: "badge" }, "Pris en charge") : null));
 }
 function ticketStatusBadge(status) { return el("span", { class: `badge ticket-status status-${status}` }, ticketStatuses[status] || status); }
-async function openTicket(ticketId, push = true) {
-  const request = ++state.request;
-  setView("ticket");
-  workRoute({ ticket: ticketId }, push);
-  $("main").replaceChildren(empty("Chargement du ticket…"));
-  const info = await api(`/tickets/${workPath(ticketId)}`);
-  if (request !== state.request) return;
-  state.ticket = info.ticket;
-  state.project = info.project;
-  renderTicket(info);
-}
-function renderTicket({ ticket, project }) {
-  const actions = [btn("Modifier", () => ticketEditor(ticket, project)), btn("Poser une question / échanger", () => openThread(ticket.thread_id).catch(workError), "primary")];
-  const responsible = el("section", { class: "work-section ticket-responsibility" }, el("h2", {}, "Responsabilité"),
-    el("p", {}, ticket.assignee_owner_id ? `Attribué à ${ownerName(ticket.assignee_owner_id)}.` : "Ce ticket n’est pas encore attribué."));
-  if (ticket.claimant) {
-    responsible.append(el("p", { class: "small" }, `Pris en charge par ${authorLabel(ticket.claimant)}.`, ticket.claimant.session_label ? ` Session : ${ticket.claimant.session_label}.` : "", ticket.claimant.device_label ? ` Appareil : ${ticket.claimant.device_label}.` : ""),
-      btn("Libérer la prise en charge", () => releaseTicket(ticket, project), "quiet"));
-  } else if (ticket.status !== "done" && (!ticket.assignee_owner_id || ticket.assignee_owner_id === state.actor.owner_id)) {
-    responsible.append(btn("Prendre en charge", (event) => claimTicket(ticket, event.currentTarget), ""));
-  } else if (ticket.status !== "done") {
-    responsible.append(el("p", { class: "small muted" }, "Le responsable peut prendre ce ticket en charge. Modifiez l’attribution si une autre personne reprend le travail."));
-  }
-  responsible.append(el("p", { class: "small muted" }, "Une seule prise en charge active. L’attribution d’un ticket ne déclenche aucune action sur les serveurs."));
-  $("main").replaceChildren(el("div", { class: "ticket-view", lang: "fr" }, workBack(project, ticket), head(`#${ticket.number} · ${ticket.title}`, project.name, ...actions),
-    el("div", { class: "page-body" }, el("div", { class: "ticket-overview" }, ticketStatusBadge(ticket.status), el("span", { class: `ticket-priority priority-${ticket.priority}` }, `Priorité ${ticketPriorities[ticket.priority]?.toLowerCase() || ticket.priority}`), el("span", { class: "small muted" }, `Mis à jour ${date(ticket.updated_at)}`)),
-      el("div", { class: "ticket-detail-grid" }, el("div", {}, workText("Description", ticket.description, "Précisez le problème à résoudre et le résultat attendu."), workText("Critères de validation", ticket.acceptance_criteria, "Définissez les vérifications qui permettront de valider ce ticket."),
-        (ticket.outcome || ticket.evidence || ticket.status === "done") ? el("section", { class: "ticket-resolution" }, workText("Résultat", ticket.outcome), workText("Preuves de validation", ticket.evidence)) : null,
-        el("section", { class: "work-section ticket-discussion" }, el("h2", {}, "Questions, ressources et validations"), el("p", { class: "muted" }, "Besoin d’une ressource, d’une précision ou d’une validation ? Échangez avec les participants du projet. La conversation apparaîtra dans la barre latérale après le premier message. Le suivi du travail reste dans ce ticket."), workLink("Poser une question / échanger", { thread: ticket.thread_id }, "nav-button"))), responsible),
-      el("div", { class: "work-card-foot" }, workLink("← Retour au projet", { project: project.id }), btn("Actualiser", () => openTicket(ticket.id, false).catch(workError), "quiet")))));
-}
+async function openTicket(ticketId, push = true) { return Workspace.ticket(ticketId, push); }
+function renderTicket(info) { return Workspace.renderTicket(info); }
 async function claimTicket(ticket, button) {
   button.disabled = true;
   try {
@@ -695,157 +558,9 @@ async function compareDraft(errors, draft, fields, fetchCurrent, reopen) {
     }));
   errors.append(comparison);
 }
-function projectEditor(project = null) {
-  const draftId = project ? `project:${project.id}` : "project:new";
-  if (!state.workDrafts.has(draftId)) state.workDrafts.set(draftId, { key: idempotencyKey(), base: project || {}, values: project || { name: "", description: "", context: "", repository_url: "", environment: "", participants: state.owners.map((owner) => owner.id || owner.owner_id) } });
-  const draft = state.workDrafts.get(draftId);
-  const values = draft.values;
-  const fields = ["name", "description", "context", "repository_url", "environment", "archived"];
-  const participants = el("fieldset", { class: "work-participants" }, el("legend", {}, "Participants"), el("p", { class: "small muted" }, "Les participants auront accès au contexte et à tous les tickets du projet. Cette liste est fixée lors de la création."), state.owners.map((owner) => {
-    const id = owner.id || owner.owner_id;
-    const checkbox = check(owner.display_name || ownerName(id), "participants", (values.participants || []).includes(id), id);
-    if (id === state.actor.owner_id) { checkbox.querySelector("input").checked = true; checkbox.querySelector("input").disabled = true; }
-    return checkbox;
-  }));
-  const form = el("form", { class: "work-form", lang: "fr" },
-    boundedField("Nom du projet", "name", { required: true, value: values.name, placeholder: "Plateforme Blackoutburst" }, 120),
-    boundedField("Description", "description", { type: "textarea", value: values.description, rows: 2, placeholder: "Le périmètre du projet en quelques lignes." }, 4000),
-    boundedField("Contexte partagé", "context", { type: "textarea", value: values.context, rows: 7, placeholder: "Objectif, état actuel, décisions, contraintes et prochaine étape.", hint: "Partagez uniquement les informations utiles aux participants. Aucun mot de passe ni secret." }, 30000),
-    boundedField("Dépôt HTTPS", "repository_url", { type: "url", value: values.repository_url, placeholder: "https://github.com/organisation/projet" }, 2000),
-    boundedField("Environnement", "environment", { type: "textarea", value: values.environment, placeholder: "Applications, branches et environnements concernés, sans identifiants secrets." }, 4000),
-    project ? el("p", { class: "small muted" }, `Participants : ${(project.participants || []).map(ownerName).join(" · ")}`) : participants,
-    project ? check("Archiver ce projet", "archived", !!values.archived) : null,
-    workFormButtons(project ? "Enregistrer le projet" : "Créer le projet"));
-  bindWorkDraft(form, draft);
-  workSubmit(form, async (data) => {
-    draft.values = data;
-    if (!data.name.trim()) throw new Error("Donnez un nom au projet.");
-    if (data.repository_url) {
-      const url = new URL(data.repository_url);
-      if (url.protocol !== "https:" || url.username || url.password) throw new Error("Le dépôt doit utiliser une URL HTTPS sans identifiant ni mot de passe.");
-    }
-    const payload = project ? { expected_version: draft.base.version, ...changedValues(data, draft.base, fields) } : { ...data, participants: [...new Set([state.actor.owner_id, ...(data.participants || [])])] };
-    if (!project) {
-      const sent = JSON.stringify(payload);
-      if (draft.sentPayload && draft.sentPayload !== sent) draft.key = idempotencyKey();
-      draft.sentPayload = sent;
-      payload.idempotency_key = draft.key;
-    }
-    const saved = await api(project ? `/projects/${workPath(project.id)}` : "/projects", { method: project ? "PATCH" : "POST", data: payload });
-    state.workDrafts.delete(draftId);
-    closeModal();
-    await openProject(saved.id);
-    notify(project ? "Projet mis à jour." : "Projet créé.");
-  }, project ? (errors) => compareDraft(errors, draft, fields, () => api(`/projects/${workPath(project.id)}`), () => projectEditor(project)) : null);
-  openModal(project ? "Modifier le projet" : "Créer un projet", form);
-}
-function ticketEditor(ticket, project) {
-  const draftId = ticket ? `ticket:${ticket.id}` : `ticket:new:${project.id}`;
-  if (!state.workDrafts.has(draftId)) state.workDrafts.set(draftId, { key: idempotencyKey(), base: ticket || {}, values: ticket || { title: "", description: "", acceptance_criteria: "", priority: "normal", assignee_owner_id: null } });
-  const draft = state.workDrafts.get(draftId);
-  const values = draft.values;
-  const fields = ["title", "description", "acceptance_criteria", "priority", "assignee_owner_id", "status", "outcome", "evidence"];
-  const status = ticket ? select("Statut", "status", workOptions(ticketStatuses), values.status) : null;
-  const outcome = ticket ? boundedField("Résultat", "outcome", { type: "textarea", value: values.outcome, rows: 3, placeholder: "Ce qui a été livré ou corrigé." }, 20000) : null;
-  const evidence = ticket ? boundedField("Preuves de validation", "evidence", { type: "textarea", value: values.evidence, rows: 3, placeholder: "Tests effectués, résultats observés et liens vers les preuves." }, 20000) : null;
-  const completionNote = el("p", { class: "help-note" }, "Pour terminer le ticket, indiquez le résultat et les preuves de validation.");
-  const form = el("form", { class: "work-form", lang: "fr" }, el("p", { class: "small muted" }, project.name),
-    boundedField("Titre du ticket", "title", { required: true, value: values.title, placeholder: "Activer la connexion Google" }, 200),
-    boundedField("Description", "description", { type: "textarea", value: values.description, rows: 5, placeholder: "Le problème, le résultat attendu et les informations nécessaires." }, 20000),
-    boundedField("Critères de validation", "acceptance_criteria", { type: "textarea", value: values.acceptance_criteria, rows: 4, placeholder: "Comment vérifier que le ticket est terminé ?" }, 20000),
-    el("div", { class: "form-row" }, select("Priorité", "priority", workOptions(ticketPriorities), values.priority), select("Responsable", "assignee_owner_id", [["", "Non attribué"], ...(project.participants || []).map((id) => [id, ownerName(id)])], values.assignee_owner_id || "")),
-    ticket?.claimant ? el("p", { class: "help-note" }, "Changer de responsable libère la prise en charge actuelle. Coordonnez la reprise avec le responsable avant de réattribuer le ticket.") : null,
-    status, ticket ? el("section", { class: "work-resolution-form" }, el("h3", {}, "Résolution et validation"), completionNote, outcome, evidence) : null,
-    workFormButtons(ticket ? "Enregistrer le ticket" : "Créer le ticket"));
-  const validation = () => {
-    if (!ticket) return;
-    const done = status.querySelector("select").value === "done";
-    outcome.querySelector("textarea").required = done;
-    evidence.querySelector("textarea").required = done;
-  };
-  if (status) {
-    status.querySelector("select").addEventListener("change", () => {
-      if (draft.base.status === "done" && status.querySelector("select").value !== "done") completionNote.textContent = "À la réouverture, les anciens résultats et preuves inchangés sont effacés. Saisissez de nouvelles valeurs pour les conserver explicitement.";
-      else completionNote.textContent = "Pour terminer le ticket, indiquez le résultat et les preuves de validation.";
-      validation();
-    });
-    validation();
-  }
-  bindWorkDraft(form, draft);
-  workSubmit(form, async (data) => {
-    draft.values = data;
-    if (!data.title.trim()) throw new Error("Donnez un titre au ticket.");
-    if (data.status === "done" && (!data.outcome.trim() || !data.evidence.trim())) throw new Error("Renseignez le résultat et les preuves avant de terminer le ticket.");
-    const payload = ticket ? { expected_version: draft.base.version, ...changedValues(data, draft.base, fields) } : data;
-    if (!ticket) {
-      const sent = JSON.stringify(payload);
-      if (draft.sentPayload && draft.sentPayload !== sent) draft.key = idempotencyKey();
-      draft.sentPayload = sent;
-      payload.idempotency_key = draft.key;
-    }
-    const saved = await api(ticket ? `/tickets/${workPath(ticket.id)}` : `/projects/${workPath(project.id)}/tickets`, { method: ticket ? "PATCH" : "POST", data: payload });
-    state.workDrafts.delete(draftId);
-    closeModal();
-    await openTicket(saved.id);
-    await loadThreads();
-    notify(ticket ? "Ticket mis à jour." : "Ticket créé avec sa discussion.");
-  }, ticket ? (errors) => compareDraft(errors, draft, fields, async () => (await api(`/tickets/${workPath(ticket.id)}`)).ticket, () => ticketEditor(ticket, project)) : null);
-  openModal(ticket ? `Modifier le ticket #${ticket.number}` : "Créer un ticket", form);
-}
-
-function showSetup() {
-  document.title = "Codex setup · Shared board";
-  $("app").hidden = true;
-  $("login-view").hidden = true;
-  $("setup-view").hidden = false;
-  if (typeof crypto.randomUUID === "function") {
-    $("guide-read-inbox").textContent = $("guide-read-inbox").textContent.replace("a-fresh-uuid-for-this-chat", crypto.randomUUID());
-    $("guide-session-note").textContent = "This example has a fresh chat ID. Keep it for subsequent calls in this chat; choose a new ID for a different chat.";
-  }
-  $("guide-settings-link").href = basePath + "?page=settings";
-  $("setup-view").querySelectorAll("[data-board-link]").forEach((link) => { link.href = basePath; });
-  $("setup-view").querySelectorAll("[data-settings-link]").forEach((link) => { link.href = basePath + "?page=settings"; });
-  $("setup-view").querySelectorAll("[data-copy-target]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const snippet = $(button.dataset.copyTarget);
-      const status = [...$("setup-view").querySelectorAll("[data-copy-status]")].find((item) => item.dataset.copyStatus === button.dataset.copyTarget);
-      button.disabled = true;
-      try {
-        if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-        await navigator.clipboard.writeText(snippet.textContent);
-        status.textContent = "Copied to clipboard.";
-        status.classList.remove("error");
-      } catch {
-        snippet.focus();
-        const range = document.createRange();
-        range.selectNodeContents(snippet);
-        const selection = window.getSelection();
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-        status.textContent = "Copy is unavailable here. The snippet is selected; copy it with your keyboard.";
-        status.classList.add("error");
-      } finally { button.disabled = false; }
-    });
-  });
-  const tabs = [...$("setup-view").querySelectorAll('[role="tab"]')];
-  const chooseTab = (selected, focus = false) => {
-    tabs.forEach((tab) => {
-      const active = tab === selected;
-      tab.setAttribute("aria-selected", String(active));
-      tab.tabIndex = active ? 0 : -1;
-      tab.classList.toggle("active", active);
-      $(tab.getAttribute("aria-controls")).hidden = !active;
-    });
-    if (focus) selected.focus();
-  };
-  tabs.forEach((tab, index) => {
-    tab.addEventListener("click", () => chooseTab(tab));
-    tab.addEventListener("keydown", (event) => {
-      const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
-      if (next !== null) { event.preventDefault(); chooseTab(tabs[next], true); }
-    });
-  });
-}
+function projectEditor(project = null) { return Workspace.projectEditor(project); }
+function ticketEditor(ticket = null, project = state.project) { return Workspace.ticketEditor(ticket, project); }
+function showSetup() { return Workspace.setup(); }
 
 $("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -871,5 +586,7 @@ $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchT
 $("search-form").addEventListener("submit", (event) => { event.preventDefault(); clearTimeout(searchTimer); loadThreads().catch((error) => notify(error.message, true)); });
 $("modal").addEventListener("cancel", () => { $("modal-content").replaceChildren(); });
 window.addEventListener("popstate", () => { if (state.actor) loadRoute().catch(workError); });
-if (new URLSearchParams(location.search).get("page") === "setup" && $("setup-view")) showSetup();
-else api("/me").then(authenticated).catch((error) => { showLogin(); if (error.status !== 401) notify(error.message || "Could not connect to the board.", true); });
+document.addEventListener("DOMContentLoaded", () => {
+  if (new URLSearchParams(location.search).get("page") === "setup") showSetup();
+  else api("/me").then(authenticated).catch((error) => { showLogin(); if (error.status !== 401) notify(error.message || "Could not connect to the board.", true); });
+});
