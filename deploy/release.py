@@ -106,7 +106,7 @@ def main():
             try:
                 with urllib.request.urlopen('http://127.0.0.1:9140/health',timeout=2) as response:
                     health=json.load(response)
-                if health.get('version')=='2.0.3' and health.get('schema_version')==3:
+                if health.get('version')=='2.1.0' and health.get('schema_version')==4:
                     break
             except (OSError,ValueError):
                 pass
@@ -117,7 +117,7 @@ def main():
             integrity=db.execute('PRAGMA integrity_check').fetchone()[0]
             foreign_keys=db.execute('PRAGMA foreign_key_check').fetchall()
             counts={table:db.execute('SELECT COUNT(*) FROM '+table).fetchone()[0] for table in
-                    ('projects','tickets','messages','attachments','agent_identities')}
+                    ('projects','tickets','messages','attachments','agent_identities','agent_profiles','agent_profile_bindings','agent_profile_versions','sessions')}
         mismatches=[name for name in files if hashlib.sha256((source/name).read_bytes()).digest()!=hashlib.sha256((live/name).read_bytes()).digest()]
         if integrity!='ok' or foreign_keys or mismatches:
             raise RuntimeError('Post-release integrity or source verification failed; snapshot: '+str(snapshot))

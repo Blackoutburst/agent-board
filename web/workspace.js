@@ -7,6 +7,8 @@ const Workspace = (() => {
   const workStates = { ready: "Ready", running: "In progress", blocked: "Blocked", waiting_on_human: "Needs human input", recovery: "Needs recovery", review: "In review", done: "Done" };
   let projectTab = "tasks";
   let listMode = "list";
+  let agentTab = "profiles";
+  let includeArchivedProfiles = false;
   const guard = (action) => (...args) => Promise.resolve().then(() => action(...args)).catch(workError);
   const badge = (label, kind = "") => el("span", { class: `badge ${kind}` }, label);
   const status = (task) => badge(workStates[task.work_state] || ticketStatuses[task.status], `status-${task.work_state || task.status}`);
@@ -225,10 +227,13 @@ const Workspace = (() => {
     const [allTasks, agentEntries] = await Promise.all([api(`/projects/${workPath(p.id)}/tickets`), api(`/agents?project_id=${workPath(p.id)}`)]);
     const key = idempotencyKey();
     const who = t?.assignee_agent_id ? "agent:" + t.assignee_agent_id : t?.assignee_owner_id ? "owner:" + t.assignee_owner_id : "";
+    const assignable = agentEntries.filter(a => !a.id.startsWith("device:") && (a.status === "active" || !a.status || a.id === t?.assignee_agent_id));
+    const agentOptions = assignable.map(a => ["agent:" + a.id, `${a.name}${a.status && a.status !== "active" ? ` (${a.status})` : ""}`]);
+    if (t?.assignee_agent_id && !assignable.some(a => a.id === t.assignee_agent_id)) agentOptions.push([who, `${t.assignee_agent_name || "Currently assigned profile"} (not currently available)`]);
     const dependencyPicker = el("fieldset", { class: "dependency-picker" }, el("legend", {}, "Blocked by"), allTasks.filter(task => task.id !== t?.id).map(task => check(`#${task.number} ${task.title}`, "depends_on", t?.depends_on?.includes(task.id), task.id)));
     if (allTasks.length <= (t ? 1 : 0)) dependencyPicker.append(el("p", { class: "small muted" }, "No other tasks in this project yet."));
     const form = el("form", { class: "work-form" }, field("Task title", "title", { value: t?.title || "", required: true, placeholder: "Describe the result you want" }), field("Description", "description", { type: "textarea", rows: 5, value: t?.description || "" }), field("Acceptance criteria", "acceptance_criteria", { type: "textarea", rows: 3, value: t?.acceptance_criteria || "", placeholder: "What needs to be true when this is complete?" }),
-      el("div", { class: "form-row" }, select("Priority", "priority", Object.entries(ticketPriorities), t?.priority || "normal"), select("Assigned to", "assignee", [["", "Any available agent"], ...p.participants.map(id => ["owner:" + id, ownerName(id)]), ...agentEntries.filter(a => !a.id.startsWith("device:")).map(a => ["agent:" + a.id, a.name])], who)),
+      el("div", { class: "form-row" }, select("Priority", "priority", Object.entries(ticketPriorities), t?.priority || "normal"), select("Assigned to", "assignee", [["", "Any available agent"], ...p.participants.map(id => ["owner:" + id, ownerName(id)]), ...agentOptions], who)),
       t ? select("Status", "status", Object.entries(ticketStatuses), t.status) : null,
       el("details", { class: "metadata-editor" }, el("summary", {}, "Dependencies, labels & work requirements"), dependencyPicker, field("Labels", "labels", { value: (t?.labels || []).join(", "), placeholder: "backend, ux, documentation" }), field("Required skills", "required_skills", { value: (t?.required_skills || []).join(", "), placeholder: "Optional: python, android" }), field("Shared resource", "resource", { value: t?.resource || "", hint: "Tasks using the same resource cannot run at the same time.", placeholder: "Optional: agent-board:main" })),
       t ? el("details", { class: "metadata-editor", open: t.status === "done" ? "" : null }, el("summary", {}, "Outcome & verification"), field("Outcome", "outcome", { type: "textarea", value: t.outcome }), field("Verification evidence", "evidence", { type: "textarea", value: t.evidence, hint: "Required together with an outcome when marking a task done." })) : null,
@@ -238,6 +243,7 @@ const Workspace = (() => {
       const assignee = String(data.get("assignee") || "");
       Object.assign(payload, { assignee_owner_id: assignee.startsWith("owner:") ? assignee.slice(6) : null, assignee_agent_id: assignee.startsWith("agent:") ? assignee.slice(6) : null, depends_on: data.getAll("depends_on"), labels: csv(data.get("labels")), required_skills: csv(data.get("required_skills")) });
       if (t) {
+        if (assignee === who) { delete payload.assignee_owner_id; delete payload.assignee_agent_id; }
         Object.assign(payload, { expected_version: t.version, status: data.get("status"), outcome: data.get("outcome"), evidence: data.get("evidence") });
         if (t.status === "done" && payload.status !== "done") {
           if (payload.outcome === t.outcome) payload.outcome = "";
@@ -301,17 +307,232 @@ const Workspace = (() => {
   }
 
   function agentList(entries) {
-    return entries.length ? el("div", { class: "agent-list" }, entries.map(a => el("article", { class: "agent-card" },
-      el("div", { class: "agent-heading" }, el("div", { class: `agent-emblem ${a.agent_kind}` }, a.agent_kind.includes("claude") ? "C" : "CX"), el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, `${ownerName(a.owner_id)} / ${a.device_label}`)), badge(a.online ? "Online" : "Offline", a.online ? "status-ready" : "")),
-      el("p", { class: "small muted" }, a.last_seen_at ? `Last seen ${date(a.last_seen_at)}` : "No recent check-in"),
-      a.tickets.length ? a.tickets.map(t => el("div", { class: "agent-task" }, workLink(`#${t.number} ${t.title}`, { ticket: t.id }), status(t))) : el("p", { class: "muted" }, "No active tasks"),
-      el("details", {}, el("summary", {}, `${a.sessions.length} chat session${a.sessions.length === 1 ? "" : "s"}`), a.sessions.map(s => el("div", { class: "session-row" }, el("strong", {}, s.label), badge(s.autonomous ? "Worker" : "Observer"), el("span", { class: "small muted" }, s.skills.join(", ") || "General")))),
-      a.owner_id === state.actor.owner_id && !a.id.startsWith("device:") ? btn("Rename", () => renameAgent(a), "quiet") : null))) : box("Connect your first agent", "Each installation gets a persistent name. Codex and Claude Code on the same machine remain separate agents.", btn("Connect agent", guard(setup), "primary"));
+    return entries.length ? el("div", { class: "agent-list" }, entries.map(a => {
+      if (a.owner_id !== state.actor.owner_id) {
+        return el("article", { class: "agent-card shared-agent-summary" },
+          el("div", { class: "agent-heading" }, profileAvatar(a), el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, ownerName(a.owner_id))), profileStatus(a)),
+          el("p", { class: "small muted" }, "Shared profile. Its instructions, devices, sessions and work details are private to its owner."));
+      }
+      const sessions = Array.isArray(a.sessions) ? a.sessions : [], tickets = Array.isArray(a.tickets) ? a.tickets : [];
+      const kind = typeof a.agent_kind === "string" ? a.agent_kind : "";
+      return el("article", { class: "agent-card" },
+        el("div", { class: "agent-heading" }, a.avatar ? profileAvatar(a) : el("div", { class: `agent-emblem${kind.includes("claude") ? " claude-code" : ""}` }, kind.includes("claude") ? "C" : kind ? "CX" : "◇"),
+          el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, `${ownerName(a.owner_id)} / ${a.device_label || "No executor check-in"}`)),
+          badge(a.online ? "Online" : sessions.length ? "Offline" : "Not connected", a.online ? "status-ready" : "")),
+        el("p", { class: "small muted" }, a.last_seen_at ? `Last seen ${date(a.last_seen_at)}` : "No executor has checked in with this profile yet."),
+        tickets.length ? tickets.map(t => el("div", { class: "agent-task" }, workLink(`#${t.number} ${t.title}`, { ticket: t.id }), status(t))) : el("p", { class: "muted" }, "No active tasks"),
+        el("details", {}, el("summary", {}, `${sessions.length} chat session${sessions.length === 1 ? "" : "s"}`), sessions.map(s => el("div", { class: "session-row" }, el("strong", {}, s.label), badge(s.autonomous ? "Worker" : "Observer"), el("span", { class: "small muted" }, (s.skills || []).join(", ") || "General")))),
+        !a.id.startsWith("device:") ? btn("Rename", () => renameAgent(a), "quiet") : null);
+    })) : box("Connect your first agent", "Each installation gets a persistent name. Codex and Claude Code on the same machine remain separate agents.", btn("Connect agent", guard(setup), "primary"));
+  }
+  const profileStates = { active: "Active", paused: "Paused", archived: "Archived" };
+  const profileTemplates = {
+    development: { name: "Developer", avatar: "🛠", role: "Development", description: "Implement focused changes and verify the result.", instructions: "Understand the selected task and existing code before making changes. Keep changes focused, run relevant checks, and explain the result and remaining limits. Ask for missing information when needed.", response_style: "Clear, concise updates with concrete verification evidence." },
+    review: { name: "Reviewer", avatar: "🔎", role: "Code review", description: "Review changes for concrete defects and regressions.", instructions: "Review the selected change independently. Prioritize reproducible bugs, regressions, and missing safeguards. Cite the affected file and scenario. Explain what was checked and any limits of the review.", response_style: "Lead with actionable findings, ordered by severity." },
+    research: { name: "Researcher", avatar: "📚", role: "Research", description: "Investigate a question and summarize the evidence.", instructions: "Clarify the selected question, use relevant primary sources, and distinguish verified facts from assumptions. Compare the options and explain uncertainties. Keep recommendations within the task's scope.", response_style: "A short answer followed by supporting evidence and sources." }
+  };
+  const profileAvatar = (p) => el("span", { class: "profile-avatar", "aria-hidden": "true", title: p.avatar || "" }, p.avatar || "◇");
+  const profileStatus = (p) => badge(profileStates[p.status] || p.status, p.status === "active" ? "status-ready" : p.status === "paused" ? "status-blocked" : "");
+  const profileWorkNotice = (p) => p?.active_work?.length ? el("p", { class: "callout" }, "This profile has active work. Saving this change blocks further board calls from its current sessions. Reconcile their claims before restarting with the new configuration; external processes are not stopped automatically.") : null;
+  const profileField = (label, name, maximum, options = {}) => {
+    const node = field(label, name, options);
+    node.querySelector("input, textarea").maxLength = maximum;
+    return node;
+  };
+  function profileCard(p) {
+    const own = p.owner_id === state.actor.owner_id;
+    const card = el("article", { class: "profile-card", "data-profile-id": p.id },
+      el("div", { class: "profile-heading" }, profileAvatar(p), el("div", { class: "profile-identity" }, el("h2", {}, p.name),
+        el("p", { class: "small muted" }, ownerName(p.owner_id), own ? " · Your profile" : " · Shared profile")), profileStatus(p)));
+    if (!own) {
+      card.append(el("p", { class: "muted small" }, "This profile belongs to another project participant. Its configuration and connections are private."));
+      return card;
+    }
+    card.append(el("p", { class: "profile-description" }, p.description || "Add a description to explain this agent’s focus."),
+      el("div", { class: "profile-meta" }, el("span", {}, p.role || "General purpose"), el("span", {}, `Configuration v${p.version}`),
+        p.legacy ? badge("Existing installation") : null),
+      el("p", { class: "small muted" }, `${p.project_ids === null ? "Existing account project scope" : `${(p.project_ids || []).length} followed project${p.project_ids?.length === 1 ? "" : "s"}`} · ${(p.bindings || []).filter(b => !b.revoked).length} connected executor${p.bindings?.filter(b => !b.revoked).length === 1 ? "" : "s"}`));
+    const work = p.active_work || [];
+    card.append(el("section", { class: "profile-work", "aria-label": "Current work" }, el("h3", {}, "Current work"),
+      work.length ? work.map(item => el("div", { class: "profile-work-item" },
+        item.kind === "ticket" ? workLink(item.title, { ticket: item.id }) : el("span", {}, item.title),
+        el("span", { class: "small muted" }, ticketStatuses[item.status] || item.status),
+        Number.isSafeInteger(item.profile_version) && item.profile_version > 0 ? btn(`Captured configuration v${item.profile_version}`, guard(() => profileHistory(p.id, item.profile_version)), "quiet profile-work-version") : null,
+        item.lease_expires_at ? el("span", { class: "small muted" }, `Lease until ${date(item.lease_expires_at)}`) : null)) : el("p", { class: "small muted" }, "No active work")));
+    card.append(el("div", { class: "profile-actions" },
+      btn("Edit profile", guard(() => profileEditor(p.id))),
+      btn("Connections", guard(() => profileBindings(p.id))),
+      btn("Version history", guard(() => profileHistory(p.id)), "quiet"),
+      btn("Duplicate", () => duplicateProfile(p), "quiet"),
+      p.status !== "archived" ? btn(p.status === "paused" ? "Resume" : "Pause", () => changeProfileStatus(p, p.status === "paused" ? "active" : "paused"), "quiet") : null,
+      btn(p.status === "archived" ? "Restore paused" : "Archive", () => changeProfileStatus(p, p.status === "archived" ? "paused" : "archived"), "quiet")));
+    return card;
   }
   async function agents() {
     const request = ++state.request; navigate("agents"); workRoute({ page: "agents" });
-    const body = frame("Agents", "Persistent identities, live sessions, and the work each agent owns.", [btn("Refresh", guard(agents)), btn("Connect agent", guard(setup), "primary")]);
-    const entries = await api("/agents"); if (request === state.request) body.append(agentList(entries));
+    const body = frame("Agents", "Give each agent a purpose, then connect it to an executor on your own device.", [btn("Refresh", guard(agents)), btn("New profile", guard(() => profileEditor()), "primary")]);
+    const change = guard(async tab => { agentTab = tab; await agents(); });
+    const navigation = tabs([["profiles", "Profiles"], ["connections", "Connections"]], agentTab, change);
+    navigation.setAttribute("aria-label", "Agent sections");
+    body.append(navigation);
+    if (agentTab === "connections") {
+      body.append(el("div", { class: "profile-intro" }, el("p", { class: "muted" }, "These are registered installations and their live sessions. A profile holds preferences; its executor uses the device’s existing connection."), btn("Connect a device", guard(setup))));
+      const entries = await api("/agents");
+      if (request === state.request) body.append(agentList(entries));
+      return;
+    }
+    const archived = check("Include archived profiles", "archived_profiles", includeArchivedProfiles);
+    archived.querySelector("input").addEventListener("change", guard(async event => { includeArchivedProfiles = event.target.checked; await agents(); }));
+    body.append(el("div", { class: "profile-toolbar" }, el("p", { class: "small muted" }, "Profiles do not start a background agent. Work still needs an authorized executor."), archived));
+    const loading = empty("Loading profiles…"); body.append(loading);
+    const [entries, visibleAgents] = await Promise.all([api(`/agent-profiles?include_archived=${includeArchivedProfiles}`), api("/agents")]);
+    if (request !== state.request) return;
+    loading.remove();
+    const mine = entries.filter(p => p.owner_id === state.actor.owner_id), shared = visibleAgents.filter(p => p.owner_id !== state.actor.owner_id && (includeArchivedProfiles || p.status !== "archived"));
+    body.append(mine.length ? el("div", { class: "profile-grid" }, mine.map(profileCard)) : box("Create your first profile", "Start with a developer, reviewer, or researcher, then adjust its instructions and project scope.", btn("New profile", guard(() => profileEditor()), "primary")));
+    if (shared.length) body.append(el("section", { class: "shared-profiles" }, el("h2", {}, "From your collaborators"), el("div", { class: "profile-grid" }, shared.map(profileCard))));
+    body.append(el("p", { class: "small muted profile-permission-note" }, "Profile permissions can only narrow the access allowed in your account settings. Pausing blocks subsequent board calls; existing work or leases may still need reconciliation."));
+  }
+  async function profileEditor(id = null) {
+    const [p, projects] = await Promise.all([id ? api(`/agent-profiles/${workPath(id)}`) : Promise.resolve(null), api("/projects?include_archived=true")]);
+    if (p && p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can edit this profile.");
+    const key = idempotencyKey();
+    const policy = p?.policy || { allow_read: false, allow_messages: false, allow_requests: false, actions: [], resources: [], autonomy: "responses" };
+    const form = el("form", { class: "work-form profile-form" });
+    const preview = el("aside", { class: "profile-preview", "aria-label": "Profile preview" });
+    const basics = el("section", { class: "profile-fields" },
+      profileField("Profile name", "name", 200, { value: p?.name || "", required: true, placeholder: "Release reviewer" }),
+      el("div", { class: "form-row" }, profileField("Avatar text or emoji", "avatar", 32, { value: p?.avatar || "", placeholder: "🔎", hint: "Plain text only. Images and URLs are not used." }), profileField("Role", "role", 200, { value: p?.role || "", placeholder: "Code review" })),
+      profileField("Description", "description", 4000, { type: "textarea", rows: 2, value: p?.description || "", placeholder: "What should this agent focus on?" }));
+    const appearance = el("div", { class: "profile-editor-top" }, basics, preview);
+    const template = select("Start from a template", "template", [["", "Custom profile"], ["development", "Development"], ["review", "Review"], ["research", "Research"]], "");
+    if (!p) form.append(template);
+    form.append(appearance,
+      profileField("Instructions", "instructions", 12000, { type: "textarea", rows: 6, value: p?.instructions || "", hint: "Private to your account and authorized executor. Do not include passwords or connection keys." }),
+      el("div", { class: "form-row" }, select("Response language", "language", [["auto", "Follow the task"], ["en", "English"], ["fr", "French"], ["de", "German"], ["nl", "Dutch"]], p?.language || "auto"), profileField("Response style", "response_style", 2000, { type: "textarea", rows: 2, value: p?.response_style || "", placeholder: "Concise, with concrete evidence" })),
+      el("fieldset", { class: "profile-section" }, el("legend", {}, "Execution preferences"),
+        el("div", { class: "form-row" }, profileField("Preferred provider", "preferred_provider", 100, { value: p?.preferred_provider || "", placeholder: "Leave empty to use the executor default" }), profileField("Preferred model", "preferred_model", 200, { value: p?.preferred_model || "", placeholder: "Leave empty to use the executor default" })),
+        el("p", { class: "small muted" }, "These are preferences for a compatible executor. Saving them does not connect a provider, make a model available, or enable automatic fallback.")));
+    const projectPicker = el("fieldset", { class: "profile-section" }, el("legend", {}, "Followed projects"), el("p", { class: "small muted" }, "Choose this profile’s work scope. With no project selected, it has no project scope."),
+      el("div", { class: "profile-project-picker" }, projects.length ? projects.map(project => check(`${project.name}${project.archived ? " (archived)" : ""}`, "project_ids", p?.project_ids?.includes(project.id), project.id)) : el("p", { class: "muted" }, "Create a project first to give this profile a work scope.")));
+    if (p?.project_ids === null) {
+      const keep = check("Keep the existing account project scope", "keep_legacy_scope", true);
+      const inputs = [...projectPicker.querySelectorAll('input[name="project_ids"]')];
+      inputs.forEach(input => input.disabled = true);
+      keep.querySelector("input").addEventListener("change", event => { inputs.forEach(input => input.disabled = event.target.checked); });
+      projectPicker.insertBefore(keep, projectPicker.querySelector("p"));
+      projectPicker.querySelector("p").textContent = "This existing installation follows its account’s project access. Clear the option to replace that scope with selected projects; an empty selection removes project access.";
+    }
+    const permissions = el("details", { class: "metadata-editor profile-permissions" }, el("summary", {}, "Profile permissions"),
+      el("p", { class: "small muted" }, "These limits are combined with your account and device permissions. A profile cannot grant itself additional access."),
+      check("Read selected projects and discussions", "allow_read", policy.allow_read), check("Post messages", "allow_messages", policy.allow_messages), check("Create, claim and update work", "allow_requests", policy.allow_requests),
+      select("Work selection", "autonomy", [["responses", "Responses only"], ["requested", "Explicitly requested work"], ["queue", "Authorized queue work"]], policy.autonomy),
+      el("p", { class: "small muted" }, "Queue permission does not start a worker or listener. An executor must also support and be authorized for that workflow."),
+      el("details", { class: "profile-legacy-scopes" }, el("summary", {}, "Legacy action limits"), profileField("Allowed actions (one per line)", "actions", 25700, { type: "textarea", value: policy.actions.join("\n") }), profileField("Allowed resources (one per line)", "resources", 25700, { type: "textarea", value: policy.resources.join("\n") })));
+    form.append(projectPicker, permissions,
+      el("p", { class: "small muted" }, p ? `Editing configuration v${p.version}. Saved preferences apply to future work; existing work keeps its captured configuration.` : "A new profile has no connection. Choose its project scope and permissions, then connect an executor."),
+      profileWorkNotice(p),
+      formButtons(p ? "Save profile" : "Create profile"));
+    const refreshPreview = () => {
+      const values = new FormData(form);
+      preview.replaceChildren(el("p", { class: "small muted" }, "Preview"), profileAvatar({ avatar: String(values.get("avatar") || "") }), el("h3", {}, String(values.get("name") || "Your agent")),
+        el("p", { class: "small muted" }, ownerName(state.actor.owner_id)), el("p", {}, String(values.get("role") || "General purpose")), el("p", { class: "small profile-description" }, String(values.get("description") || "A clear purpose helps others know when to involve this agent.")));
+    };
+    template.querySelector("select").addEventListener("change", event => {
+      const preset = profileTemplates[event.target.value]; if (!preset) return;
+      Object.entries(preset).forEach(([name, value]) => { form.elements.namedItem(name).value = value; });
+      refreshPreview();
+    });
+    form.addEventListener("input", refreshPreview);
+    bindForm(form, async values => {
+      const fields = Object.fromEntries(["name", "avatar", "description", "role", "instructions", "language", "response_style", "preferred_provider", "preferred_model"].map(name => [name, String(values.get(name) || "")]));
+      if (!values.has("keep_legacy_scope")) fields.project_ids = values.getAll("project_ids");
+      fields.policy = { allow_read: values.has("allow_read"), allow_messages: values.has("allow_messages"), allow_requests: values.has("allow_requests"), autonomy: values.get("autonomy"), actions: lines(String(values.get("actions") || "")), resources: lines(String(values.get("resources") || "")) };
+      if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
+      await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
+      closeModal(); agentTab = "profiles"; await agents(); notify(p ? "Profile saved for future work." : "Profile created. Connect an executor when you are ready.");
+    });
+    openModal(p ? "Edit agent profile" : "Create agent profile", form); refreshPreview();
+  }
+  function duplicateProfile(p) {
+    const key = idempotencyKey();
+    const form = el("form", {}, profileField("New profile name", "name", 200, { value: `${p.name.slice(0, 193)} (copy)`, required: true }),
+      el("p", { class: "muted" }, "Copies the presentation, instructions and preferences. The copy starts paused, with no project scope, permissions or connected executor."), formButtons("Create copy"));
+    bindForm(form, async values => {
+      await api(`/agent-profiles/${workPath(p.id)}/duplicate`, { method: "POST", data: { expected_version: p.version, name: values.get("name"), idempotency_key: key } });
+      closeModal(); await agents(); notify("Paused copy created. Choose its scope and permissions before using it.");
+    });
+    openModal("Duplicate profile", form);
+  }
+  function changeProfileStatus(p, next) {
+    const label = next === "active" ? "Resume profile" : next === "archived" ? "Archive profile" : p.status === "archived" ? "Restore paused" : "Pause profile";
+    const form = el("form", {}, el("p", {}, next === "active" ? "Allow this profile’s next authorized board calls. This does not start an executor or expand its permissions." : "Block this profile’s subsequent board calls. External processes are not stopped and existing work or leases may still need reconciliation."), formButtons(label));
+    bindForm(form, async () => {
+      await api(`/agent-profiles/${workPath(p.id)}`, { method: "PATCH", data: { expected_version: p.version, status: next } });
+      closeModal(); await agents(); notify(`Profile ${profileStates[next].toLowerCase()}.`);
+    });
+    openModal(label, form);
+  }
+  async function profileHistory(id, selectedVersion = null) {
+    const p = await api(`/agent-profiles/${workPath(id)}`);
+    if (p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can read this profile’s history.");
+    const version = field("Configuration version", "version", { type: "number", value: selectedVersion || p.version, required: true });
+    const input = version.querySelector("input"); input.min = 1; input.max = p.version; input.step = 1;
+    const content = el("div", { class: "profile-version-content", "aria-live": "polite" });
+    const form = el("form", { class: "profile-version-form" }, el("p", { class: "small muted" }, `Saved configurations are read-only. Current version: ${p.version}.`),
+      el("div", { class: "profile-version-controls" }, version, el("button", { type: "submit" }, "View version")), content);
+    let sequence = 0;
+    const load = async selected => {
+      if (!Number.isSafeInteger(selected) || selected < 1 || selected > p.version) throw new Error(`Choose a version from 1 to ${p.version}.`);
+      const current = ++sequence;
+      const saved = await api(`/agent-profiles/${workPath(id)}/versions/${selected}`);
+      if (current !== sequence || !form.isConnected) return;
+      content.replaceChildren(el("div", { class: "profile-heading" }, profileAvatar(saved), el("div", { class: "profile-identity" }, el("h3", {}, saved.name), el("p", { class: "small muted" }, `Version ${saved.version} · ${date(saved.updated_at)}`)), profileStatus(saved)),
+        el("p", { class: "prose" }, saved.description || "No description"),
+        el("dl", { class: "profile-version-facts" }, ...[
+          ["Owner", ownerName(saved.owner_id)], ["Role", saved.role || "General purpose"], ["Language", saved.language || "auto"],
+          ["Response style", saved.response_style || "Executor default"], ["Preferred provider", saved.preferred_provider || "Executor default"], ["Preferred model", saved.preferred_model || "Executor default"],
+          ["Project scope", saved.project_ids === null ? "Existing account project scope" : saved.project_ids.length ? saved.project_ids.join(", ") : "No projects"]
+        ].flatMap(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
+        panel("Private instructions", el("pre", { class: "panel-body prose" }, saved.instructions || "No additional instructions")),
+        panel("Permission limits", el("div", { class: "panel-body" }, el("p", {}, `Read: ${saved.policy.allow_read ? "allowed" : "off"} · Messages: ${saved.policy.allow_messages ? "allowed" : "off"} · Work requests: ${saved.policy.allow_requests ? "allowed" : "off"}`),
+          el("p", { class: "small muted" }, `Work selection: ${saved.policy.autonomy}`),
+          el("p", { class: "prose small" }, `Actions: ${saved.policy.actions.join(", ") || "None"}`), el("p", { class: "prose small" }, `Resources: ${saved.policy.resources.join(", ") || "None"}`))));
+    };
+    bindForm(form, async values => load(Number(values.get("version"))));
+    openModal(`Version history · ${p.name}`, form);
+    await load(selectedVersion || p.version);
+  }
+  async function profileBindings(id) {
+    const [p, settings] = await Promise.all([api(`/agent-profiles/${workPath(id)}`), api("/settings")]);
+    if (p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can connect this profile.");
+    const devices = settings.devices.filter(device => !device.revoked);
+    const list = el("div", { class: "profile-binding-list" }, (p.bindings || []).map(binding => el("section", { class: "profile-binding" },
+      el("strong", {}, binding.device_label), badge(binding.revoked ? "Device revoked" : "Linked"),
+      el("p", { class: "small muted" }, binding.agent_kind), el("code", {}, binding.identity_key))));
+    const form = el("form", { class: "profile-binding-form" },
+      el("p", {}, "Link this profile to a client on an existing connected device. Credentials remain on that device."), list);
+    if (!devices.length) {
+      form.append(el("p", { class: "muted" }, "Connect a device first, then return here to link its executor."), btn("Connect a device", guard(async () => { closeModal(); await setup(); }), "primary"));
+    } else {
+      form.append(select("Connected device", "device_id", devices.map(device => [device.id, device.label]), devices[0].id),
+        select("Client", "agent_kind", [["codex", "Codex"], ["claude-code", "Claude Code"], ["other", "Other MCP client"]], "codex"),
+        profileField("Installation key", "identity_key", 200, { value: `profile-${p.id}`, required: true, hint: "Use this key with the connector on the chosen device. A key already linked to another profile cannot be moved." }),
+        el("p", { class: "small muted" }, `Configuration v${p.version}. Linking an executor does not change this profile’s permissions.`), profileWorkNotice(p), formButtons("Link executor"));
+      bindForm(form, async values => {
+        const binding = { device_id: values.get("device_id"), agent_kind: values.get("agent_kind"), identity_key: values.get("identity_key") };
+        await api(`/agent-profiles/${workPath(p.id)}/bindings`, { method: "POST", data: { expected_version: p.version, ...binding } });
+        const quote = value => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+        const command = `python3 ~/Downloads/board-connect.py --client ${quote(binding.agent_kind)} --select-agent-key ${quote(binding.identity_key)}`;
+        openModal("Executor linked", el("div", { class: "profile-binding-success" }, el("p", {}, "On the selected device, use its existing connection with this installation key:"),
+          el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download current connector"),
+          el("pre", {}, command), el("p", { class: "small muted" }, "The connector selects this profile using the device’s existing credential. This command does not create a new provider or start work."),
+          el("p", { class: "small muted" }, "Restart the client or open a new conversation after selecting the profile. Existing work is not reassigned. If you use a custom connection folder, add --config-dir with that folder."),
+          p.status !== "active" ? el("p", { class: "callout" }, "This profile is paused or archived. Resume it when its scope and permissions are ready.") : null,
+          btn("Done", guard(async () => { closeModal(); await agents(); }), "primary")));
+      });
+    }
+    openModal(`Connections · ${p.name}`, form);
   }
   function renameAgent(a) {
     const form = el("form", {}, field("Agent name", "name", { value: a.name, required: true }), formButtons("Save name"));

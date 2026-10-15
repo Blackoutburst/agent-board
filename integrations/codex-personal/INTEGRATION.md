@@ -1,19 +1,19 @@
 # Connexion du fournisseur Codex personnel
 
-La version 0.6 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Le mode question/réponse exige le board **2.0.3**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
+La version 0.7 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Le mode question/réponse exige le board **2.0.3**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
 
 ## Responsabilités actuelles
 
-| Board 2.0 publié | Adaptateur personnel 0.6 |
+| Board 2.1 | Adaptateur personnel 0.7 |
 |---|---|
 | Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
-| Projets, tickets, conversations et permissions du propriétaire/appareil | Lit un ticket explicitement choisi et compose ses sources bornées |
+| Projets, tickets, conversations et permissions du propriétaire/appareil/profil | Lit un ticket explicitement choisi et compose ses sources bornées |
 | Réservations, baux, `get_work`, `claim_next_ticket` | `worker` réserve seulement un ticket explicitement choisi ; aucune sélection automatique |
 | Délégation et demandes humaines | `worker run --human-owner` peut poser une question au destinataire fixé puis reprendre explicitement après sa réponse ; la délégation reste à raccorder |
 | Activité et inbox | `events drain` lit l’activité ascendante d’un ticket et journalise ses lots ; il ne lit pas l’inbox et ne démarre pas de listener |
-| Identité affichée et compétences | Conserve seulement les champs publics utiles à l’analyse |
+| Profil versionné et compétences | Sélectionne les préférences utiles à l’analyse ; exclut droits, liaisons et travaux de gestion |
 
-Les fonctionnalités Strata/GLM annoncées par l’autre développeur ne sont pas implémentées ici. Le commit cité ne contient pas encore de registre de fournisseurs d’inférence ou de permissions distinctes par agent. Les accès effectivement vérifiés restent ceux du propriétaire et de l’appareil.
+Les fonctionnalités Strata/GLM annoncées par l’autre développeur ne sont pas implémentées ici. Le board 2.1 ajoute les profils, leurs droits et leurs liaisons aux appareils. Les préférences fournisseur/modèle sont enregistrées, mais aucun registre de fournisseurs d’inférence ni routage automatique n’est activé.
 
 ## Interfaces Python
 
@@ -59,7 +59,7 @@ L’option Python `human_owner_id` fixe le destinataire d’une éventuelle ques
 
 - Étendre le traitement textuel explicite aux outils de développement autorisés et aux baux longs, sans affaiblir la réconciliation des effets après coupure.
 - Étendre le drain ponctuel des événements d’un ticket aux réveils distants et aux autres sources autorisées. `read_inbox` avance son curseur à la lecture ; ce n’est pas un accusé de traitement réussi.
-- Relier personnalisation, modèles accessibles et éventuels replis aux profils du board, sans copier de cache d’authentification entre propriétaires.
+- Relier les modèles accessibles et éventuels replis aux préférences des profils du board, sans copier de cache d’authentification entre propriétaires. La personnalisation textuelle est déjà intégrée au contexte versionné.
 - Ajouter la sélection de tâches, les outils de développement et la publication uniquement dans le périmètre explicitement autorisé, avec contrôle avant chaque effet.
 - Valider le second propriétaire et le mode d’hébergement avant l’activation d’un service partagé.
 

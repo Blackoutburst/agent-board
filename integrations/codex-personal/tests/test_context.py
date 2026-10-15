@@ -105,6 +105,32 @@ class ContextTests(unittest.TestCase):
         self.assertEqual([call[0] for call in self.board.calls], ['get_ticket', 'get_thread', 'get_ticket'])
         self.assertNotIn('PRIVATE_', canonical(result).decode())
 
+    def test_profile_preferences_are_scoped_versioned_and_filtered(self):
+        self.registration['profile'] = {'id': 'agent-a', 'owner_id': 'alice', 'version': 2,
+            'status': 'active', 'instructions': 'Prefer concise explanations.', 'language': 'fr',
+            'role': 'review', 'preferred_model': 'owner-preference', 'bindings': ['PRIVATE_BINDING'],
+            'policy': {'actions': ['PRIVATE_ACTION']}, 'project_ids': ['PRIVATE_PROJECT'],
+            'token': 'PRIVATE_TOKEN'}
+        self.registration['profile_version'] = 2
+        self.registration['session']['profile_version'] = 2
+        first = self.compose()
+        self.assertEqual(first['data']['agent']['preferences']['instructions'], 'Prefer concise explanations.')
+        self.assertNotIn('PRIVATE_', canonical(first).decode())
+        self.registration['profile']['instructions'] = 'Explain every relevant finding.'
+        self.registration['profile']['version'] = 3
+        self.registration['profile_version'] = self.registration['session']['profile_version'] = 3
+        second = self.compose()
+        self.assertNotEqual(first['fingerprint'], second['fingerprint'])
+        self.assertNotEqual(first['sources']['agent']['sha256'], second['sources']['agent']['sha256'])
+
+    def test_other_or_stale_profile_is_rejected_before_board_reads(self):
+        base = {'id': 'agent-a', 'owner_id': 'alice', 'version': 2, 'status': 'active'}
+        for changes in ({'owner_id': 'bob'}, {'id': 'another'}, {'status': 'paused'}, {'version': 3}):
+            self.registration['profile'] = {**base, **changes}
+            self.registration['profile_version'] = self.registration['session']['profile_version'] = 2
+            self.assert_code('context_profile_mismatch', self.compose)
+        self.assertEqual(self.board.calls, [])
+
     def test_permissions_and_identity_mismatches_fail_before_any_read(self):
         mutations = [lambda r: r['policy'].update(allow_read=False),
                      lambda r: r['policy'].update(allow_read=1),

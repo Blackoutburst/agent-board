@@ -15,6 +15,7 @@ import platform
 from pathlib import Path
 import re
 import secrets
+import stat
 import sys
 import subprocess
 import tempfile
@@ -120,10 +121,32 @@ def write_claude(path, installed, directory, client):
     private_write(path, json.dumps(data, indent=2)+'\n')
 
 
+def confirm_registration(result, config, session_id):
+    """Never forward a call under an old profile after rejected registration."""
+    try:
+        if not isinstance(result, dict) or result.get('isError'):
+            raise ValueError
+        data = result.get('structuredContent')
+        if data is None:
+            data = json.loads(result['content'][0]['text'])
+        if isinstance(data, dict) and set(data) == {'result'}:
+            data = data['result']
+        identity, session = data['identity'], data['session']
+        if (not identity['id'] or identity['id'] != session['agent_id']
+                or identity['owner_id'] != session['owner_id']
+                or identity['device_id'] != session['device_id']
+                or identity['identity_key'] != config['identity_key']
+                or identity['agent_kind'] != config['client'] or session['id'] != session_id):
+            raise ValueError
+    except (ValueError, TypeError, KeyError, IndexError):
+        raise RuntimeError('Agent registration was not confirmed. Reconnect using a new session for the selected profile.') from None
+
+
 def bridge(config):
     registered = set()
     for line in sys.stdin:
         message = None
+        registering = None
         try:
             message = json.loads(line)
             if not isinstance(message, dict):
@@ -133,17 +156,22 @@ def bridge(config):
                 arguments = params.setdefault('arguments', {})
                 session_id = arguments.get('session_id')
                 if params.get('name') == 'register_agent':
+                    registered.discard(session_id)
+                    registering = session_id
                     arguments.update(agent_kind=config['client'], identity_key=config['identity_key'], name=config['name'])
                     os_skill = {'darwin':'macos'}.get(platform.system().lower(),platform.system().lower())
                     arguments['skills'] = list(dict.fromkeys(arguments.get('skills', [])+[os_skill]))
-                    registered.add(session_id)
                 elif session_id and session_id not in registered:
-                    rpc(config, 'tools/call', {'name':'register_agent','arguments':{
+                    registration = rpc(config, 'tools/call', {'name':'register_agent','arguments':{
                         'session_id':session_id,'label':arguments.get('label', config['name']+' chat'),
                         'agent_kind':config['client'],'identity_key':config['identity_key'],'name':config['name'],
                         'skills':[{'darwin':'macos'}.get(platform.system().lower(),platform.system().lower())]}})
+                    confirm_registration(registration, config, session_id)
                     registered.add(session_id)
             response = request(config['mcp_url'], message, config['token'])
+            if registering is not None:
+                confirm_registration(response.get('result') if isinstance(response, dict) else None, config, registering)
+                registered.add(registering)
             if response is not None and 'id' in message:
                 print(json.dumps(response), flush=True)
         except Exception as error:
@@ -153,11 +181,69 @@ def bridge(config):
                     'code':-32000,'message':str(error) if isinstance(error, RuntimeError) else 'Local board connection failed'}}), flush=True)
 
 
+def select_agent(connection_path, identity_key):
+    """Select a human-bound profile without copying an account or device token."""
+    if (not isinstance(identity_key, str) or not identity_key.strip() or len(identity_key) > 200
+            or any(ord(c) < 32 or ord(c) == 127 for c in identity_key)):
+        raise ValueError('Use the exact agent key shown by the board.')
+    if connection_path.is_symlink():
+        raise RuntimeError('The existing connection must be a private regular file.')
+    descriptor = os.open(connection_path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(descriptor) as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > 65536
+                or (os.name != 'nt' and (info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600))):
+            raise RuntimeError('The existing connection must be a private regular file.')
+        original = source.read(65537)
+        if len(original.encode('utf-8')) > 65536:
+            raise RuntimeError('The existing connection exceeds the size limit.')
+    config = json.loads(original)
+    if config.get('client') not in ('codex', 'claude-code', 'other'):
+        raise RuntimeError('The existing connection is invalid.')
+    endpoint = config.get('mcp_url', '')
+    if not endpoint.endswith('/mcp') or validate_url(endpoint[:-4]) + '/mcp' != endpoint:
+        raise RuntimeError('The existing MCP address is invalid.')
+    selected = {**config, 'identity_key': identity_key}
+    rpc(selected, 'initialize', {'protocolVersion':'2025-03-26','capabilities':{},
+        'clientInfo':{'name':'board-profile-selection','version':'1'}})
+    response = rpc(selected, 'tools/call', {'name':'register_agent','arguments':{
+        'session_id':'profile-selection-'+secrets.token_hex(16),'label':'Profile connection verification',
+        'agent_kind':config['client'],'identity_key':identity_key,'skills':[],'autonomous':False}})
+    try:
+        if not isinstance(response, dict) or response.get('isError'):
+            raise ValueError
+        data = response.get('structuredContent')
+        if data is None:
+            data = json.loads(response['content'][0]['text'])
+        if isinstance(data, dict) and set(data) == {'result'}:
+            data = data['result']
+        profile, identity, session = data['profile'], data['identity'], data['session']
+        if (not profile.get('id') or identity['id'] != profile['id'] or session['agent_id'] != profile['id']
+                or identity['owner_id'] != profile['owner_id'] or session['owner_id'] != profile['owner_id']
+                or identity['device_id'] != session['device_id'] or identity['agent_kind'] != config['client']
+                or not isinstance(profile.get('name'), str) or not profile['name'].strip()):
+            raise ValueError
+    except (ValueError, TypeError, KeyError, IndexError):
+        raise RuntimeError('Profile selection was not confirmed. Check its binding, permissions and status in the board.') from None
+    selected['name'] = profile['name']
+    # A failed verification above leaves the original connection unchanged.
+    if connection_path.is_symlink() or connection_path.read_text() != original:
+        raise RuntimeError('The connection changed during verification. Retry after inspecting the current configuration.')
+    # The client runs this installed copy, not necessarily the freshly downloaded
+    # selector. Upgrade its registration checks before publishing the new key.
+    installed = connection_path.parent / 'connect.py'
+    if Path(__file__).resolve() != installed.resolve():
+        private_write(installed, Path(__file__).read_text())
+    private_write(connection_path, json.dumps(selected, indent=2)+'\n')
+    return {'profile_id': profile['id'], 'name': profile['name']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--url', default='https://board.blackoutburst.com')
     parser.add_argument('--client', choices=['codex','claude-code','other'], default='codex')
     parser.add_argument('--name', help='Persistent display name, for example Codex · Work Mac')
+    parser.add_argument('--select-agent-key', help='Select an existing human-bound agent using this connection; no new pairing.')
     parser.add_argument('--config-dir', type=Path, default=Path.home()/'.config'/'blackoutburst-board')
     parser.add_argument('--codex-config', type=Path, default=Path.home()/'.codex'/'config.toml')
     parser.add_argument('--claude-config', type=Path, default=Path.home()/'.claude.json')
@@ -165,6 +251,12 @@ def main():
     args = parser.parse_args()
     directory = args.config_dir.expanduser().resolve()
     connection_path = directory/(args.client+'.json')
+    if args.select_agent_key is not None:
+        if args.stdio:
+            raise ValueError('Select the profile before starting the stdio bridge.')
+        select_agent(connection_path, args.select_agent_key)
+        print('Agent profile selected. Restart the client and use a new chat session; existing work is not reassigned.')
+        return
     if args.stdio:
         try:
             config = json.loads(connection_path.read_text())

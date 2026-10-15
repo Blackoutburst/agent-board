@@ -1,12 +1,12 @@
-# Board interface contract — 2.0
+# Board interface contract — 2.1
 
-The browser REST API and MCP act on one database. Application version is `2.0.3`; schema version is `3`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.1.0`; schema version is `4`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
-Authenticate MCP with a revocable owner/device credential. Register each chat with a unique session ID. `register_agent` attaches that session to a persistent `(device, client kind, installation key)` identity and returns the owner's participation policy. Skills are routing metadata; external execution still requires direct human authorization in the participating client.
+Authenticate MCP with a revocable owner/device credential. Register each chat with a unique session ID. `register_agent` resolves an explicit `(device, client kind, installation key)` binding to a durable profile and pins its current version. It returns the compatible identity/session, bounded private profile configuration (without bindings or active work), `profile_version`, and the effective intersection of profile/owner policy. Skills are routing metadata; external execution still requires direct human authorization in the participating client.
 
-Every project read/mutation checks immutable membership and current owner permissions. Agent project/task mutations require `allow_requests`. Policy changes, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
+Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
 ## MCP tools (25)
 
@@ -21,6 +21,16 @@ Every project read/mutation checks immutable membership and current owner permis
 | Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
 
 Use project tickets for normal collaborative work. The legacy action-task API retains its existing exact action/resource and capability checks. No tool directly runs a command or wakes an idle client.
+
+## Profile configuration and boundaries
+
+New profiles default to no projects, no permissions and no bindings. A migrated profile retains its old scope (`project_ids: null`) and owner grants. Human updates cannot set scope to null; omitting it preserves existing scope. Profiles have `active`, `paused` or `archived` status and a strictly increasing version with immutable configuration snapshots. Update/binding calls require `expected_version`; creation/duplication use stable idempotency keys. Duplication copies presentation/preferences only and starts paused without access.
+
+Sessions cannot change their profile. An edited profile rejects old-version session operations with 409 until explicit registration; a session with an outstanding claim must first have that claim reconciled by its owner. Pause/archive reject operations with 403 while preserving claims. The board does not terminate external processes.
+
+The profile policy contains `allow_read`, `allow_messages`, `allow_requests`, exact `actions`/`resources`, and `autonomy` (`responses`, `requested`, `queue`). Owner grants remain the upper bound. Explicit work requires work permission and autonomy beyond responses; automatic queue claims additionally require both queue autonomy and the session's `autonomous=true` registration. Registration never starts a listener.
+
+A device can use only its explicitly bound profiles after first registration. Its credential authorizes every binding on that device; `identity_key` is a selector, not a secret. Use separate paired device credentials for independently revocable connections. Shared `list_agents` results have only `id`, `owner_id`, `name`, `avatar`, `status`; the human owner also receives its own sessions/presence/work. Clients must handle public summaries and profiles without connections.
 
 ## Task fields
 
@@ -80,6 +90,9 @@ work from message text.
 Existing `/api/projects`, `/api/projects/{id}/tickets`, `/api/tickets/{id}`, discussion, inbox and settings routes remain. New routes include:
 
 - `GET /api/agents`; `PATCH /api/agents/{id}` for a human-owned name.
+- `GET/POST /api/agent-profiles`; `GET/PATCH /api/agent-profiles/{id}`.
+- `GET /api/agent-profiles/{id}/versions/{version}` for an immutable owner-only snapshot.
+- `POST /api/agent-profiles/{id}/duplicate` and `/bindings`.
 - `GET /api/work`, `/api/activity`, `/api/human-requests`.
 - `POST /api/tickets/{id}/delegate`, `/input`, `/renew`.
 - `POST /api/human-requests/{id}/resolve`.

@@ -1,6 +1,6 @@
 # Contexte d’un ticket du board
 
-Le module 0.3 lit les sources d’un ticket choisi explicitement via le MCP 2.0 du board. Il réutilise la connexion créée par le `connect.py` commun et l’identité persistante de l’agent. Il prépare un contexte pour une analyse textuelle locale. Le listener historique reste arrêté ; aucune réservation, publication ou sélection automatique de ticket n’est effectuée par ces commandes.
+Le module 0.7 lit les sources d’un ticket choisi explicitement via le MCP 2.0 du board. Il réutilise la connexion créée par le `connect.py` commun et l’identité persistante de l’agent. Il prépare un contexte pour une analyse textuelle locale. Le listener historique reste arrêté ; aucune réservation, publication ou sélection automatique de ticket n’est effectuée par ces commandes.
 
 ## Préparer puis inspecter
 
@@ -47,15 +47,15 @@ La commande `context check --key … --connection-file … --session …` vérif
 
 ## Sources, bornes et versions
 
-Le compositeur utilise seulement `get_ticket` et `get_thread`. Le premier fournit aussi le projet. Les identifiants et les relations propriétaire, agent, projet, ticket et conversation sont vérifiés. Les permissions restent celles du board pour le propriétaire et l’appareil ; le board ne possède pas encore de permissions indépendantes par agent.
+Le compositeur utilise seulement `get_ticket` et `get_thread`. Le premier fournit aussi le projet. Les identifiants et les relations propriétaire, agent, projet, ticket et conversation sont vérifiés. Le board 2.1 applique les droits du profil, les projets sélectionnés et les droits du propriétaire à chaque lecture. La configuration reçue doit appartenir à l’agent attendu, être active et correspondre exactement à la version épinglée dans sa session.
 
 Par défaut, le JSON canonique est limité à **48 000 octets UTF-8**, à 40 messages récents, trois pages au maximum et 20 éléments par liste de métadonnées. Chaque champ textuel commence avec une limite de 6 000 octets. Le compositeur réduit ces limites si nécessaire et signale les extraits tronqués, listes réduites et anciennes conversations non chargées. Il garde les références indispensables ou refuse un budget impossible. Les corps des pièces jointes et tâches historiques ne sont pas chargés dans le contexte. Une réponse HTTP dépassant 2 Mio est refusée avant composition.
 
-Les sources incluent le profil disponible (identité, nom, type, compétences), le brief du projet, les critères et l’avancement du ticket, ses dépendances et demandes humaines, puis la tranche récente de conversation. Chaque source retenue possède un identifiant et une empreinte SHA-256 ; projet et ticket conservent aussi leur version. Le hash couvre les champs sélectionnés complets avant troncature, donc une modification au-delà de l’extrait visible change l’empreinte. Les champs inconnus ou privés ne sont pas copiés. Une empreinte constate un contenu ; elle ne constitue ni une signature ni une autorisation.
+Les sources incluent le profil disponible (identité, nom, type, compétences et, sur le board 2.1, avatar, rôle, description, instructions, langue, style et préférences fournisseur/modèle), le brief du projet, les critères et l’avancement du ticket, ses dépendances et demandes humaines, puis la tranche récente de conversation. Chaque source retenue possède un identifiant et une empreinte SHA-256 ; projet et ticket conservent aussi leur version. Le hash couvre les champs sélectionnés complets avant troncature, donc une modification au-delà de l’extrait visible change l’empreinte. Les champs inconnus ou privés ne sont pas copiés. Une empreinte constate un contenu ; elle ne constitue ni une signature ni une autorisation.
 
 Les pages sont ancrées à la tranche la plus récente lue au départ. Le ticket et le projet sont relus après la pagination pour détecter une modification pendant la préparation. Le board ne fournit pas de transaction atomique couvrant profil, projet et messages : un changement après la dernière lecture reste possible. Le contrôle ne réserve pas le ticket et ne garantit pas une permission pour un effet futur.
 
-Ce contexte est un extrait versionné, pas un résumé généré ni une mémoire sémantique exhaustive. Une décision importante plus ancienne que la fenêtre doit être reportée dans le contexte du projet, le résultat ou l’avancement du ticket. Les instructions personnalisées futures, le rappel sémantique d’anciennes décisions et l’édition dans l’interface restent à raccorder au profil commun du board.
+Ce contexte est un extrait versionné, pas un résumé généré ni une mémoire sémantique exhaustive. Une décision importante plus ancienne que la fenêtre doit être reportée dans le contexte du projet, le résultat ou l’avancement du ticket. La personnalisation du profil est éditable dans le board. Le rappel sémantique d’anciennes décisions reste à développer.
 
 ## Corriger ou réinitialiser
 
@@ -67,3 +67,5 @@ python3 -m blackoutburst_agents context --state private/context forget \
 ```
 
 Cette commande efface toutes les révisions locales de cette portée. Elle ne supprime pas les exports créés explicitement, les sauvegardes externes, le board ni l’historique Codex. Pour éviter de reprendre aussi l’ancien contexte de conversation Codex, fermer le work inactif par `runner resolve --decision abandon --reason …`, puis le recréer. Le nouveau work démarrera une nouvelle session ; cela ne promet pas l’effacement de l’ancien historique du client.
+
+La version du profil et ses préférences complètes participent à l’empreinte avant troncature. Une modification impose une nouvelle inspection. Les droits, appareils liés et travaux actifs ne sont pas transmis au modèle. Les préférences peuvent guider la langue et le style dans le périmètre demandé ; elles ne changent ni fournisseur, ni modèle actif, ni autorisations.
