@@ -279,9 +279,11 @@ class RuntimeMixin:
             active = db.execute("SELECT * FROM runtime_executions WHERE owner_id=? AND state!='finished' ORDER BY created_at,id", (owner_id,)).fetchall()
             recent = db.execute("SELECT * FROM runtime_executions WHERE owner_id=? AND state='finished' ORDER BY updated_at DESC,id LIMIT 50", (owner_id,)).fetchall()
             observed = db.execute('SELECT blocked_reason FROM owner_execution_limits WHERE owner_id=?', (owner_id,)).fetchone()
-            quota = {'status': 'blocked_observed', 'reason': observed['blocked_reason']} if observed and observed['blocked_reason'] else {'status': 'unavailable'}
+            usage = self._usage_for_owner(db, owner_id)
+            usage_status = 'observed' if any(v['data_status'] == 'observed' for v in usage) else 'stale' if any(v['data_status'] == 'stale' for v in usage) else 'unavailable'
+            quota = {'status': 'blocked_observed', 'reason': observed['blocked_reason']} if observed and observed['blocked_reason'] else {'status': usage_status}
             return {'limits': self._runtime_limits(db, owner_id), 'active_count': len(active),
-                    'quota': quota,
+                    'quota': quota, 'usage_observations': usage,
                     'executions': [self._execution_view(db, row) for row in active + recent]}
 
     def update_runtime_limits(self, actor, expected_version, max_concurrent, paused):

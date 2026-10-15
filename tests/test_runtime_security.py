@@ -221,7 +221,7 @@ def test_schema_six_backup_restores_capacity_cleanup_and_quota_observation(runti
     expected = board.get_runtime(human)
     archive = tmp_path / 'runtime-backup.zip'
     manifest = create_backup(board.data_dir, archive)
-    assert manifest['schema']['user_version'] == 6
+    assert manifest['schema']['user_version'] == 7
     destination = tmp_path / 'restored'
     restore_backup(archive, destination)
     restored = Board(destination)
@@ -239,10 +239,10 @@ def test_future_schema_is_refused_without_touching_existing_runtime_rows(runtime
     actor, ticket, *_ = agent()
     reserve(runtime, actor, ticket)
     with sqlite3.connect(board.db_path) as db:
-        db.execute('PRAGMA user_version=7')
+        db.execute('PRAGMA user_version=8')
     before = snapshot(board)
     with pytest.raises(RuntimeError, match='newer'):
         Board(board.data_dir)
     assert snapshot(board) == before
     with sqlite3.connect(board.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 8

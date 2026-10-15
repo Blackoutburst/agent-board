@@ -114,6 +114,39 @@ class ProjectBody(Body):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+class UsageWindow(ProjectBody):
+    used_percent: Annotated[int, Field(strict=True, ge=0, le=100)]
+    window_minutes: Annotated[int, Field(strict=True, ge=1, lt=2**63)] | None
+    resets_at: Annotated[int, Field(strict=True, ge=1, lt=2**63)] | None
+
+
+class UsageBucket(ProjectBody):
+    limit_id: Annotated[str, Field(strict=True, min_length=1, max_length=200)] | None
+    source_view: Literal['multi_bucket', 'legacy']
+    primary: UsageWindow | None
+    secondary: UsageWindow | None
+    reached_reason: Literal['rate_limit_reached', 'workspace_owner_credits_depleted',
+        'workspace_member_credits_depleted', 'workspace_owner_usage_limit_reached',
+        'workspace_member_usage_limit_reached'] | None
+    spend_control_reached: Annotated[bool, Field(strict=True)] | None
+    normal_model_slug: Annotated[str, Field(strict=True, min_length=1, max_length=200)] | None
+
+
+class UsageSnapshot(ProjectBody):
+    schema_version: Annotated[int, Field(strict=True, ge=1, le=1)]
+    provider: Literal['codex_chatgpt']
+    source: Literal['codex_app_server_account_rate_limits']
+    cli_version: Annotated[str, Field(strict=True, min_length=1, max_length=80)]
+    data_status: Literal['observed', 'unavailable']
+    unavailable_reason: Literal['auth_unavailable', 'unsupported_auth', 'unsupported_cli',
+        'timeout', 'transport_error', 'invalid_response', 'cleanup_unconfirmed', 'process_exited'] | None
+    ordinary_usage_allowed: Annotated[bool, Field(strict=True)] | None
+    buckets: Annotated[list[UsageBucket], Field(max_length=32)]
+
+
+UsageTimestamp = Annotated[float, Field(strict=True, gt=0, lt=2**53, allow_inf_nan=False)]
+
+
 class NewProject(ProjectBody):
     name: str = Field(min_length=1, max_length=120)
     participants: list[str] = Field(min_length=1, max_length=2)
@@ -595,6 +628,12 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return {**device_actor(), 'session_id': session_id}
 
     @mcp.tool()
+    async def report_usage_observation(session_id: RuntimeOpaque, connection_id: RuntimeOpaque,
+                                       observed_at: UsageTimestamp, snapshot: UsageSnapshot) -> dict:
+        """Report sanitized, dated local subscription measurements for this exact owner/profile/device connection. Requires current request permission; informational only, never permission to execute, unpause, reset or change model. Do not send account IDs, emails, credits, credentials or raw provider responses. Duplicate timestamps cannot refresh a sample's age."""
+        return board.report_usage_observation(session_actor(session_id), connection_id, observed_at, snapshot.model_dump())
+
+    @mcp.tool()
     async def reserve_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque,
                                 project_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
                                 work_id: RuntimeOpaque, turn_id: RuntimeOpaque,
@@ -731,7 +770,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.4.0", "schema_version": 6, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits"]}
+        return {"status": "ok", "version": "2.5.0", "schema_version": 7, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

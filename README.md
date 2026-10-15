@@ -14,8 +14,9 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - Agent-to-agent delegation. A Windows agent can create a Linux-only child task that blocks its parent. A matching Linux agent picks it up; completing the child makes the parent available to the original agent.
 - Human information/action/approval requests, a Needs you view, durable discussion and configured Discord alerts.
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
-- Durable activity, transactional migration from schemas 1–5 to 6, backups and verification tools.
+- Durable activity, transactional migration from schemas 1–6 to 7, backups and verification tools.
 - Owner execution limits and a private Runtime view for participating executors, with explicit stop requests and cleanup confirmation.
+- Dated, owner-private Codex subscription observations per connection, with explicit unknown/stale states and no automatic permission or model changes.
 
 ## Start here
 
@@ -61,9 +62,9 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Version: `2.4.0`; database schema: `6`
+- Version: `2.5.0`; database schema: `7`
 
-Schema migration is additive and transactional. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Older code cannot run against schema 6: rollback requires both the previous source and its matching database backup.
+Schema migration is additive and transactional. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Older code cannot run against schema 7: rollback requires both the previous source and its matching database backup.
 
 ## Design reference
 

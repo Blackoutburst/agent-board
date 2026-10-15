@@ -131,10 +131,10 @@ def test_upgrade_existing_schema_v1_preserves_data_and_adds_outbox(board_setup):
     message = board.post_message(first, thread_id, "Existing message", idempotency_key="existing")
     with sqlite3.connect(board.db_path) as db:
         db.execute("DROP TABLE notification_events")
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
     upgraded = Board(board.data_dir)
     with sqlite3.connect(upgraded.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
         assert {row[1] for row in db.execute("PRAGMA table_info(notification_events)")} == {
             "id", "event_key", "thread_id", "kind", "target_owners", "title", "created_at", "sent_at", "attempts",
             "next_attempt_at", "last_error", "discord_message_id"}

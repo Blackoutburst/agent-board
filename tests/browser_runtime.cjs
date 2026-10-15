@@ -114,9 +114,39 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(await page.getByLabel('Pause participating executors', { exact: true }).isChecked(), true);
     assert.match(await page.locator('#main').innerText(), /not a quota measurement/);
     assert.ok(!(await page.locator('.runtime-quota').innerText()).includes('%'));
+    const usageIds = await fixture('usage', 'POST');
+    const usage = variant => page.locator(`[data-connection-id="${usageIds[variant]}"]`);
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.getByRole('heading', { name: 'Usage by connection', exact: true }).waitFor();
+    assert.equal(await page.locator('.runtime-usage').count(), 4);
+    assert.equal(await page.locator('.runtime-quota').innerText(), 'Quota or rate limit reported');
+    assert.equal((await api('/runtime')).limits.paused, true, 'A fresh observation never resumes an executor');
+    assert.match(await usage('fresh').innerText(), /72% remaining/);
+    assert.match(await usage('fresh').innerText(), /35% remaining/);
+    assert.match(await usage('fresh').innerText(), /100% remaining/); // The provider explicitly reported 0 used.
+    assert.match(await usage('fresh').innerText(), /Remaining usage unavailable/); // A null window is not 0 used.
+    assert.match(await usage('second').innerText(), /10% remaining/);
+    assert.equal(await usage('stale').getByText('Stale', { exact: true }).count(), 1);
+    assert.match(await usage('stale').innerText(), /45% remaining/);
+    assert.match(await usage('stale').innerText(), /Reported reset: .*\(past\)/);
+    assert.match(await usage('stale').innerText(), /Observed /);
+    assert.equal(await usage('unavailable').getByText('Unavailable', { exact: true }).count(), 1);
+    assert.ok(!(await usage('unavailable').innerText()).includes('%'));
+    assert.match(await usage('unavailable').innerText(), /Personal connection unavailable/);
+    assert.equal(await page.locator(`[data-connection-id="${usageIds.other}"]`).count(), 0);
+    assert.equal(await page.locator('#main img, #main svg').count(), 0);
+    assert.match(await usage('fresh').innerText(), /<img src=x onerror=alert\(3\)>/);
+    assert.match(await page.locator('#main').innerText(), /not a confirmed shared subscription/);
+    assert.ok(!(await page.locator('.runtime-quota').innerText()).includes('%'));
+    await page.setViewportSize({ width: 1440, height: 1080 });
+    await noOverflow(page);
+    await page.screenshot({ path: path.join(output, 'usage-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await noOverflow(page);
+    await page.screenshot({ path: path.join(output, 'usage-mobile.png'), fullPage: true });
     await page.getByLabel('Pause participating executors', { exact: true }).uncheck();
     await page.getByRole('button', { name: 'Save runtime limits', exact: true }).click();
-    await page.getByText('Unavailable', { exact: true }).waitFor();
+    await page.locator('.runtime-quota').getByText('See connection observations', { exact: true }).waitFor();
     assert.equal((await api('/runtime')).limits.paused, false);
     await fixture('auth-block/' + ids.needs_review, 'POST');
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -125,7 +155,7 @@ fs.mkdirSync(output, { recursive: true });
     await page.getByRole('heading', { name: 'No active executions', exact: true }).waitFor();
     await page.getByLabel('Pause participating executors', { exact: true }).uncheck();
     await page.getByRole('button', { name: 'Save runtime limits', exact: true }).click();
-    await page.getByText('Unavailable', { exact: true }).waitFor();
+    await page.locator('.runtime-quota').getByText('See connection observations', { exact: true }).waitFor();
 
     const otherContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const otherPage = await otherContext.newPage();
@@ -134,7 +164,34 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(await otherPage.locator('.runtime-execution').count(), 1);
     assert.equal(await otherPage.locator(`[data-execution-id="${ids.other}"]`).count(), 1);
     assert.ok(!(await otherPage.locator('#main').innerText()).includes('Runtime reviewer'));
+    assert.equal(await otherPage.locator('.runtime-usage').count(), 1);
+    assert.equal(await otherPage.locator(`[data-connection-id="${usageIds.other}"]`).count(), 1);
+    assert.ok(!(await otherPage.locator('#main').innerText()).includes('Usage desktop'));
     await noOverflow(otherPage);
+
+    // Client-side expiry changes a label, never fetches or creates authority.
+    // Deliberately malformed fixture values must remain text or unavailable.
+    const malformed = await api('/runtime');
+    const selected = malformed.usage_observations.find(item => item.connection_id === usageIds.fresh);
+    selected.expires_at = Date.now() / 1000 + 1;
+    selected.data_status = 'observed';
+    selected.snapshot.buckets[0].limit_id = '<img src=x onerror=alert(4)>';
+    selected.snapshot.buckets[0].normal_model_slug = '<svg onload=alert(5)>' + 'longmodel'.repeat(25);
+    selected.snapshot.buckets[0].primary.used_percent = 101;
+    selected.snapshot.buckets[1].secondary.used_percent = '0';
+    await page.route('**/api/runtime', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(malformed) }));
+    const beforeExpiryReads = runtimeRequests.length;
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await usage('fresh').getByText('Stale', { exact: true }).waitFor();
+    assert.equal(runtimeRequests.length, beforeExpiryReads + 1);
+    assert.equal(await usage('fresh').getByText('Remaining usage unavailable', { exact: true }).count(), 3);
+    assert.ok(!(await usage('fresh').innerText()).includes('-1%'));
+    assert.ok(!(await usage('fresh').innerText()).includes('100%'));
+    assert.match(await usage('fresh').innerText(), /<svg onload=alert\(5\)>/);
+    assert.equal(await page.locator('#main img, #main svg').count(), 0);
+    assert.equal(await page.getByLabel('Pause participating executors', { exact: true }).isChecked(), false);
+    await noOverflow(page);
+    await page.unroute('**/api/runtime');
 
     // Failed fetches never replace unavailable data with fictitious zero values.
     await page.route('**/api/runtime', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"Fixture unavailable"}' }));
@@ -149,6 +206,8 @@ fs.mkdirSync(output, { recursive: true });
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ browser: 'firefox', desktop: true, mobile: true, text_safe: true,
       manual_refresh: true, stop_confirmation_distinct: true, optimistic_versions: true, owner_isolation: true,
-      quota_unavailable: true, observed_provider_blocks: true, empty_state: true, runtime_errors: errors.length }));
+      quota_unavailable: true, observed_provider_blocks: true, connection_observations: true,
+      nullable_windows: true, local_expiry_without_fetch: true, observation_does_not_resume: true,
+      empty_state: true, runtime_errors: errors.length }));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
