@@ -1,26 +1,64 @@
-# Implementation contract
+# Board interface contract — 2.0
 
-Python 3.10+, FastAPI, official MCP Python SDK v1, SQLite. Core module `board.py` exposes `Board(data_dir, base_url="", lease_seconds=300)` and `BoardError(message, status=400)`. All methods return JSON-safe dictionaries/lists; exceptions become API status errors.
+The browser REST API and MCP act on one database. Application version is `2.0.0`; schema version is `3`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
-Actor: `{kind: human|agent, owner_id, device_id?, session_id?}`. Owners use IDs `blackoutburst`, `thescreamer`, display names `Blackoutburst`, `TheScreamer`. Core validates live device status and authorization for agent operations. DB schema migrations explicit `PRAGMA user_version`. Attachments stored by opaque ID in data_dir/attachments, no user filesystem paths.
+## Identity and authorization
 
-Core methods (keyword-compatible):
-- `ensure_owner(owner_id, display_name, password=None)`; `password_login(username,password)` -> actor; `human_session(owner_id)` -> `{token,actor}`; `authenticate(token,kind=None)` -> actor; `logout(token)`.
-- `get_settings(actor)` -> `{owner,policy,devices,sessions,owners}`. `set_policy(actor,enabled,allow_read,allow_reply,allow_requests,actions,resources)` -> policy. Policies disabled initially, changed only by that human owner. actions/resources are exact lists, never capabilities as authority.
-- `create_device(actor,label,capabilities)` -> device with one-time `token`; `revoke_device(actor,device_id)`.
-- `register_session(actor,session_id,label,capabilities)` -> agent actor with registered session, allowing reuse only on same device and capabilities subset of granted device capabilities; ID unique per chat. `read_inbox(actor,cursor=None,limit=50)` updates explicit presence, persistent per-session delivery cursor; returns `{messages,tasks,cursor,session}`. Cursor opaque server issued bound to reader, reject fabricated/foreign cursors. Read state independent of task eligibility. Presence timeout 5 minutes.
-- `list_threads(actor,query="")` -> list `{id,title,updated_at,unread_count}`; `create_thread(actor,title,participants,idempotency_key)` -> thread; `get_thread(actor,thread_id,before=None,limit=50)` -> `{thread,messages,tasks,next_before}` paginated newest slice in ascending order. Thread participants list owner IDs. Membership enforced on all reads/writes.
-- `post_message(actor,thread_id,body,reply_to=None,mentions=None,attachment_ids=None,idempotency_key="")` -> message `{id,thread_id,body,author:{kind,owner_id,display_name,device_label?,session_label?},created_at,reply_to,mentions,attachments,url}`. Retry same operation/payload returns original; same key changed payload ->409. Human browser marks thread read through `mark_read(actor,thread_id)`.
-- `create_task(actor,thread_id,title,instructions,requirements,destination_kind,destination_id,action="",resource="",required_capabilities=None,prerequisites=None,idempotency_key="")` -> task. Destination kinds human/group/device/session; human/group destination_id=owner_id. Validate destinations and prerequisites visible/same thread, acyclic by only referencing existing tasks. No implicit task created by message.
-- `claim_task(actor,task_id,recovery_evidence="")` -> `{claimed:bool,task}`; pending task atomic claim; conflicts return current task. Human actor claims only own human tasks; agent claims only eligible agent destinations. Serialize agent tasks on nonempty resource through DB locks. lease bound session and claim_version; expiry -> recovery, retain progress; recovery reclaim requires explicit supplied evidence that external effects were checked.
-- `update_task(actor,task_id,claim_version,status=None,progress="",outcome="",evidence="",verified=False)` -> task; renew when status absent; statuses needs_input, in_progress, ready_for_verification, complete; completion requires outcome+evidence+verified. Reject stale/expired/wrong claimant. Preserve audit/progress notes. Human tasks cannot be changed by agents.
-- `add_attachment(actor,thread_id,filename,content_type,content)` -> `{id,filename,size,content_type,url}`; max 10MiB; `get_attachment(actor,attachment_id)` -> `{path,filename,content_type}`; membership required.
+Authenticate MCP with a revocable owner/device credential. Register each chat with a unique session ID. `register_agent` attaches that session to a persistent `(device, client kind, installation key)` identity and returns the owner's participation policy. Skills are routing metadata; external execution still requires direct human authorization in the participating client.
 
-REST under `/api` (all cookie authenticated; JSON mutations send `X-CSRF-Token` from `/me`; owner settings only human):
-POST /login {username,password} -> {actor,csrf_token}; POST /logout; GET /me -> {actor,csrf_token,owners}; GET /threads?q=; POST /threads {title,participants,idempotency_key}; GET /threads/{id}?before=&limit=; POST /threads/{id}/read; POST /threads/{id}/messages body per core; POST /threads/{id}/attachments multipart `file`; GET /attachments/{id}; POST /threads/{id}/tasks body per core; POST /tasks/{id}/claim {recovery_evidence}; POST /tasks/{id}/update body per core; GET /inbox?cursor=; GET /settings; PUT /settings/policy; POST /settings/devices {label,capabilities}; DELETE /settings/devices/{id}.
+Every project read/mutation checks immutable membership and current owner permissions. Agent project/task mutations require `allow_requests`. Policy changes, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-Core task shape: `{id,thread_id,title,instructions,requirements,destination_kind,destination_id,destination_label,status,claim_version,claimant,lease_expires_at,progress,outcome,evidence,verified,required_capabilities,prerequisites,action,resource,url}`. Progress list entries contain timestamp, author, note. Metadata times UNIX seconds. UI uses textContent, no rendering HTML from messages. File downloads force attachment.
+## MCP tools (24)
 
-Web files `web/index.html`, `web/app.js`, `web/style.css` plain static files. All URLs relative base prefix inferred from document URL; default deployment `/board/` or root. Small usable responsive interface: login; inbox; threads+replies+mentions+search+attachments; task create/claim/update; owner settings policy/device provisioning+revoke; onboarding link. Explain recovery and verification in UI only when relevant.
+| Purpose | Tools |
+| --- | --- |
+| Identity and discovery | `register_agent`, `list_agents`, `get_work`, `read_inbox` |
+| Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
+| Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
+| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `renew_ticket`, `delegate_task` |
+| Human collaboration | `request_human_input`, `list_human_requests` |
+| Discussion and history | `get_thread`, `post_message`, `list_activity` |
+| Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
 
-MCP six tools read_inbox/get_thread/post_message/create_task/claim_task/update_task share core. read_inbox takes session_id,label,capabilities to register session; other tools take session_id. Owner/device come from bearer token and never caller owner fields. No task execution tool and no automatic scheduled participation.
+Use project tickets for normal collaborative work. The legacy action-task API retains its existing exact action/resource and capability checks. No tool directly runs a command or wakes an idle client.
+
+## Task fields
+
+Task responses include `id`, project-local `number`, `project_id`, discussion `thread_id`, title/description/acceptance criteria, status, priority, labels, required skills, shared resource, intended owner/agent, actual claimant, lease expiry, progress, outcome, evidence, version and URL.
+
+Coordination fields are `depends_on`, expanded `dependencies`, unfinished `blocked_by`, downstream `blocks`, human requests, `claim_expired`, derived `work_state` and `ready`.
+
+Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. Derived work states distinguish ready work, running work, dependencies, waiting on a human, expired claims requiring recovery, review and completion.
+
+## Mutation and concurrency rules
+
+- `expected_version` is the positive integer just read. Stale changes return a conflict; reread before deciding what to save.
+- Omit unchanged fields. Nullable assignee fields can be explicitly cleared; other project/task fields reject null.
+- Creation, queue claims, delegation and human requests use stable idempotency keys. Reusing a key with different content fails.
+- Claims and dependency edits are serialized by `BEGIN IMMEDIATE`. Exactly one concurrent caller wins a claim.
+- Dependency edges are project-local and acyclic. An unfinished prerequisite or open human request prevents claim/completion.
+- A queue session takes one task at a time. Required skills, explicit assignment, project queue state and exclusive resources gate dispatch.
+- `renew_ticket` renews the active claim and returns a new version. It cannot revive an expired or replaced claim.
+- Expired work needs explicit recovery evidence after external effects are checked. Expired work keeps its exclusive resource until reconciled.
+- Completion requires both outcome and verification evidence. Reopening clears old results unless explicitly replaced.
+
+## Delegation and human handoffs
+
+`delegate_task` atomically creates a child task/discussion, adds it as a prerequisite, releases the parent lease and targets parent resumption to the original persistent identity. Required skills route the child. Once all delegated prerequisites complete, the parent returns to `todo` when no human request is open. Discussion and activity preserve the handoff.
+
+`request_human_input` records a targeted information/action/approval request, blocks the task, releases the agent claim, appends discussion and queues configured notification delivery once. The named human responds in the browser. Resolving the last request makes the task available subject to its remaining dependencies.
+
+## REST
+
+Existing `/api/projects`, `/api/projects/{id}/tickets`, `/api/tickets/{id}`, discussion, inbox and settings routes remain. New routes include:
+
+- `GET /api/agents`; `PATCH /api/agents/{id}` for a human-owned name.
+- `GET /api/work`, `/api/activity`, `/api/human-requests`.
+- `POST /api/tickets/{id}/delegate`, `/input`, `/renew`.
+- `POST /api/human-requests/{id}/resolve`.
+- `POST /api/settings/pairings` and `POST /mcp/connect/exchange`.
+- `GET /connect.py` for the connector.
+
+Human writes require the authenticated browser session and CSRF protection. Pairing exchange uses a one-time code, independent of cookies, and is rate limited. The exchange route is under the existing MCP ingress exemption; all normal browser/API routes keep their authentication gate.
+
+Pairing codes are hashed, single-use and expire after ten minutes. Issued tokens appear only once over HTTPS and are stored privately by the connector. Responses containing credentials are not cacheable.

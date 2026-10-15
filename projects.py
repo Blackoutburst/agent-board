@@ -138,7 +138,7 @@ class ProjectsMixin:
         result["url"] = self.base_url + "/?project=" + row["id"]
         return result
 
-    def _ticket(self, row):
+    def _ticket(self, row, db=None):
         result = {name: row[name] for name in ("id", "project_id", "number", "thread_id", "title", "description",
                     "acceptance_criteria", "priority", "status", "assignee_owner_id", "version", "outcome", "evidence",
                     "created_at", "updated_at")}
@@ -199,13 +199,13 @@ class ProjectsMixin:
 
     def update_project(self, actor, project_id, expected_version, **changes):
         _version(expected_version)
-        if not changes or set(changes) - (set(_PROJECT_TEXT) | {"archived"}):
+        if not changes or set(changes) - (set(_PROJECT_TEXT) | {"archived", "automation_enabled"}):
             _fail("Supply only editable project fields")
         values = {}
         for key, value in changes.items():
-            if key == "archived":
+            if key in {"archived", "automation_enabled"}:
                 if type(value) is not bool:
-                    _fail("archived must be a boolean")
+                    _fail(f"{key} must be a boolean")
                 values[key] = int(value)
             elif key == "repository_url":
                 values[key] = _repository(value)
@@ -214,6 +214,8 @@ class ProjectsMixin:
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
             row = self._project_member(db, actor, project_id)
+            if "automation_enabled" in changes and actor["kind"] != "human":
+                _fail("Only a human can change project automation", 403)
             if row["version"] != expected_version:
                 _fail("Project changed; reload before saving", 409)
             assignments = ",".join(key + "=?" for key in values)
@@ -235,20 +237,23 @@ class ProjectsMixin:
                 AND (?='' OR instr(lower(title),lower(?))>0 OR instr(lower(description),lower(?))>0
                      OR CAST(number AS TEXT)=?) ORDER BY updated_at DESC,number DESC""",
                 (project_id, status, status, priority, priority, assignee_owner_id, assignee_owner_id, query, query, query, query))
-            return [self._ticket(row) for row in rows]
+            return [self._ticket(row, db) for row in rows]
 
-    def create_ticket(self, actor, project_id, title, description="", acceptance_criteria="", priority="normal", assignee_owner_id=None, idempotency_key=""):
+    def create_ticket(self, actor, project_id, title, description="", acceptance_criteria="", priority="normal", assignee_owner_id=None, idempotency_key="", depends_on=None, labels=None, required_skills=None, resource="", assignee_agent_id=None):
         values = {"title": title, "description": description, "acceptance_criteria": acceptance_criteria}
         values = {key: _text(value, key, *_TICKET_TEXT[key]) for key, value in values.items()}
         _choice(priority, "priority", PRIORITIES)
+        coordination = self._coordination_values({"labels": labels or [], "required_skills": required_skills or [], "resource": resource})
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
             project = self._project_member(db, actor, project_id)
             self._project_assignee(db, project_id, assignee_owner_id)
-            payload = {**values, "project_id": project_id, "priority": priority, "assignee_owner_id": assignee_owner_id}
+            self._project_agent(db, project_id, assignee_agent_id)
+            self._check_assignment(db, assignee_owner_id, assignee_agent_id)
+            payload = {**values, "project_id": project_id, "priority": priority, "assignee_owner_id": assignee_owner_id, **coordination, "depends_on": depends_on or [], "assignee_agent_id": assignee_agent_id}
             previous = self._retry(db, actor, "create_ticket", idempotency_key, payload)
             if previous:
-                return self._ticket(self._ticket_member(db, actor, previous))
+                return self._ticket(self._ticket_member(db, actor, previous), db)
             if project["archived"]:
                 _fail("Project is archived; restore it before creating tickets", 409)
             ticket_id, thread_id, now = secrets.token_hex(16), secrets.token_hex(16), time.time()
@@ -261,16 +266,19 @@ class ProjectsMixin:
                 priority,status,assignee_owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (ticket_id, project_id, number, thread_id, values["title"], values["description"], values["acceptance_criteria"],
                  priority, "todo", assignee_owner_id, now, now))
+            db.execute("UPDATE tickets SET labels=?,required_skills=?,resource=?,assignee_agent_id=? WHERE id=?",
+                       (coordination["labels"], coordination["required_skills"], coordination["resource"], assignee_agent_id, ticket_id))
+            self._set_dependencies(db, ticket_id, project_id, depends_on or [])
             db.execute("UPDATE projects SET next_ticket_number=next_ticket_number+1,updated_at=? WHERE id=?", (now, project_id))
             self._remember(db, actor, "create_ticket", idempotency_key, payload, ticket_id)
             self._audit(db, actor, "ticket_created", {"project_id": project_id, "ticket_id": ticket_id, "number": number})
-            return self._ticket(self._ticket_member(db, actor, ticket_id))
+            return self._ticket(self._ticket_member(db, actor, ticket_id), db)
 
     def get_ticket(self, actor, ticket_id):
         with self._connection() as db:
             actor = self._actor(db, actor, "allow_read")
             row = self._ticket_member(db, actor, ticket_id)
-            return {"ticket": self._ticket(row), "project": self._project(db, self._project_member(db, actor, row["project_id"]))}
+            return {"ticket": self._ticket(row, db), "project": self._project(db, self._project_member(db, actor, row["project_id"]))}
 
     @staticmethod
     def _ticket_thread_title(project_name, number, title):
@@ -278,13 +286,14 @@ class ProjectsMixin:
 
     def update_ticket(self, actor, ticket_id, expected_version, **changes):
         _version(expected_version)
-        allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim"}
+        allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim", "depends_on", "labels", "required_skills", "resource", "progress", "assignee_agent_id"}
         if not changes or set(changes) - allowed:
             _fail("Supply only editable ticket fields")
         values = {key: _text(value, key, *_TICKET_TEXT[key]) for key, value in changes.items() if key in _TICKET_TEXT}
         for key, choices in (("priority", PRIORITIES), ("status", STATUSES)):
             if key in changes:
                 values[key] = _choice(changes[key], key, choices)
+        values.update(self._coordination_values(changes))
         release = changes.get("release_claim", False)
         if type(release) is not bool:
             _fail("release_claim must be a boolean")
@@ -296,6 +305,10 @@ class ProjectsMixin:
                 _fail("Claim this ticket before updating it", 403)
             if row["version"] != expected_version:
                 _fail("Ticket changed; reload before saving", 409)
+            if actor["kind"] == "agent" and row["status"] != "done" and (row["lease_expires_at"] or 0) <= time.time():
+                _fail("Claim expired; inspect and recover before updating", 409)
+            if "depends_on" in changes:
+                self._set_dependencies(db, ticket_id, row["project_id"], changes["depends_on"])
             if "assignee_owner_id" in changes:
                 assigned = self._project_assignee(db, row["project_id"], changes["assignee_owner_id"])
                 if assigned != row["assignee_owner_id"]:
@@ -303,18 +316,45 @@ class ProjectsMixin:
                         _fail("Only a human member can reassign a ticket; release your claim instead", 403)
                     values["claimant"] = None
                     values["claim_started_version"] = None
+                    values["lease_expires_at"] = None
                 values["assignee_owner_id"] = assigned
+            if "assignee_agent_id" in changes:
+                assigned_agent = self._project_agent(db, row["project_id"], changes["assignee_agent_id"])
+                if assigned_agent != row["assignee_agent_id"]:
+                    if actor["kind"] != "human":
+                        _fail("Only a human can assign a specific agent identity", 403)
+                    values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
+                values["assignee_agent_id"] = assigned_agent
+            self._check_assignment(db, values.get("assignee_owner_id", row["assignee_owner_id"]),
+                                   values.get("assignee_agent_id", row["assignee_agent_id"]))
             if release:
                 # Human members can recover an abandoned claim explicitly. The
                 # authorization above restricts agents to releasing their own.
                 values["claimant"] = None
                 values["claim_started_version"] = None
+                values["lease_expires_at"] = None
+                if row["status"] == "in_progress":
+                    values.setdefault("status", "todo")
             status = values.get("status", row["status"])
             if row["status"] == "done" and status != "done":
                 values.setdefault("outcome", "")
                 values.setdefault("evidence", "")
+                values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
             if status == "done" and (not values.get("outcome", row["outcome"]).strip() or not values.get("evidence", row["evidence"]).strip()):
                 _fail("A completed ticket requires an outcome and verification evidence")
+            if actor["kind"] == "agent" and self._project_member(db, actor, row["project_id"])["archived"] and not release:
+                _fail("Project is archived; release the claim instead", 409)
+            if values.get("resource") and row["claimant"] and not release and status != "done":
+                if db.execute("SELECT 1 FROM tickets WHERE resource=? AND id!=? AND claimant IS NOT NULL AND status!='done'",
+                              (values["resource"], ticket_id)).fetchone():
+                    _fail("This work resource is already reserved by another task", 409)
+            detail = self._ticket(self._ticket_member(db, actor, ticket_id), db)
+            if status in {"in_progress", "review", "done"} and (detail["blocked_by"] or detail["waiting_on_human"]):
+                _fail("Resolve prerequisite tasks and human requests first", 409)
+            if status == "done":
+                values["lease_expires_at"] = None
+            elif actor["kind"] == "agent" and not release:
+                values["lease_expires_at"] = time.time() + self.ticket_lease_seconds
             now = time.time()
             # Even a no-op explicit release updates the optimistic version. No
             # caller may overwrite a newer state with a stale form.
@@ -329,7 +369,9 @@ class ProjectsMixin:
                 db.execute("UPDATE threads SET title=?,updated_at=? WHERE id=?",
                            (self._ticket_thread_title(project["name"], row["number"], values["title"]), now, row["thread_id"]))
             self._audit(db, actor, "ticket_updated", {"ticket_id": ticket_id, "version": expected_version + 1, "fields": sorted(changes)})
-            return self._ticket(self._ticket_member(db, actor, ticket_id))
+            if status == "done":
+                self._unblock_dependents(db, actor, ticket_id)
+            return self._ticket(self._ticket_member(db, actor, ticket_id), db)
 
     def claim_ticket(self, actor, ticket_id, expected_version):
         _version(expected_version)
@@ -345,7 +387,7 @@ class ProjectsMixin:
                 if expected_version == row["version"] or (
                     row["version"] == row["claim_started_version"] and expected_version == row["version"] - 1
                 ):
-                    return self._ticket(row)
+                    return self._ticket(row, db)
                 _fail("Ticket changed; reload before claiming", 409)
             if row["version"] != expected_version:
                 _fail("Ticket changed; reload before claiming", 409)
@@ -359,4 +401,4 @@ class ProjectsMixin:
                 (_json(self._author(db, actor)), actor["owner_id"], now, ticket_id, expected_version))
             db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now, row["project_id"]))
             self._audit(db, actor, "ticket_claimed", {"ticket_id": ticket_id, "version": expected_version + 1})
-            return self._ticket(self._ticket_member(db, actor, ticket_id))
+            return self._ticket(self._ticket_member(db, actor, ticket_id), db)

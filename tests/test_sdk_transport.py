@@ -45,7 +45,7 @@ async def test_official_clients_both_owners_with_proxy_prefix(tmp_path):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         tools = await session.list_tools()
-                        assert len(tools.tools) == 6
+                        assert len(tools.tools) == 24
                         result = await session.call_tool("read_inbox", {"session_id": owner + "-sdk", "label": "Real socket", "capabilities": ["dns"]})
                         assert not result.isError
                         result = await session.call_tool("post_message", {"session_id": owner + "-sdk", "thread_id": thread["id"], "body": "Verified official SDK: " + owner, "idempotency_key": owner + "-message"})
