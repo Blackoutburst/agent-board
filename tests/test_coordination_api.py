@@ -139,7 +139,22 @@ def test_mcp_lookup_human_request_does_not_create_and_reads_resolved_answer(brow
     assert board.list_human_requests(human)==[]
     assert board.get_thread(human,task['thread_id'])['messages']==[]
     rpc(client,token,'claim_ticket',{'session_id':'lookup','ticket_id':task['id'],'expected_version':task['version']})
-    request=rpc(client,token,'request_human_input',arguments)
+    claimed=board.get_ticket(human,task['id'])['ticket']
+    for invalid in (str(claimed['version']), float(claimed['version']), True, False, 0):
+        response=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},json={
+            'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'request_human_input',
+            'arguments':{**arguments,'expected_version':invalid}}})
+        assert response.status_code==200 and response.json()['result']['isError']
+        assert board.get_ticket(human,task['id'])['ticket']==claimed
+        assert board.list_human_requests(human)==[]
+    changed=board.update_ticket(human,task['id'],claimed['version'],description='Updated requirements')
+    response=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},json={
+        'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'request_human_input',
+        'arguments':{**arguments,'expected_version':claimed['version']}}})
+    assert response.status_code==200 and response.json()['result']['isError']
+    assert board.get_ticket(human,task['id'])['ticket']==changed
+    assert board.list_human_requests(human)==[]
+    request=rpc(client,token,'request_human_input',{**arguments,'expected_version':changed['version']})
     assert rpc(client,token,'lookup_human_request',arguments)==request
     answered=client.post('/api/human-requests/'+request['id']+'/resolve',json={'answer':'Chosen value'}).json()
     before=board.get_ticket(human,task['id'])

@@ -472,9 +472,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def request_human_input(session_id: str, ticket_id: str, owner_id: str, question: str,
-                                  idempotency_key: str, kind: Literal["question", "action", "approval"] = "question") -> dict:
-        """Ask a project human for specific information, an action or approval. Requires your active task claim. Records the request/discussion, blocks the task, releases the work lease while retaining your persistent identity for resumption, and queues a targeted human alert. Later human reassignment takes precedence. Never include credentials."""
-        return board.request_human_input(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind)
+                                  idempotency_key: str, kind: Literal["question", "action", "approval"] = "question",
+                                  expected_version: Version | None = None) -> dict:
+        """Ask a project human for specific information, an action or approval. Requires your active task claim. Supply expected_version to atomically reject changed task context before a new request; successful retries still return the existing request. Records the request/discussion, blocks the task, releases the work lease while retaining your persistent identity for resumption, and queues a targeted human alert. Later human reassignment takes precedence. Never include credentials."""
+        return board.request_human_input(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind, expected_version)
 
     @mcp.tool()
     async def lookup_human_request(session_id: str, ticket_id: str, owner_id: str, question: str,

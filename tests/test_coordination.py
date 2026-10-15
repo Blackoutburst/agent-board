@@ -162,6 +162,33 @@ def database_snapshot(board):
         return tuple(db.iterdump())
 
 
+def test_human_request_version_guard_preserves_concurrent_edit_and_exact_retries(space):
+    board,human,other,_,first,*_=space
+    task=new(space)
+    claimed=board.claim_ticket(first,task['id'],task['version'])
+    changed=board.update_ticket(human,task['id'],claimed['version'],description='New human requirements')
+    arguments=(first,task['id'],'thescreamer','Which value?','versioned-question')
+    before=database_snapshot(board)
+    reject(board.request_human_input,*arguments,expected_version=claimed['version'],expected_status=409)
+    assert database_snapshot(board)==before
+    assert board.lookup_human_request(*arguments)=={'found':False}
+    request=board.request_human_input(*arguments,expected_version=changed['version'])
+    answered=board.resolve_human_request(other,request['id'],'Chosen value')
+    before=database_snapshot(board)
+    assert board.request_human_input(*arguments,expected_version=changed['version'])==answered
+    assert database_snapshot(board)==before
+
+
+@pytest.mark.parametrize('version',[False,True,0,-1,'1',1.5])
+def test_human_request_version_guard_rejects_invalid_version_without_effect(space,version):
+    board,_,_,_,first,*_=space
+    task=new(space)
+    before=database_snapshot(board)
+    reject(board.request_human_input,first,task['id'],'thescreamer','Which value?','question',
+           expected_version=version,expected_status=400)
+    assert database_snapshot(board)==before
+
+
 @pytest.mark.parametrize('state',['unclaimed','claimed_elsewhere','expired','done'])
 def test_missing_human_request_lookup_has_no_effect_without_active_claim(space,monkeypatch,state):
     board,human,_,_,first,second,*_=space
