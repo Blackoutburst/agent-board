@@ -40,7 +40,8 @@ class WorkJournalTests(unittest.TestCase):
                                   self.configuration if configuration is None else configuration)
 
     def advance(self, operation, target, payload=None):
-        for stage in STAGES[STAGES.index(operation['stage']) + 1:]:
+        path = ('new', 'claiming', 'claimed', 'prepared', 'running', 'result_ready', 'publishing', 'complete')
+        for stage in path[path.index(operation['stage']) + 1:]:
             operation = self.journal.update(operation['id'], operation['revision'],
                                             stage=stage, payload={} if payload is None else payload)
             if stage == target:
@@ -194,6 +195,110 @@ with WorkJournal(sys.argv[1]) as journal:
                     uncertain['id'], uncertain['revision'], stage='claiming', payload={}))
                 self.error('scope_has_unfinished_operation', lambda: reopened.begin(self.scope, 'fresh-key', self.configuration))
                 self.assertEqual(reopened.get(operation['id']), uncertain)
+
+    def test_human_wait_reopens_without_replay_or_allowing_another_operation(self):
+        configuration = {**self.configuration, 'human_owner_id': 'human-owner'}
+        private_payload = {'human_intent': {'owner_id': 'human-owner', 'question': 'PRIVATE QUESTION'},
+                           'context': {'text': 'PRIVATE CONTEXT'}}
+        with self.journal.lock(self.scope):
+            operation = self.advance(self.begin(configuration=configuration), 'result_ready')
+            operation = self.journal.update(operation['id'], operation['revision'],
+                                            stage='asking_human', payload=private_payload)
+            operation = self.journal.update(operation['id'], operation['revision'],
+                                            stage='waiting_human', payload=private_payload)
+            waiting_revision = operation['revision']
+            self.error('revision_conflict', lambda: self.journal.update(operation['id'], waiting_revision - 1,
+                stage='reclaiming', payload=private_payload))
+            self.error('scope_has_unfinished_operation', lambda: self.begin(request='another', configuration=configuration))
+            self.error('request_configuration_conflict', self.begin)
+        self.journal.close()
+        with WorkJournal(self.directory) as reopened, reopened.lock(self.scope):
+            self.assertEqual(reopened.begin(self.scope, 'request', configuration), operation)
+            self.assertEqual(reopened.get(operation['id'])['revision'], waiting_revision)
+            status = reopened.status(operation['id'])
+            self.assertEqual(status['stage'], 'waiting_human')
+            self.assertNotIn('PRIVATE', json.dumps(status))
+            operation = reopened.update(operation['id'], waiting_revision, stage='waiting_human', payload=private_payload)
+            self.assertEqual(operation['revision'], waiting_revision + 1)
+            for stage in ('reclaiming', 'resuming', 'result_ready', 'publishing', 'complete'):
+                operation = reopened.update(operation['id'], operation['revision'], stage=stage, payload=private_payload)
+            self.assertEqual(operation['stage'], 'complete')
+            self.assertEqual(reopened.begin(self.scope, 'request', configuration), operation)
+            self.assertNotEqual(reopened.begin(self.scope, 'next-request', configuration)['id'], operation['id'])
+
+    def test_each_human_stage_allows_only_its_successor_self_or_review(self):
+        human_path = ('asking_human', 'waiting_human', 'reclaiming', 'resuming')
+        successors = {'asking_human': 'waiting_human', 'waiting_human': 'reclaiming',
+                      'reclaiming': 'resuming', 'resuming': 'result_ready'}
+        for index, current in enumerate(human_path):
+            scope = {**self.scope, 'ticket_id': current}
+            with self.journal.lock(scope):
+                operation = self.advance(self.begin(scope), 'result_ready')
+                for stage in human_path[:index + 1]:
+                    operation = self.journal.update(operation['id'], operation['revision'], stage=stage, payload={})
+                for invalid in set(STAGES) - {current, successors[current], 'needs_review'}:
+                    self.error('invalid_stage_transition', lambda: self.journal.update(
+                        operation['id'], operation['revision'], stage=invalid, payload={}))
+                operation = self.journal.update(operation['id'], operation['revision'], stage=current, payload={'intent': 'retained'})
+                operation = self.journal.update(operation['id'], operation['revision'], stage='needs_review', payload={'intent': 'retained'})
+                for target in human_path + ('result_ready', 'publishing', 'complete', 'abandoned'):
+                    self.error('invalid_stage_transition', lambda: self.journal.update(
+                        operation['id'], operation['revision'], stage=target, payload={}))
+                abandoned = self.journal.abandon(operation['id'], operation['revision'], 'Human effects reconciled')
+                self.assertEqual(abandoned['stage'], 'abandoned')
+                for target in STAGES:
+                    self.error('invalid_stage_transition', lambda: self.journal.update(
+                        abandoned['id'], abandoned['revision'], stage=target, payload={}))
+
+    def test_human_branch_cannot_skip_result_or_reenter_from_publication(self):
+        with self.journal.lock(self.scope):
+            operation = self.begin()
+            for stage in ('new', 'claiming', 'claimed', 'prepared', 'running'):
+                if operation['stage'] != stage:
+                    operation = self.journal.update(operation['id'], operation['revision'], stage=stage, payload={})
+                self.error('invalid_stage_transition', lambda: self.journal.update(
+                    operation['id'], operation['revision'], stage='asking_human', payload={}))
+            operation = self.journal.update(operation['id'], operation['revision'], stage='result_ready', payload={})
+            for invalid in ('waiting_human', 'reclaiming', 'resuming'):
+                self.error('invalid_stage_transition', lambda: self.journal.update(
+                    operation['id'], operation['revision'], stage=invalid, payload={}))
+            operation = self.journal.update(operation['id'], operation['revision'], stage='publishing', payload={})
+            self.error('invalid_stage_transition', lambda: self.journal.update(
+                operation['id'], operation['revision'], stage='asking_human', payload={}))
+
+    def test_text_only_journal_remains_version_one_until_first_human_intent(self):
+        with self.journal.lock(self.scope):
+            self.advance(self.begin(), 'complete')
+            self.assertEqual(self.journal._db.execute('PRAGMA user_version').fetchone()[0], 1)
+        self.journal.close()
+        with WorkJournal(self.directory) as reopened, reopened.lock(self.scope):
+            self.assertEqual(reopened._db.execute('PRAGMA user_version').fetchone()[0], 1)
+            operation = reopened.begin(self.scope, 'human-followup', {**self.configuration, 'human_owner_id': 'owner'})
+            for stage in ('claiming', 'claimed', 'prepared', 'running', 'result_ready'):
+                operation = reopened.update(operation['id'], operation['revision'], stage=stage, payload={})
+            self.assertEqual(reopened._db.execute('PRAGMA user_version').fetchone()[0], 1)
+            operation = reopened.update(operation['id'], operation['revision'], stage='asking_human', payload={})
+            self.assertEqual(reopened._db.execute('PRAGMA user_version').fetchone()[0], 2)
+        with WorkJournal(self.directory) as reopened, reopened.lock(self.scope):
+            self.assertEqual(reopened.get(operation['id']), operation)
+            operation = reopened.update(operation['id'], operation['revision'], stage='needs_review', payload={})
+            operation = reopened.abandon(operation['id'], operation['revision'], 'Human request reconciled')
+            self.assertEqual(reopened._db.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(reopened.get(operation['id'])['stage'], 'abandoned')
+
+    def test_failed_human_intent_transaction_rolls_back_version_and_operation(self):
+        with self.journal.lock(self.scope):
+            operation = self.advance(self.begin(), 'result_ready')
+            self.journal._db.execute("""CREATE TRIGGER fail_handoff BEFORE UPDATE ON operations
+                WHEN NEW.stage='asking_human' BEGIN SELECT RAISE(ABORT,'private database failure'); END""")
+            self.error('journal_unavailable', lambda: self.journal.update(
+                operation['id'], operation['revision'], stage='asking_human', payload={'intent': 'private'}))
+            self.assertEqual(self.journal._db.execute('PRAGMA user_version').fetchone()[0], 1)
+            self.assertEqual(self.journal.get(operation['id']), operation)
+            self.journal._db.execute('DROP TRIGGER fail_handoff')
+            updated = self.journal.update(operation['id'], operation['revision'], stage='asking_human', payload={})
+            self.assertEqual(updated['revision'], operation['revision'] + 1)
+            self.assertEqual(self.journal._db.execute('PRAGMA user_version').fetchone()[0], 2)
 
     def test_json_bounds_utf8_types_and_invalid_numbers(self):
         invalid = [{'text': '🙂' * 17000}, {'number': float('nan')}, {'number': float('inf')},

@@ -34,7 +34,7 @@ La preuve ne valide pas encore le compte d’un second propriétaire, l’éligi
 
 Ce module complète les intégrations de fournisseurs du board. La création et la personnalisation des agents, le choix des fournisseurs, les déclencheurs et l’orchestration restent du côté du board. Cet adaptateur se concentre sur l’exécution Codex personnelle et ses preuves de fonctionnement.
 
-Le raccordement en lecture utilise maintenant les identités persistantes et le MCP 2.0 du board, publié dans `0a601f2`. Le contexte vérifie les relations propriétaire, agent, projet, ticket et conversation, puis la fraîcheur des sources. Le board fournit aussi des réservations, une file de travail, des délégations et des demandes humaines ; `worker` raccorde une réservation explicite et une publication de texte. La sélection automatique, la délégation et les demandes humaines restent à intégrer. Les libellés d’un work local ne constituent pas des autorisations.
+Le raccordement en lecture utilise maintenant les identités persistantes et le MCP 2.0 du board, publié dans `0a601f2`. Le contexte vérifie les relations propriétaire, agent, projet, ticket et conversation, puis la fraîcheur des sources. Le board fournit aussi des réservations, une file de travail, des délégations et des demandes humaines ; `worker` raccorde une réservation explicite et une publication de texte. Avec le board 2.0.3, `worker run --human-owner` autorise une question au participant choisi puis une reprise explicite dans la même session après sa réponse. La sélection automatique et la délégation restent à intégrer. Les libellés d’un work local ne constituent pas des autorisations.
 
 L’[interface du module et la répartition proposée](INTEGRATION.md) permettent de le raccorder à un fournisseur du board sans créer un second système de profils.
 
@@ -44,7 +44,7 @@ L’[interface du module et la répartition proposée](INTEGRATION.md) permetten
 python3 -m unittest discover -s tests -v
 ```
 
-Les **271 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
+Les **308 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
 
 - [Reçu du diagnostic local](docs/local-doctor-2026-10-15.json)
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
@@ -53,6 +53,7 @@ Les **271 tests** utilisent des exécutables factices, des transports simulés e
 - [Reçu du tour Codex avec l’extrait approuvé](docs/local-context-model-2026-10-15.json)
 - [Reçu du ticket réel traité puis rejoué sans second tour](docs/local-worker-2026-10-15.json)
 - [Reçu de lecture réelle des événements sans modèle](docs/local-event-drain-2026-10-15.json)
+- [Revue du parcours question/réponse et limites de validation](docs/review-human-2026-10-15.md)
 
 Le contrôle MCP a vérifié la lecture réelle, la conservation locale et la relecture stable d’un contexte de 9 400 octets. Après autorisation explicite du propriétaire, un contrôle distinct a transmis l’extrait inspecté de 10 686 octets à un unique tour Codex via son abonnement ChatGPT : le titre du ticket a été restitué exactement, sans outil ni modification du dossier de travail. Ce second contrôle utilise la photographie approuvée ; la fraîcheur MCP est vérifiée par le premier contrôle. Il ne démontre pas une mémoire sémantique ni un travail autonome.
 

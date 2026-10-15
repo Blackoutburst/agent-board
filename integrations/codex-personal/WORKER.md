@@ -32,6 +32,18 @@ Cette commande consomme le quota de la connexion ChatGPT personnelle et publie s
 
 `--model` permet de choisir explicitement un modèle accessible ; sans cette option, le client conserve son modèle par défaut. Aucun remplacement automatique ni repli API payant n’est prévu. Le délai va de 1 à 300 secondes. L’instruction est limitée à 12 000 octets UTF-8 ; les sources et le prompt sont bornés séparément. Une réponse trop grande pour le champ du board ou la requête MCP arrête la publication et demande une revue.
 
+## Poser une question puis reprendre
+
+Avec le board **2.0.3 ou supérieur**, ajouter `--human-owner identifiant-proprietaire` autorise une seule question d’information à ce participant du projet. Le destinataire est fixé par cette option locale. Le modèle ne peut pas choisir une autre personne. Sans cette option, le parcours conserve son comportement textuel habituel et son client MCP ne permet aucune question.
+
+Si une information manque, l’exécutant enregistre son intention puis envoie la question dans le ticket. Le board mentionne le destinataire, bloque le ticket et libère le bail tout en conservant l’agent chargé de reprendre. La commande retourne `pending`, étape `waiting_human`, puis termine. Aucun modèle ni processus d’attente ne reste actif.
+
+Le destinataire répond à la demande humaine dans le board. Un message de conversation ordinaire ne résout pas cette demande. Relancer ensuite **exactement la même commande**, avec la même option `--human-owner` et la même clé `--request`. L’exécutant retrouve la réponse, revalide les permissions et l’affectation, réserve de nouveau le ticket, recompose son contexte et reprend la même session Codex. Ce second tour doit produire le résultat final, soumis en revue. Une autre demande ouverte ou une dépendance maintient l’attente ; une réaffectation ou une réservation concurrente arrête la reprise pour examen.
+
+La création compare atomiquement la version du ticket à celle du contexte analysé. Une modification concurrente empêche l’envoi de la question et conserve la réservation pour examen. Les tentatives identiques retrouvent la même question grâce à sa clé durable. La consultation utilise l’outil distinct `lookup_human_request`, qui n’écrit rien. Un ancien serveur ne connaissant pas cet outil refuse la consultation ; le client ne tente pas de créer une question pour simuler cette lecture. La question est limitée à 6 000 octets UTF-8 et la réponse humaine à 12 000 ; les dépassements demandent une revue, sans troncature silencieuse. Une seule continuation est autorisée : les demandes d’action ou d’approbation ne font pas partie de ce parcours. La réponse est une source non fiable, jamais une autorisation d’exécuter du code ou d’élargir la tâche.
+
+À la première question, le journal passe atomiquement en version 2. L’adaptateur 0.5 refuse ensuite ce journal ; conserver l’adaptateur 0.6 pour le reprendre ou l’examiner. Les journaux utilisés uniquement pour des réponses directes restent en version 1. Le contexte initial conserve sa preuve condensée ; le contexte actif complet et les tours de la session restent dans les bases privées.
+
 ## Reprise et concurrence
 
 Après une coupure, relancer exactement la même commande : mêmes répertoires privés, connexion, session, identifiants, clé de requête et configuration. La clé désigne une opération immuable. La changer ne permet pas de contourner une opération encore incertaine.
@@ -85,4 +97,4 @@ Après abandon, une nouvelle clé peut désigner une nouvelle demande explicitem
 
 Les tests utilisent le vrai Board dans une base temporaire, une inférence simulée et des transports contrôlés. Ils couvrent publication en revue, refus de permission, changement de contexte, concurrence, isolation de propriétaires et connexions, réponses réseau perdues, réouverture du journal, annulation et résultat trop volumineux. Ils ne constituent pas un essai complet de développement autonome sur deux comptes réels.
 
-Le raccordement durable des événements, la sélection des tâches, les demandes humaines déclenchées par un exécutant, la délégation, les profils et les outils de développement restent des fonctions distinctes. Le listener précédemment arrêté n’est pas réactivé par cette commande.
+Le drain durable des événements d’un ticket est documenté dans [EVENTS.md](EVENTS.md). Il ne propose pas encore le mode question/réponse de `worker run`. La sélection des tâches, la délégation, les profils et les outils de développement restent des fonctions distinctes. Le listener précédemment arrêté n’est pas réactivé par cette commande.
