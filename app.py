@@ -548,7 +548,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.0.1", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
+        return {"status": "ok", "version": "2.0.2", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
