@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.db*
+*.sqlite*
+*.zip
+config.env
+qa/*.png
+qa/platform-theme.css
+release/
