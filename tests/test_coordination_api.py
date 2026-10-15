@@ -73,7 +73,7 @@ def test_no_anonymous_private_metadata_and_static_assets(browser):
     assert client.get('/workspace.js').status_code==200
     assert client.get('/connect.py').status_code==200
     health=client.get('/health').json()
-    assert health['version']=='2.2.1' and health['schema_version']==5
+    assert health['version']=='2.3.0' and health['schema_version']==5
 
 
 def test_activity_order_is_available_through_rest_and_mcp(browser):
@@ -181,3 +181,27 @@ def test_unsupported_mcp_lookup_fails_without_calling_creation(browser,monkeypat
                      'question':'Which value?','idempotency_key':'question'}}})
     assert response.status_code==200 and response.json()['result']['isError']
     assert creation_calls==[]
+
+
+def test_mcp_ticket_selection_lookup_never_creates_and_replays_empty_result(browser):
+    from test_queue_selection import snapshot
+    client, board = browser
+    human = {'kind': 'human', 'owner_id': 'blackoutburst'}
+    project = board.create_project(human, 'Queue lookup', ['blackoutburst'], idempotency_key='queue-project')
+    device = board.create_device(human, 'Queue fixture', [])
+    token = device['token']
+    rpc(client, token, 'register_agent', {'session_id': 'queue', 'label': 'Queue', 'agent_kind': 'codex', 'autonomous': True})
+    args = {'session_id': 'queue', 'idempotency_key': 'one-selection', 'project_id': project['id']}
+    before = snapshot(board)
+    assert rpc(client, token, 'lookup_ticket_selection', args) == {'found': False}
+    assert snapshot(board) == before
+    empty = rpc(client, token, 'claim_next_ticket', args)
+    assert empty == {'claimed': False, 'reason': 'no_ready_ticket', 'retried': False}
+    ticket = board.create_ticket(human, project['id'], 'New task', idempotency_key='new-task')
+    rpc(client, token, 'register_agent', {'session_id': 'queue', 'label': 'Queue reader', 'agent_kind': 'codex', 'autonomous': False})
+    board.set_policy(human, True, True, True, False, [], [])
+    before = snapshot(board)
+    assert rpc(client, token, 'lookup_ticket_selection', args) == {
+        'found': True, 'claimed': False, 'reason': 'no_ready_ticket', 'retried': True}
+    assert snapshot(board) == before
+    assert board.get_ticket(human, ticket['id'])['ticket']['claimant'] is None

@@ -1,0 +1,20 @@
+{
+  "adapter_version": "0.8.0",
+  "pilot_ticket_number": 18,
+  "ticket_url": "https://board.blackoutburst.com/?project=b5e74de3c3b57dcabc7c804faa676625&ticket=148418c6b0bf4fdb06a7fcf8d5e64e73",
+  "same_operation": true,
+  "same_question": true,
+  "same_provider_session": true,
+  "turn_count": 2,
+  "answer_match": true,
+  "publication_count": 1,
+  "published_text_match": true,
+  "review_published": true,
+  "claim_released": true,
+  "replay_idle": true,
+  "replay_ticket_unchanged": true,
+  "workspace_empty": true,
+  "tool_free": true,
+  "cleanup_confirmed": true,
+  "listener_active": false
+}

@@ -308,6 +308,22 @@ class WorkJournal:
         operation = self.get(operation_id)
         return {key: value for key, value in operation.items() if key not in ('configuration', 'payload')}
 
+    def find(self, scope, request_id):
+        """Read an exact local request without creating or advancing work.
+
+        Hold the scope lock across this read and a related recovery decision
+        when the caller must exclude a concurrent begin/dispatch.
+        """
+        self._ready()
+        _, key = _scope(scope)
+        _identifier(request_id, 'invalid_request_id')
+        try:
+            row = self._db.execute('SELECT * FROM operations WHERE scope_key=? AND request_id=?',
+                                   (key, request_id)).fetchone()
+            return self._decode(row) if row is not None else None
+        except sqlite3.Error:
+            raise JournalError('journal_unavailable') from None
+
     def begin(self, scope, request_id, configuration):
         self._ready()
         scope_json, key = _scope(scope)

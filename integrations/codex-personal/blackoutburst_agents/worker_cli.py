@@ -134,7 +134,9 @@ def _abandon(args, journal):
         else:
             if operation['revision'] != args.revision:
                 raise JournalError('revision_conflict')
-            if operation['stage'] != 'needs_review' or not isinstance(operation['payload'], dict):
+            if (not isinstance(operation['payload'], dict) or not (
+                    operation['stage'] == 'needs_review'
+                    or (operation['stage'] == 'new' and operation['payload'] == {}))):
                 raise JournalError('invalid_stage_transition')
             operation = journal.update(operation['id'], operation['revision'], stage='needs_review',
                                        payload={**operation['payload'], 'abandonment_intent': expected_intent})

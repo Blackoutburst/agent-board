@@ -561,8 +561,13 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def claim_next_ticket(session_id: str, idempotency_key: str, project_id: str = "") -> dict:
-        """In explicitly authorized autonomous worker mode, atomically claim the next ready task by priority/age. Dependencies, human requests, skills, resource locks, assignment and existing work gate selection. Retain the retry key; expired claims require explicit recovery instead."""
+        """In explicitly authorized autonomous worker mode, atomically claim the next ready task by priority/age. Dependencies, human requests, skills, resource locks, assignment and existing work gate selection. One persistent profile may not select around any unfinished claim or open human request, even from another session/device. Retain the retry key: positive and negative results are durable; expired claims require explicit recovery instead."""
         return board.claim_next_ticket(session_actor(session_id), idempotency_key, project_id)
+
+    @mcp.tool()
+    async def lookup_ticket_selection(session_id: str, idempotency_key: str, project_id: str = "") -> dict:
+        """Read this exact session/key/project selection without claiming anything. Returns found=false if absent; otherwise the stored no-selection result or the selected ticket's current state. Requires current read permission and project access, but no autonomous worker registration. A negative lookup never authorizes a new claim or proves an in-flight request cannot still complete."""
+        return board.lookup_ticket_selection(session_actor(session_id), idempotency_key, project_id)
 
     @mcp.tool()
     async def renew_ticket(session_id: str, ticket_id: str, expected_version: Version, progress: str = "") -> dict:
@@ -667,7 +672,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.2.1", "schema_version": 5, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox"]}
+        return {"status": "ok", "version": "2.3.0", "schema_version": 5, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

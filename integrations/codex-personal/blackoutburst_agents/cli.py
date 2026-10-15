@@ -45,6 +45,8 @@ def main(argv=None) -> int:
     configure_events(subs.add_parser('events', help='Lire ponctuellement les événements d’un ticket.'))
     from .worker_cli import configure_parser as configure_worker, run as run_worker
     configure_worker(subs.add_parser('worker', help='Traiter explicitement un ticket, sans listener.'))
+    from .queue_cli import configure_parser as configure_queue, run as run_queue
+    configure_queue(subs.add_parser('queue', help='Sélectionner ponctuellement un seul ticket autorisé.'))
     for command, help_text in (
         ("doctor", "Vérifier l’installation et le mode de connexion, sans appel de modèle."),
         ("probe", "Tester une réponse minimale ; consomme une petite part de l’abonnement."),
@@ -64,6 +66,8 @@ def main(argv=None) -> int:
         return run_events(args)
     if args.command == 'worker':
         return run_worker(args)
+    if args.command == 'queue':
+        return run_queue(args)
     executable = args.codex or shutil.which("codex")
     if not executable:
         print(json.dumps({"status": "blocked", "reason": "codex_not_installed"}))
