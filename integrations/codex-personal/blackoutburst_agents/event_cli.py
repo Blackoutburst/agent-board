@@ -17,7 +17,9 @@ from .event_journal import EventJournal, EventJournalError
 from .run_store import RunStore
 from .subscription_probe import ProbeSettings, validate_executable
 from .work_journal import WorkJournal
-from .worker_cli import _instruction
+from .worker_cli import (_instruction, configure_routing, routing_options,
+    configure_runtime, runtime_worker_options, runtime_run_options)
+from .model_policy import PolicyError
 
 
 STATUSES = frozenset({'idle', 'pending', 'more_available', 'waiting', 'complete',
@@ -38,6 +40,8 @@ def configure_parser(parser):
     drain.add_argument('--workspace', required=True, type=Path)
     drain.add_argument('--codex', required=True)
     drain.add_argument('--model')
+    configure_routing(drain)
+    configure_runtime(drain)
     drain.add_argument('--timeout', type=float, default=120)
     drain.add_argument('--after', type=int, default=0, help='Position initiale explicite, immuable pour cette portée.')
     drain.add_argument('--limit', type=int, default=50)
@@ -120,6 +124,7 @@ def run(args):
                 raise ValueError
             args.human_owner.encode('utf-8', 'strict')
         instruction = _instruction(args.instruction_file)
+        routing = routing_options(args)
         executable = validate_executable(args.codex)
         ProbeSettings(executable=executable, model=args.model, timeout_seconds=args.timeout)
         workspace = args.workspace.expanduser().resolve(strict=True)
@@ -136,15 +141,15 @@ def run(args):
                 work_journal = stack.enter_context(WorkJournal(args.work_journal))
                 store = RunStore(args.state)
                 stack.callback(store.close)
-                worker = BoardWorker(work_journal, store, client)
+                worker = BoardWorker(work_journal, store, client, **runtime_worker_options(args, client, stack))
             cancelled, previous = threading.Event(), {}
             try:
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     previous[signum] = signal.signal(signum, lambda *_: cancelled.set())
                 value = EventDrainer(journal, worker, client).drain(scope=scope, instruction=instruction,
-                    workspace=workspace, executable=executable, model=args.model, timeout=args.timeout,
+                    workspace=workspace, executable=executable, model=args.model, timeout=args.timeout, **routing,
                     after=args.after, max_pages=args.max_pages, limit=args.limit, execute=args.execute,
-                    should_cancel=cancelled.is_set, human_owner_id=args.human_owner)
+                    should_cancel=cancelled.is_set, human_owner_id=args.human_owner, **runtime_run_options(args))
                 output = _public_result(value)
             finally:
                 for signum, handler in previous.items():
@@ -154,6 +159,9 @@ def run(args):
     except KeyboardInterrupt:
         print(json.dumps({'status': 'cancelled', 'reason': 'drain_interrupted'}))
         return 130
+    except PolicyError as error:
+        print(json.dumps({'status': 'blocked', 'reason': error.code}))
+        return 2
     except EventJournalError as error:
         reason = 'human_request_unresolved' if error.code == 'human_request_unresolved' else 'invalid_event_configuration_or_io'
         print(json.dumps({'status': 'needs_review' if reason == 'human_request_unresolved' else 'blocked', 'reason': reason}))

@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+from .model_policy import PolicyError, validate_routing_configuration
 import re
 import sqlite3
 import stat
@@ -73,8 +74,16 @@ def _time(value):
 
 def _configuration(value):
     if (not isinstance(value, dict) or not _CONFIGURATION_FIELDS <= set(value)
-            or set(value) - _CONFIGURATION_FIELDS - {'human_owner_id'}):
+            or set(value) - _CONFIGURATION_FIELDS - {'human_owner_id', 'routing', 'runtime_managed'}):
         raise EventJournalError('invalid_configuration')
+    if 'runtime_managed' in value and (value['runtime_managed'] is not True
+            or (value.get('model') is None and 'routing' not in value)):
+        raise EventJournalError('invalid_configuration')
+    if 'routing' in value:
+        try:
+            validate_routing_configuration(value['routing'])
+        except PolicyError:
+            raise EventJournalError('invalid_configuration') from None
     if 'human_owner_id' in value:
         _identifier(value['human_owner_id'], 'invalid_configuration')
     instruction = value['instruction']

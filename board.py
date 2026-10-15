@@ -15,6 +15,7 @@ from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
 from profiles import ProfilesMixin, migrate_profiles
 from communication import CommunicationMixin, migrate_communication
+from runtime import RuntimeMixin, migrate_runtime
 
 
 class BoardError(Exception):
@@ -45,7 +46,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -60,7 +61,7 @@ class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 5:
+            if version > 6:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -127,6 +128,9 @@ class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
             if version < 5:
                 migrate_communication(db)
                 db.execute("PRAGMA user_version=5")
+            if version < 6:
+                migrate_runtime(db)
+                db.execute("PRAGMA user_version=6")
 
     @contextmanager
     def _connection(self):

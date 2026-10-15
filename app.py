@@ -290,6 +290,25 @@ class ProfileBinding(ProjectBody):
     agent_kind: str = Field(default='agent', min_length=1, max_length=100)
 
 
+RuntimeOpaque = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$')]
+RuntimeModel = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:/-]*$')]
+RuntimeOutcome = Literal['completed', 'blocked', 'cancelled']
+RuntimeReason = Literal['', 'completed', 'cancelled', 'quota_or_rate_limit', 'authentication_failed',
+    'execution_failed', 'unavailable', 'timeout', 'cleanup_unconfirmed', 'cleanup_failed', 'runner_error',
+    'protocol_error', 'policy_changed', 'claim_lost', 'stop_requested', 'owner_paused']
+RuntimeBool = Annotated[bool, Field(strict=True)]
+
+
+class RuntimeLimitsPatch(ProjectBody):
+    expected_version: Version
+    max_concurrent: Annotated[int, Field(strict=True, ge=1, le=8)]
+    paused: RuntimeBool
+
+
+class ExecutionStop(ProjectBody):
+    expected_revision: Version
+
+
 def csrf_for(token: str) -> str:
     return hashlib.sha256(("board-csrf:" + token).encode()).hexdigest()
 
@@ -569,6 +588,46 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         """Read this exact session/key/project selection without claiming anything. Returns found=false if absent; otherwise the stored no-selection result or the selected ticket's current state. Requires current read permission and project access, but no autonomous worker registration. A negative lookup never authorizes a new claim or proves an in-flight request cannot still complete."""
         return board.lookup_ticket_selection(session_actor(session_id), idempotency_key, project_id)
 
+    # Existing-execution control authenticates the device and exact session in
+    # RuntimeMixin. Do not use actor_session here: its current profile-policy
+    # gate would prevent an already-running process from learning it must stop.
+    def execution_actor(session_id):
+        return {**device_actor(), 'session_id': session_id}
+
+    @mcp.tool()
+    async def reserve_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque,
+                                project_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
+                                work_id: RuntimeOpaque, turn_id: RuntimeOpaque,
+                                provider: RuntimeModel, model: RuntimeModel) -> dict:
+        """Reserve owner-wide capacity for one explicitly authorized model turn before launching it. Requires the current profile and exact live ticket claim. Preserve its retry key; no execution is started here. Metadata only: never include prompts, paths, credentials or provider session identifiers."""
+        return board.reserve_execution(execution_actor(session_id), idempotency_key, project_id, ticket_id, work_id, turn_id, provider, model)
+
+    @mcp.tool()
+    async def lookup_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque) -> dict:
+        """Read only this exact device/session's reservation key; found=false never proves an in-flight reservation was cancelled. Available for cleanup even after profile pause/change, but not device revocation."""
+        return board.lookup_execution(execution_actor(session_id), idempotency_key)
+
+    @mcp.tool()
+    async def start_execution(session_id: RuntimeOpaque, execution_id: RuntimeOpaque, expected_revision: Version) -> dict:
+        """Activate one reserved turn using its current revision before launching the model. Rechecks current work authority and owner pause. A retry returns the existing activation; never use it to launch twice."""
+        return board.start_execution(execution_actor(session_id), execution_id, expected_revision)
+
+    @mcp.tool()
+    async def heartbeat_execution(session_id: RuntimeOpaque, execution_id: RuntimeOpaque, expected_revision: Version) -> dict:
+        """Report this exact active execution's presence and read should_stop. Presence expiry never releases capacity. Paused or changed profiles retain only this restricted cleanup/control channel, not publication permission."""
+        return board.heartbeat_execution(execution_actor(session_id), execution_id, expected_revision)
+
+    @mcp.tool()
+    async def finish_execution(session_id: RuntimeOpaque, execution_id: RuntimeOpaque, expected_revision: Version,
+                               status: RuntimeOutcome, cleanup_confirmed: RuntimeBool, reason: RuntimeReason = '') -> dict:
+        """Record a bounded outcome only after local process cleanup. cleanup_confirmed=false retains the slot as needs_review; true releases capacity. Never send response text or raw diagnostics. Exact retries are safe; revision conflicts require reading control."""
+        return board.finish_execution(execution_actor(session_id), execution_id, expected_revision, status, cleanup_confirmed, reason)
+
+    @mcp.tool()
+    async def get_execution_control(session_id: RuntimeOpaque, execution_id: RuntimeOpaque) -> dict:
+        """Read this exact execution's state and stop instruction without changing it. Works after owner/profile pause or policy change, but never after device revocation. This grants no model, shell or publication authority."""
+        return board.get_execution_control(execution_actor(session_id), execution_id)
+
     @mcp.tool()
     async def renew_ticket(session_id: str, ticket_id: str, expected_version: Version, progress: str = "") -> dict:
         """Renew your current task lease and optionally retain meaningful progress. Use the returned version for subsequent updates. Expired or replaced claims cannot renew. Poll every ten minutes while working."""
@@ -672,7 +731,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.3.0", "schema_version": 5, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox"]}
+        return {"status": "ok", "version": "2.4.0", "schema_version": 6, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -874,6 +933,18 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/agent-profiles/{profile_id}/bindings')
     async def bind_agent_profile(profile_id: str, values: ProfileBinding, actor=Depends(human)):
         return board.bind_agent_profile(actor, profile_id, **values.model_dump())
+
+    @app.get('/api/runtime')
+    async def runtime_status(actor=Depends(human)):
+        return board.get_runtime(actor)
+
+    @app.patch('/api/runtime/limits')
+    async def runtime_limits(values: RuntimeLimitsPatch, actor=Depends(human)):
+        return board.update_runtime_limits(actor, **values.model_dump())
+
+    @app.post('/api/runtime/executions/{execution_id}/stop')
+    async def runtime_stop(execution_id: str, values: ExecutionStop, actor=Depends(human)):
+        return board.stop_execution(actor, execution_id, **values.model_dump())
 
     @app.get("/api/work")
     async def work(project_id: str = "", actor=Depends(human)):

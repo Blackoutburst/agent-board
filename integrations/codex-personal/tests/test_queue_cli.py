@@ -68,11 +68,11 @@ class QueueCliTests(unittest.TestCase):
             for value in doubles.values(): value.assert_not_called()
             self.assertFalse((self.root/'queue').exists())
 
-    def test_model_is_required_by_parser_before_connection(self):
+    def test_model_or_policy_is_required_before_connection(self):
         args=self.args[:-2]
-        with patch('blackoutburst_agents.queue_cli.QueueBoardClient.from_connection_file') as connect,redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as error:main(args)
-            self.assertEqual(error.exception.code,2)
+        with patch('blackoutburst_agents.queue_cli.QueueBoardClient.from_connection_file') as connect:
+            code,result=self.invoke(args)
+            self.assertEqual((code,result['reason']),(2,'invalid_queue_configuration_or_io'))
             connect.assert_not_called()
 
     def test_execute_requires_both_private_state_paths_before_connection(self):
