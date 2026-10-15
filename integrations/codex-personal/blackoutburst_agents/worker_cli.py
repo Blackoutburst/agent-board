@@ -12,8 +12,9 @@ import stat
 import threading
 import uuid
 
-from .board_reader import BoardReadError
+from .board_reader import BoardReadError, _text
 from .board_worker import BoardWorker
+from .human_client import HumanWorkerClient
 from .run_store import RunStore, StoreError
 from .runner_cli import _write_private
 from .subscription_probe import ProbeSettings, validate_executable
@@ -35,6 +36,7 @@ def configure_parser(parser):
     run.add_argument('--workspace', required=True, type=Path)
     run.add_argument('--codex', required=True, help='Chemin absolu du client Codex personnel.')
     run.add_argument('--model')
+    run.add_argument('--human-owner', help='Destinataire fixe d’une éventuelle question ; reprise explicite après sa réponse.')
     run.add_argument('--timeout', type=float, default=120)
     status = commands.add_parser('status', help='Lire uniquement les métadonnées locales, sans connexion.')
     status.add_argument('--operation', required=True)
@@ -164,13 +166,18 @@ def run(args):
         else:
             if (args.state is None or not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300):
                 raise ValueError
+            if args.human_owner is not None:
+                if not _text(args.human_owner, 256):
+                    raise ValueError
+                args.human_owner.encode('utf-8', 'strict')
             instruction = _instruction(args.instruction_file)
             executable = validate_executable(args.codex)
             ProbeSettings(executable=executable, model=args.model, timeout_seconds=args.timeout)
             workspace = args.workspace.expanduser().resolve(strict=True)
             if not workspace.is_dir():
                 raise ValueError
-            client = WorkerBoardClient.from_connection_file(args.connection_file, session_id=args.session)
+            client_class = HumanWorkerClient if args.human_owner is not None else WorkerBoardClient
+            client = client_class.from_connection_file(args.connection_file, session_id=args.session)
             scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
                      'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
             with WorkJournal(args.journal) as journal:
@@ -183,7 +190,7 @@ def run(args):
                     result = BoardWorker(journal, store, client).run(scope=scope,
                         request_id=args.request, instruction=instruction, workspace=workspace,
                         executable=executable, model=args.model, timeout=args.timeout,
-                        should_cancel=cancelled.is_set)
+                        should_cancel=cancelled.is_set, human_owner_id=args.human_owner)
                     output = _public_result(result)
                 finally:
                     for signum, handler in previous.items():

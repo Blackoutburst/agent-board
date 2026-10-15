@@ -64,6 +64,7 @@ class WorkerCliTests(unittest.TestCase):
             self.assertEqual(args['instruction'], 'PRIVATE INSTRUCTION')
             self.assertEqual(args['model'], 'test-model')
             self.assertEqual(args['timeout'], 20)
+            self.assertIsNone(args['human_owner_id'])
             self.assertFalse(args['should_cancel']())
         self.assertEqual(code, 0)
         self.assertEqual(output, self.result)
@@ -76,6 +77,31 @@ class WorkerCliTests(unittest.TestCase):
         self.assertIsNone(journal._db)
         self.assertIsNone(store._db)
         self.assertIs(client, self.client)
+
+    def test_human_owner_explicitly_selects_question_client_and_returns_private_wait_receipt(self):
+        waiting = {**self.result, 'status': 'pending', 'stage': 'waiting_human',
+                   'reason': 'human_response_pending'}
+        waiting.pop('published_status')
+        with patch('blackoutburst_agents.worker_cli.WorkerBoardClient.from_connection_file') as normal, \
+                patch('blackoutburst_agents.worker_cli.HumanWorkerClient.from_connection_file', return_value=self.client) as connect, \
+                patch('blackoutburst_agents.worker_cli.BoardWorker') as worker:
+            worker.return_value.run.return_value = {**waiting, 'question': 'PRIVATE QUESTION',
+                                                    'answer': 'PRIVATE ANSWER'}
+            code, output, text = self.invoke(self.args('--human-owner', 'selected-human'))
+            connect.assert_called_once_with(self.connection, session_id='explicit-session')
+            normal.assert_not_called()
+            self.assertEqual(worker.return_value.run.call_args.kwargs['human_owner_id'], 'selected-human')
+        self.assertEqual(code, 2)
+        self.assertEqual(output, waiting)
+        self.assertNotIn('PRIVATE', text)
+
+    def test_invalid_human_owner_is_rejected_before_any_connection(self):
+        with patch('blackoutburst_agents.worker_cli.HumanWorkerClient.from_connection_file') as human, \
+                patch('blackoutburst_agents.worker_cli.WorkerBoardClient.from_connection_file') as normal:
+            for owner in ('', ' ', 'x\ny', '\ud800', 'x' * 257):
+                self.assertEqual(self.invoke(self.args('--human-owner', owner))[0], 2)
+            human.assert_not_called()
+            normal.assert_not_called()
 
     def test_status_is_offline_and_does_not_require_runner_state(self):
         scope = {'owner_id': 'owner', 'agent_id': 'agent', 'project_id': 'project', 'ticket_id': 'ticket',

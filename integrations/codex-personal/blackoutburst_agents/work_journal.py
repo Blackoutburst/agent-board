@@ -28,7 +28,26 @@ MAX_PAYLOAD_BYTES = 256 * 1024
 SCOPE_FIELDS = frozenset({'owner_id', 'agent_id', 'project_id', 'ticket_id',
                           'board_session_id', 'board_endpoint'})
 STAGES = ('new', 'claiming', 'claimed', 'prepared', 'running', 'result_ready',
-          'publishing', 'complete', 'needs_review', 'abandoned')
+          'publishing', 'complete', 'needs_review', 'abandoned',
+          'asking_human', 'waiting_human', 'reclaiming', 'resuming')
+# This is a graph: a confirmed answer returns to result_ready through a new
+# claimed turn. Tuple order is only for display/validation, never progression.
+_NEXT_STAGES = {
+    'new': ('claiming',),
+    'claiming': ('claimed',),
+    'claimed': ('prepared',),
+    'prepared': ('running',),
+    'running': ('result_ready',),
+    'result_ready': ('publishing', 'asking_human'),
+    'publishing': ('complete',),
+    'complete': (),
+    'needs_review': (),
+    'abandoned': (),
+    'asking_human': ('waiting_human',),
+    'waiting_human': ('reclaiming',),
+    'reclaiming': ('resuming',),
+    'resuming': ('result_ready',),
+}
 _APPLICATION_ID = 0x4242574A
 _CREDENTIAL_KEYS = frozenset({'auth', 'authentication', 'authorization', 'credential',
     'credentials', 'token', 'accesstoken', 'refreshtoken', 'bearertoken', 'apikey',
@@ -153,7 +172,7 @@ class WorkJournal:
             self._db = sqlite3.connect(database, timeout=5, isolation_level=None)
             self._db.row_factory = sqlite3.Row
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise JournalError('unsupported_journal_version')
             if version == 0:
                 # Never silently add this schema to an unrelated database.
@@ -327,11 +346,17 @@ class WorkJournal:
             if operation['revision'] != expected_revision:
                 raise JournalError('revision_conflict')
             current = operation['stage']
-            allowed = {current}
+            allowed = {current, *_NEXT_STAGES[current]}
             if current not in ('complete', 'needs_review', 'abandoned'):
-                allowed.update((STAGES[STAGES.index(current) + 1], 'needs_review'))
+                allowed.add('needs_review')
             if stage not in allowed or stage == 'abandoned':
                 raise JournalError('invalid_stage_transition')
+            # Human handoffs add graph states which a 0.5 reader cannot
+            # interpret. Mark that compatibility boundary in the same commit
+            # as the first handoff intent, never merely on opening an old
+            # text-only journal. Keep version 2 after completion/abandonment.
+            if stage == 'asking_human' and db.execute('PRAGMA user_version').fetchone()[0] < 2:
+                db.execute('PRAGMA user_version=2')
             db.execute('''UPDATE operations SET stage=?,payload_json=?,revision=revision+1,updated_at=?
                           WHERE id=? AND revision=?''',
                        (stage, payload_json, time.time(), operation_id, expected_revision))

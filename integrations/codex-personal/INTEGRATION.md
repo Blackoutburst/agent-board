@@ -1,15 +1,15 @@
 # Connexion du fournisseur Codex personnel
 
-La version 0.5 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
+La version 0.6 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Le mode question/réponse exige le board **2.0.3**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
 
 ## Responsabilités actuelles
 
-| Board 2.0 publié | Adaptateur personnel 0.5 |
+| Board 2.0 publié | Adaptateur personnel 0.6 |
 |---|---|
 | Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
 | Projets, tickets, conversations et permissions du propriétaire/appareil | Lit un ticket explicitement choisi et compose ses sources bornées |
 | Réservations, baux, `get_work`, `claim_next_ticket` | `worker` réserve seulement un ticket explicitement choisi ; aucune sélection automatique |
-| Délégation et demandes humaines | Inclut leurs données pertinentes ; ne crée pas de demande |
+| Délégation et demandes humaines | `worker run --human-owner` peut poser une question au destinataire fixé puis reprendre explicitement après sa réponse ; la délégation reste à raccorder |
 | Activité et inbox | `events drain` lit l’activité ascendante d’un ticket et journalise ses lots ; il ne lit pas l’inbox et ne démarre pas de listener |
 | Identité affichée et compétences | Conserve seulement les champs publics utiles à l’analyse |
 
@@ -52,6 +52,8 @@ La sonde `run_subscription_probe(settings)` reste disponible pour un test explic
 ## Ticket explicitement choisi
 
 `BoardWorker(journal, run_store, client).run(...)` utilise les identifiants réels du board, un journal privé à six champs de portée et la connexion personnelle épinglée. `WorkerBoardClient` limite ses mutations à la réservation et au résultat du ticket ; `BoardReader` reste en lecture seule. Le coordinateur ajoute le résultat et sa preuve, publie `review` ou `blocked`, puis libère sa réservation. Il ne choisit ni ticket, ni nouveau modèle, ni outil. Le [guide worker](WORKER.md) décrit les tentatives identiques, les interruptions et les limites de ce premier parcours.
+
+L’option Python `human_owner_id` fixe le destinataire d’une éventuelle question. Elle exige `HumanWorkerClient`, qui ajoute seulement `lookup_human_request` et `request_human_input` avec `kind=question`. La configuration est immuable pendant toute l’opération. Le journal conserve l’intention avant l’envoi, la demande confirmée et la réponse ; il ne déclenche aucune attente permanente. Une invocation identique reprend le même work et la même session, avec une clé distincte pour le second tour. La réponse humaine et le nouveau contexte restent séparés de l’instruction locale.
 
 ## Raccordements restant à réaliser
 
