@@ -1,0 +1,39 @@
+{
+  "format": "blackoutburst-approved-context-model-proof-v1",
+  "created_at": "2026-10-15T10:02:37.600753+00:00",
+  "adapter_commit": "78fc2a4c87afad8072149360f0e6ad50f202e784",
+  "tool_version": "0.3.0",
+  "source": "explicitly_approved_saved_snapshot",
+  "status": "passed",
+  "snapshot_integrity_verified": true,
+  "canonical_context_bytes": 10686,
+  "prompt_bytes": 11230,
+  "conversation_messages": 0,
+  "private_cache_roundtrip_verified": true,
+  "listener_started": false,
+  "board_messages_posted": 0,
+  "board_tasks_automatically_claimed": 0,
+  "live_mcp_read_is_separate_proof": true,
+  "runner_status": "completed",
+  "runner_reason": "verified",
+  "exact_title_verified": true,
+  "result_cached": false,
+  "stored_turn_count": 1,
+  "workspace_unchanged": true,
+  "diagnostic_status": "ready",
+  "cli_version": "0.162.0-alpha.17.2",
+  "auth_mode": "chatgpt",
+  "transport_verification": {
+    "turn_completed": true,
+    "session_verified": true,
+    "tool_free": true,
+    "cleanup_confirmed": true,
+    "authentication": "chatgpt",
+    "cli_version": "0.162.0-alpha.17.2"
+  },
+  "limitations": [
+    "This test used the fixed snapshot explicitly approved by the owner.",
+    "Live MCP source freshness was validated separately.",
+    "This does not establish semantic memory, autonomous task execution or second-owner access."
+  ]
+}

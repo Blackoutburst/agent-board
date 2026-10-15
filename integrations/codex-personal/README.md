@@ -50,7 +50,8 @@ Les **145 tests** utilisent des exécutables factices, des transports simulés e
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
 - [Reçu de reprise réelle et de déduplication](docs/local-runner-resume-2026-10-15.json)
 - [Reçu de lecture du contexte sur le MCP réel](docs/local-context-2026-10-15.json)
+- [Reçu du tour Codex avec l’extrait approuvé](docs/local-context-model-2026-10-15.json)
 
-Le dernier contrôle a vérifié la lecture réelle, la conservation locale et la relecture stable d’un contexte de 9 400 octets. Aucun contenu réel du board n’a été envoyé à un modèle pour ce contrôle ; le passage contexte → modèle est testé avec des données fictives.
+Le contrôle MCP a vérifié la lecture réelle, la conservation locale et la relecture stable d’un contexte de 9 400 octets. Après autorisation explicite du propriétaire, un contrôle distinct a transmis l’extrait inspecté de 10 686 octets à un unique tour Codex via son abonnement ChatGPT : le titre du ticket a été restitué exactement, sans outil ni modification du dossier de travail. Ce second contrôle utilise la photographie approuvée ; la fraîcheur MCP est vérifiée par le premier contrôle. Il ne démontre pas une mémoire sémantique ni un travail autonome.
 
 Ces reçus ne contiennent ni jeton de connexion, ni transcription, ni sortie brute du client.
