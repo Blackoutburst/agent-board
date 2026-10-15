@@ -401,6 +401,19 @@ class HumanWorkerTests(unittest.TestCase):
         self.assertEqual(len(self.inferences), 1)
         self.assertEqual(len(self.requests()), 1)
 
+    def test_profile_edit_while_waiting_cannot_change_instructions_of_resumed_work(self):
+        first=self.run_worker()
+        self.answer()
+        profile=self.board.get_agent_profile(self.human,self.scope['agent_id'])
+        self.board.update_agent_profile(self.human,profile['id'],profile['version'],
+            instructions='Different instructions after the question')
+        result=self.run_worker()
+        self.assertEqual((result['status'],result['reason']),('needs_review','human_resume_profile_changed'))
+        self.assertEqual(result['operation_id'],first['operation_id'])
+        self.assertEqual(len(self.inferences),1)
+        self.assertEqual(len([name for name,_ in self.client.calls if name=='claim_ticket']),1)
+        self.assertIsNone(self.read()['claimant'])
+
 
 if __name__ == '__main__':
     unittest.main()

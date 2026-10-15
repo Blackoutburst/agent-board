@@ -104,6 +104,12 @@ class EventDrainer:
             result.append({'id': event['id'], 'ticket_id': event['ticket_id'], 'project_id': event['project_id'],
                            'event': event['event'], 'actor': {'kind': actor['kind'], 'owner_id': actor['owner_id']},
                            'created_at': event['created_at']})
+            if event['event'] == 'human_input_resolved':
+                detail = event.get('detail')
+                if isinstance(detail, dict) and 'request_id' in detail:
+                    # Only this opaque identifier can associate an answer with
+                    # the original batch. No message/question/answer is stored.
+                    result[-1]['request_id'] = detail['request_id']
             previous = event['id']
         return result
 
@@ -127,7 +133,7 @@ class EventDrainer:
         return None
 
     def drain(self, *, scope, instruction, workspace, executable, model=None, timeout=120,
-              max_pages=4, limit=50, execute=False, after=0, should_cancel=None):
+              max_pages=4, limit=50, execute=False, after=0, should_cancel=None, human_owner_id=None):
         subscription = batch = None
         pages = ingested = 0
         buffer_full = False
@@ -157,6 +163,8 @@ class EventDrainer:
                 configuration = {'instruction': instruction, 'workspace': str(Path(workspace).expanduser().resolve(strict=True)),
                                  'executable': str(Path(executable).expanduser().resolve(strict=True)),
                                  'model': model, 'timeout': timeout}
+                if human_owner_id is not None:
+                    configuration['human_owner_id'] = human_owner_id
                 if not Path(configuration['workspace']).is_dir() or not Path(configuration['executable']).is_file():
                     raise _Abort('invalid_drain_request')
                 if execute and self.worker is None:
@@ -214,10 +222,20 @@ class EventDrainer:
                 # exact batch must reach its idempotent reconciliation even if
                 # the first call already changed the ticket to review.
                 batch = self.journal.start_batch(batch['id'])
+                human_options = {'human_owner_id': human_owner_id} if human_owner_id is not None else {}
                 result = self.worker.run(scope=scope, request_id=batch['request_id'],
                     instruction=configuration['instruction'], workspace=configuration['workspace'],
-                    executable=configuration['executable'], model=model, timeout=timeout, should_cancel=should_cancel)
-                batch = self.journal.finish_batch(batch['id'], result)
+                    executable=configuration['executable'], model=model, timeout=timeout,
+                    should_cancel=should_cancel, **human_options)
+                if human_owner_id is not None and result.get('operation_id'):
+                    # Read only the operation identified by this exact worker
+                    # receipt, never adopt another operation by scope. Retain
+                    # the work lock through the atomic event-link/receipt save.
+                    with self.worker.journal.lock(scope):
+                        operation = self.worker.journal.get(result['operation_id'])
+                        batch = self.journal.finish_batch(batch['id'], result, operation=operation)
+                else:
+                    batch = self.journal.finish_batch(batch['id'], result)
                 status = {'complete': 'complete', 'pending': 'pending'}.get(result.get('status'), 'needs_review')
                 return receipt(status, 'worker_' + status, worker_operation_id=result.get('operation_id'))
         except _Abort as error:

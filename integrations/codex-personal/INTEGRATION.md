@@ -1,15 +1,15 @@
 # Connexion du fournisseur Codex personnel
 
-La version 0.7 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Le mode question/réponse exige le board **2.0.3**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
+La version 0.8 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Le mode question/réponse exige le board **2.0.3**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
 
 ## Responsabilités actuelles
 
-| Board 2.1 | Adaptateur personnel 0.7 |
+| Board 2.1 | Adaptateur personnel 0.8 |
 |---|---|
 | Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
 | Projets, tickets, conversations et permissions du propriétaire/appareil/profil | Lit un ticket explicitement choisi et compose ses sources bornées |
 | Réservations, baux, `get_work`, `claim_next_ticket` | `worker` réserve seulement un ticket explicitement choisi ; aucune sélection automatique |
-| Délégation et demandes humaines | `worker run --human-owner` peut poser une question au destinataire fixé puis reprendre explicitement après sa réponse ; la délégation reste à raccorder |
+| Délégation et demandes humaines | `worker run --human-owner` et `events drain --human-owner` peuvent poser une question au destinataire fixé puis reprendre explicitement après sa réponse ; la délégation reste à raccorder |
 | Activité et inbox | `events drain` lit l’activité ascendante d’un ticket et journalise ses lots ; il ne lit pas l’inbox et ne démarre pas de listener |
 | Profil versionné et compétences | Sélectionne les préférences utiles à l’analyse ; exclut droits, liaisons et travaux de gestion |
 

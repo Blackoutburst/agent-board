@@ -10,9 +10,10 @@ import signal
 import threading
 
 from .board_worker import BoardWorker
-from .event_client import EventBoardClient
+from .event_client import EventBoardClient, HumanEventBoardClient
+from .board_reader import _text
 from .event_drain import EventDrainer
-from .event_journal import EventJournal
+from .event_journal import EventJournal, EventJournalError
 from .run_store import RunStore
 from .subscription_probe import ProbeSettings, validate_executable
 from .work_journal import WorkJournal
@@ -42,11 +43,14 @@ def configure_parser(parser):
     drain.add_argument('--limit', type=int, default=50)
     drain.add_argument('--max-pages', type=int, default=4)
     drain.add_argument('--execute', action='store_true', help='Autoriser un tour pour un lot éligible, puis publier en revue.')
+    drain.add_argument('--human-owner', help='Autoriser une question au participant fixé et une reprise explicite après sa réponse.')
     status = commands.add_parser('status', help='Lire les métadonnées d’un suivi local.')
     status.add_argument('--subscription', required=True)
     reconcile = commands.add_parser('reconcile', help='Clore un lot après achèvement ou abandon local explicite du worker.')
     reconcile.add_argument('--batch', required=True)
     reconcile.add_argument('--operation', required=True)
+    reconcile.add_argument('--connection-file', type=Path,
+        help='Rapprocher en lecture seule la question distante si son accusé a été perdu ; utilise la session d’origine.')
 
 
 def _public_result(value):
@@ -83,7 +87,25 @@ def run(args):
                             operation = work.get(args.operation)
                             with work.lock(operation['scope']):
                                 operation = work.get(args.operation)
-                                batch = journal.resolve_batch(args.batch, operation)
+                                if args.connection_file is not None:
+                                    previous = batch.get('receipt') or {}
+                                    if (operation.get('scope') != subscription['scope']
+                                            or operation.get('request_id') != batch.get('request_id')
+                                            or json.dumps(operation.get('configuration'), sort_keys=True, allow_nan=False)
+                                                != json.dumps(subscription.get('configuration'), sort_keys=True, allow_nan=False)
+                                            or previous.get('operation_id', operation.get('id')) != operation.get('id')):
+                                        raise EventJournalError('resolution_mismatch')
+                                    scope = operation['scope']
+                                    client = HumanEventBoardClient.from_connection_file(args.connection_file,
+                                        session_id=scope['board_session_id'])
+                                    if client.endpoint != scope['board_endpoint']:
+                                        raise ValueError
+                                    request = BoardWorker(work, None, client).lookup_human_question(operation)
+                                    if request is None:
+                                        raise EventJournalError('human_request_unresolved')
+                                    batch = journal.resolve_batch(args.batch, operation, verified_human_request=request)
+                                else:
+                                    batch = journal.resolve_batch(args.batch, operation)
                     output = {'status': 'reconciled', 'batch_id': batch['id'],
                               'worker_operation_id': operation['id'], 'decision': operation['stage']}
             print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -93,13 +115,18 @@ def run(args):
                 or not 0 <= args.after < 2 ** 63
                 or (args.execute and (args.state is None or args.work_journal is None))):
             raise ValueError
+        if args.human_owner is not None:
+            if not _text(args.human_owner, 256):
+                raise ValueError
+            args.human_owner.encode('utf-8', 'strict')
         instruction = _instruction(args.instruction_file)
         executable = validate_executable(args.codex)
         ProbeSettings(executable=executable, model=args.model, timeout_seconds=args.timeout)
         workspace = args.workspace.expanduser().resolve(strict=True)
         if not workspace.is_dir():
             raise ValueError
-        client = EventBoardClient.from_connection_file(args.connection_file, session_id=args.session)
+        client_class = HumanEventBoardClient if args.human_owner is not None else EventBoardClient
+        client = client_class.from_connection_file(args.connection_file, session_id=args.session)
         scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
                  'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
         with ExitStack() as stack:
@@ -117,7 +144,7 @@ def run(args):
                 value = EventDrainer(journal, worker, client).drain(scope=scope, instruction=instruction,
                     workspace=workspace, executable=executable, model=args.model, timeout=args.timeout,
                     after=args.after, max_pages=args.max_pages, limit=args.limit, execute=args.execute,
-                    should_cancel=cancelled.is_set)
+                    should_cancel=cancelled.is_set, human_owner_id=args.human_owner)
                 output = _public_result(value)
             finally:
                 for signum, handler in previous.items():
@@ -127,6 +154,10 @@ def run(args):
     except KeyboardInterrupt:
         print(json.dumps({'status': 'cancelled', 'reason': 'drain_interrupted'}))
         return 130
+    except EventJournalError as error:
+        reason = 'human_request_unresolved' if error.code == 'human_request_unresolved' else 'invalid_event_configuration_or_io'
+        print(json.dumps({'status': 'needs_review' if reason == 'human_request_unresolved' else 'blocked', 'reason': reason}))
+        return 2
     except Exception:
         # The journal/configuration and any remote diagnostics stay private.
         print(json.dumps({'status': 'blocked', 'reason': 'invalid_event_configuration_or_io'}))

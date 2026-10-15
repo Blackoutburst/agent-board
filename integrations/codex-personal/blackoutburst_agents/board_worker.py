@@ -13,7 +13,7 @@ from pathlib import Path
 import time
 
 from .board_reader import BoardReadError
-from .context import ContextError, ContextScope, build_context
+from .context import ContextError, ContextScope, build_context, _profile, _hash
 from .run_store import StoreError
 from .runner import PersonalRunner
 from .work_journal import JournalError
@@ -21,6 +21,7 @@ from .work_journal import JournalError
 
 MAX_HUMAN_QUESTION_BYTES = 6000
 MAX_HUMAN_ANSWER_BYTES = 12000
+MAX_RECONCILIATION_ANSWER_BYTES = 80000  # Server's 20,000 Unicode characters; never a model input.
 
 
 class _Stop(Exception):
@@ -172,6 +173,14 @@ class BoardWorker:
         return ticket
 
     @staticmethod
+    def _check_human_profile(op, registration):
+        scope = ContextScope(**{key: op['scope'][key] for key in
+            ('owner_id', 'agent_id', 'project_id', 'ticket_id')})
+        original = op['payload']['human_origin']['sources']['agent']['sha256']
+        if _hash(_profile(registration, scope)) != original:
+            raise _Stop('human_resume_profile_changed')
+
+    @staticmethod
     def _check_cancel(should_cancel):
         if should_cancel is not None:
             try:
@@ -311,7 +320,7 @@ class BoardWorker:
             human_intent={'owner_id': op['configuration']['human_owner_id'], 'question': value['text'],
                           'idempotency_key': 'board-human-' + op['id'], 'expected_version': ticket['version']})
 
-    def _human_request(self, op, registration, *, lookup_only):
+    def _human_request(self, op, registration, *, lookup_only, max_answer_bytes=MAX_HUMAN_ANSWER_BYTES):
         intent, scope = op['payload']['human_intent'], op['scope']
         arguments = {'ticket_id': scope['ticket_id'], 'owner_id': intent['owner_id'],
                      'question': intent['question'], 'kind': 'question',
@@ -351,16 +360,39 @@ class BoardWorker:
                 raise _Stop('human_request_mismatch') from None
             if '\x00' in request['answer']:
                 raise _Stop('human_request_mismatch')
-            if size > MAX_HUMAN_ANSWER_BYTES:
+            if size > max_answer_bytes:
                 raise _Stop('human_answer_too_large')
         return {key: request.get(key) for key in ('id', 'ticket_id', 'owner_id', 'question', 'status', 'answer', 'resolved_at')} | {
             'requested_by': exact_author}
+
+    def lookup_human_question(self, operation):
+        """Explicit read-only reconciliation of a terminal operation's question.
+
+        A lost creation response can leave an abandoned operation without its
+        remote request ID. Look up its exact original intent; never create a
+        request, resume a model, or modify either local journal here. None is
+        an observed absence, not proof that a previously ambiguous call stopped.
+        """
+        if not isinstance(operation, dict) or operation.get('stage') not in ('complete', 'abandoned'):
+            raise _Stop('invalid_human_reconciliation')
+        config, payload = operation.get('configuration'), operation.get('payload')
+        if not isinstance(config, dict) or not isinstance(payload, dict):
+            raise _Stop('invalid_human_reconciliation')
+        intent = payload.get('human_intent')
+        if (payload.get('human_used') is not True or not isinstance(intent, dict)
+                or not config.get('human_owner_id') or intent.get('owner_id') != config['human_owner_id']
+                or intent.get('idempotency_key') != 'board-human-' + operation.get('id', '')):
+            raise _Stop('invalid_human_reconciliation')
+        registration = self._registration(operation['scope'])
+        return self._human_request(operation, registration, lookup_only=True,
+                                   max_answer_bytes=MAX_RECONCILIATION_ANSWER_BYTES)
 
     def _human_handoff(self, op, registration, should_cancel):
         scope, config = op['scope'], op['configuration']
         if op['stage'] == 'asking_human':
             self._check_cancel(should_cancel)
             registration = self._registration(scope)
+            self._check_human_profile(op, registration)
             request = self._human_request(op, registration, lookup_only=True)
             if request is None:
                 self._check_context(op, registration)
@@ -371,6 +403,7 @@ class BoardWorker:
         if op['stage'] == 'waiting_human':
             self._check_cancel(should_cancel)
             registration = self._registration(scope)
+            self._check_human_profile(op, registration)
             request = self._human_request(op, registration, lookup_only=True)
             if request is None:
                 raise _Stop('human_request_missing')
@@ -391,6 +424,7 @@ class BoardWorker:
         if op['stage'] == 'reclaiming':
             self._check_cancel(should_cancel)
             registration = self._registration(scope)
+            self._check_human_profile(op, registration)
             request = self._human_request(op, registration, lookup_only=True)
             if request is None or request != op['payload']['human_request'] or request['status'] != 'resolved':
                 raise _Stop('human_request_mismatch')
@@ -428,6 +462,7 @@ class BoardWorker:
                 run_request_id='board-human-answer-' + op['id'] + '-' + request['id'], output_parsed=False)
         if op['stage'] == 'resuming':
             registration = self._registration(scope)
+            self._check_human_profile(op, registration)
             request = self._human_request(op, registration, lookup_only=True)
             if request is None or request != op['payload']['human_request'] or request['status'] != 'resolved':
                 raise _Stop('human_request_mismatch')

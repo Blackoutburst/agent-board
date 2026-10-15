@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -43,6 +44,11 @@ _COLUMNS = {
     'batches': ('id', 'subscription_id', 'event_ids_json', 'request_id', 'status',
                 'dispatched', 'receipt_json', 'resolution_json', 'created_at', 'updated_at'),
 }
+_HUMAN_COLUMNS = {
+    'human_links': ('batch_id', 'subscription_id', 'operation_id', 'request_id', 'owner_id',
+                    'question_sha256', 'resolved'),
+    'consumed_response_events': ('subscription_id', 'event_id', 'batch_id'),
+}
 
 
 def _uuid(value, code):
@@ -66,8 +72,11 @@ def _time(value):
 
 
 def _configuration(value):
-    if not isinstance(value, dict) or set(value) != _CONFIGURATION_FIELDS:
+    if (not isinstance(value, dict) or not _CONFIGURATION_FIELDS <= set(value)
+            or set(value) - _CONFIGURATION_FIELDS - {'human_owner_id'}):
         raise EventJournalError('invalid_configuration')
+    if 'human_owner_id' in value:
+        _identifier(value['human_owner_id'], 'invalid_configuration')
     instruction = value['instruction']
     if (not isinstance(instruction, str) or not instruction.strip() or '\x00' in instruction
             or not _time(value['timeout']) or not 1 <= value['timeout'] <= 300):
@@ -87,8 +96,13 @@ def _configuration(value):
 
 
 def _event(value, scope):
-    if not isinstance(value, dict) or set(value) != _EVENT_FIELDS:
+    if (not isinstance(value, dict) or not _EVENT_FIELDS <= set(value)
+            or set(value) - _EVENT_FIELDS - {'request_id'}):
         raise EventJournalError('invalid_event')
+    if 'request_id' in value:
+        if value['event'] != 'human_input_resolved':
+            raise EventJournalError('invalid_event')
+        _identifier(value['request_id'], 'invalid_event')
     _integer(value['id'], 'invalid_event', 1)
     if value['ticket_id'] != scope['ticket_id'] or value['project_id'] != scope['project_id']:
         raise EventJournalError('event_scope_mismatch')
@@ -146,14 +160,14 @@ class EventJournal:
             self._db = sqlite3.connect(database, timeout=5, isolation_level=None)
             self._db.row_factory = sqlite3.Row
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise EventJournalError('unsupported_journal_version')
             if version == 0:
                 if self._db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                     raise EventJournalError('journal_corrupt')
             elif (self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID
                     or any(tuple(row['name'] for row in self._db.execute(f'PRAGMA table_info({table})')) != fields
-                           for table, fields in _COLUMNS.items())):
+                           for table, fields in (_COLUMNS | (_HUMAN_COLUMNS if version == 2 else {})).items())):
                 raise EventJournalError('journal_corrupt')
             self._db.execute('PRAGMA journal_mode=DELETE')
             self._db.execute('PRAGMA synchronous=FULL')
@@ -178,6 +192,22 @@ class EventJournal:
                     db.execute('CREATE INDEX event_pending ON events(subscription_id,selected,batch_id,event_id)')
                     db.execute(f'PRAGMA application_id={_APPLICATION_ID}')
                     db.execute('PRAGMA user_version=1')
+            # v2 makes response absorption durable. Older binaries must refuse
+            # the new journal rather than create another batch for its answer.
+            if version in (0, 1):
+                with self._transaction() as db:
+                    db.execute('''CREATE TABLE human_links (
+                        batch_id TEXT PRIMARY KEY REFERENCES batches(id),
+                        subscription_id TEXT NOT NULL REFERENCES subscriptions(id),
+                        operation_id TEXT NOT NULL UNIQUE, request_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+                        question_sha256 TEXT NOT NULL, resolved INTEGER NOT NULL,
+                        UNIQUE(subscription_id,request_id))''')
+                    db.execute('''CREATE TABLE consumed_response_events (
+                        subscription_id TEXT NOT NULL, event_id INTEGER NOT NULL,
+                        batch_id TEXT NOT NULL REFERENCES human_links(batch_id),
+                        PRIMARY KEY(subscription_id,event_id),
+                        FOREIGN KEY(subscription_id,event_id) REFERENCES events(subscription_id,event_id))''')
+                    db.execute('PRAGMA user_version=2')
         except (EventJournalError, OSError, sqlite3.Error, ValueError, TypeError) as error:
             if self._db is not None:
                 self._db.close()
@@ -265,7 +295,9 @@ class EventJournal:
                     or not all(_time(row[field]) for field in ('created_at', 'updated_at'))):
                 raise ValueError
             pending = self._db.execute('''SELECT COUNT(*) FROM events e LEFT JOIN batches b ON e.batch_id=b.id
-                WHERE e.subscription_id=? AND e.selected=1 AND (e.batch_id IS NULL OR b.status!='complete')''',
+                WHERE e.subscription_id=? AND e.selected=1 AND (e.batch_id IS NULL OR b.status!='complete')
+                AND NOT EXISTS (SELECT 1 FROM consumed_response_events c
+                    WHERE c.subscription_id=e.subscription_id AND c.event_id=e.event_id)''',
                 (row['id'],)).fetchone()[0]
             return {'id': row['id'], 'scope': scope, 'configuration': configuration,
                     'initial_after': row['initial_after'], 'after': row['after_id'], 'pending_count': pending,
@@ -340,9 +372,10 @@ class EventJournal:
                 if expected_after < subscription['after'] and encoded_events and not new_events:
                     return subscription
                 raise EventJournalError('cursor_conflict')
-            if subscription['pending_count'] + sum(row[3] for row in new_events) > MAX_PENDING_EVENTS:
-                raise EventJournalError('pending_event_limit')
             db.executemany('INSERT INTO events VALUES(?,?,?,?,?)', new_events)
+            self._consume_responses(db, subscription_id)
+            if self.get_subscription(subscription_id)['pending_count'] > MAX_PENDING_EVENTS:
+                raise EventJournalError('pending_event_limit')
             if encoded_events:
                 db.execute('UPDATE subscriptions SET after_id=?,updated_at=? WHERE id=?',
                            (encoded_events[-1][0], time.time(), subscription_id))
@@ -416,8 +449,10 @@ class EventJournal:
                              (subscription_id,)).fetchone()
             if row is not None:
                 return self._decode_batch(row)
-            rows = db.execute('''SELECT event_id FROM events WHERE subscription_id=? AND selected=1
-                AND batch_id IS NULL ORDER BY event_id LIMIT ?''', (subscription_id, MAX_BATCH_EVENTS)).fetchall()
+            rows = db.execute('''SELECT event_id FROM events e WHERE subscription_id=? AND selected=1
+                AND batch_id IS NULL AND NOT EXISTS (SELECT 1 FROM consumed_response_events c
+                    WHERE c.subscription_id=e.subscription_id AND c.event_id=e.event_id)
+                ORDER BY event_id LIMIT ?''', (subscription_id, MAX_BATCH_EVENTS)).fetchall()
             if not rows:
                 return None
             ids = [row['event_id'] for row in rows]
@@ -442,7 +477,100 @@ class EventJournal:
                 db.execute('UPDATE batches SET dispatched=1,updated_at=? WHERE id=?', (time.time(), batch_id))
             return self.get_batch(batch_id)
 
-    def finish_batch(self, batch_id, receipt):
+    def _consume_responses(self, db, subscription_id):
+        """Absorb only a response to the proven question of an existing batch.
+
+        Keep original event metadata/selection immutable for replay validation.
+        A separate relation also avoids growing a full 200-event batch when its
+        answer arrives. Unrelated messages and edits remain pending. An event
+        is only a deduplication hint, never proof to resume: BoardWorker still
+        reads and validates the actual answer. Keeping the link after explicit
+        abandonment prevents a late answer from starting replacement work.
+        """
+        rows = db.execute('''SELECT e.* FROM events e WHERE subscription_id=?
+            AND selected=1 AND batch_id IS NULL AND NOT EXISTS (
+                SELECT 1 FROM consumed_response_events c WHERE c.subscription_id=e.subscription_id
+                AND c.event_id=e.event_id)''', (subscription_id,)).fetchall()
+        for row in rows:
+            event = json.loads(row['metadata_json'])
+            if event.get('event') != 'human_input_resolved' or not event.get('request_id'):
+                continue
+            link = db.execute('''SELECT * FROM human_links WHERE subscription_id=?
+                AND request_id=? AND owner_id=?''',
+                (subscription_id, event['request_id'], event['actor']['owner_id'])).fetchone()
+            if link is not None and event['actor']['kind'] == 'human':
+                db.execute('INSERT INTO consumed_response_events VALUES(?,?,?)',
+                           (subscription_id, row['event_id'], link['batch_id']))
+
+    def _link_human(self, db, batch, subscription, operation, receipt=None):
+        """Validate private WorkJournal proof; retain no prompt/question/answer.
+
+        The caller reads this proof under its WorkJournal scope lock. Scope
+        alone never identifies work: the exact batch request and immutable
+        configuration must also match, including the locally chosen recipient.
+        """
+        try:
+            if (not isinstance(operation, dict) or not batch['dispatched']
+                    or operation.get('scope') != subscription['scope']
+                    or operation.get('request_id') != batch['request_id']
+                    or _configuration(operation.get('configuration')) != _configuration(subscription['configuration'])
+                    or operation.get('stage') not in STAGES):
+                raise ValueError
+            _uuid(operation.get('id'), 'operation_proof_mismatch')
+            _integer(operation.get('revision'), 'operation_proof_mismatch', 1)
+            if receipt is not None and (receipt.get('operation_id') != operation['id']
+                    or receipt['stage'] != operation['stage']):
+                raise ValueError
+            if batch['receipt'] and batch['receipt'].get('operation_id', operation['id']) != operation['id']:
+                raise ValueError
+            payload = operation.get('payload')
+            if not isinstance(payload, dict):
+                raise ValueError
+            request = payload.get('human_request')
+            if request is None:
+                if payload.get('human_used') and operation['stage'] not in ('asking_human', 'needs_review', 'abandoned'):
+                    raise ValueError
+                return
+            intent = payload.get('human_intent')
+            scope, config = subscription['scope'], subscription['configuration']
+            if (payload.get('human_used') is not True or not isinstance(request, dict)
+                    or not isinstance(intent, dict) or not config.get('human_owner_id')
+                    or intent.get('owner_id') != config['human_owner_id']
+                    or intent.get('idempotency_key') != 'board-human-' + operation['id']
+                    or request.get('owner_id') != config['human_owner_id']
+                    or request.get('ticket_id') != scope['ticket_id']
+                    or request.get('question') != intent.get('question')
+                    or request.get('status') not in ('open', 'resolved')):
+                raise ValueError
+            _identifier(request.get('id'), 'operation_proof_mismatch')
+            question = request.get('question')
+            if (not isinstance(question, str) or not question.strip() or '\x00' in question
+                    or len(question.encode('utf-8')) > 6000):
+                raise ValueError
+            author = request.get('requested_by')
+            if (not isinstance(author, dict) or author.get('kind') != 'agent'
+                    or any(author.get(key) != scope[key] for key in ('owner_id', 'agent_id'))
+                    or author.get('session_id') != scope['board_session_id']):
+                raise ValueError
+            _identifier(author.get('device_id'), 'operation_proof_mismatch')
+            resolved = request['status'] == 'resolved'
+            if resolved and (not _time(request.get('resolved_at')) or request['resolved_at'] <= 0
+                    or not isinstance(request.get('answer'), str) or not request['answer'].strip()):
+                raise ValueError
+            link = (batch['id'], subscription['id'], operation['id'], request['id'], request['owner_id'],
+                    hashlib.sha256(request['question'].encode('utf-8')).hexdigest(), int(resolved))
+        except (EventJournalError, ValueError, TypeError, KeyError, UnicodeError):
+            raise EventJournalError('operation_proof_mismatch') from None
+        existing = db.execute('SELECT * FROM human_links WHERE batch_id=?', (batch['id'],)).fetchone()
+        if existing is not None:
+            if tuple(existing)[:-1] != link[:-1] or existing['resolved'] > link[-1]:
+                raise EventJournalError('operation_proof_mismatch')
+            db.execute('UPDATE human_links SET resolved=? WHERE batch_id=?', (link[-1], batch['id']))
+        else:
+            db.execute('INSERT INTO human_links VALUES(?,?,?,?,?,?,?)', link)
+        self._consume_responses(db, subscription['id'])
+
+    def finish_batch(self, batch_id, receipt, *, operation=None):
         encoded = _receipt(receipt)
         batch = self.get_batch(batch_id)
         subscription = self.get_subscription(batch['subscription_id'])
@@ -450,6 +578,10 @@ class EventJournal:
         status = 'needs_review' if receipt['status'] == 'abandoned' else receipt['status']
         with self._transaction() as db:
             batch = self.get_batch(batch_id)
+            if operation is not None:
+                self._link_human(db, batch, subscription, operation, receipt)
+            elif subscription['configuration'].get('human_owner_id') and receipt.get('operation_id'):
+                raise EventJournalError('operation_proof_required')
             if batch['status'] in ('complete', 'needs_review'):
                 if batch['receipt'] != receipt:
                     raise EventJournalError('batch_receipt_conflict')
@@ -465,13 +597,18 @@ class EventJournal:
                        (status, encoded, time.time(), batch_id))
             return self.get_batch(batch_id)
 
-    def resolve_batch(self, batch_id, operation):
+    def resolve_batch(self, batch_id, operation, *, verified_human_request=None):
         """Reconcile only an explicit local WorkJournal complete/abandoned proof.
 
         The caller must load ``operation`` from its private WorkJournal. This
         never abandons work or performs remote reconciliation on the caller's
         behalf. WorkJournal abandonment has its own human acknowledgement and
         active-process checks. The original receipt remains untouched for audit.
+
+        A question whose creation was ambiguous cannot be closed until its ID
+        is known. ``verified_human_request`` must come from an explicit exact
+        lookup by the caller, never an inferred request or a negative lookup.
+        It enriches only this proof; the WorkJournal remains unchanged.
         """
         batch = self.get_batch(batch_id)
         subscription = self.get_subscription(batch['subscription_id'])
@@ -489,12 +626,28 @@ class EventJournal:
                           'revision': operation['revision']}
         except (EventJournalError, ValueError, TypeError, KeyError):
             raise EventJournalError('resolution_mismatch') from None
+        if not batch['dispatched']:
+            raise EventJournalError('batch_not_started')
+        payload = operation.get('payload')
+        if not isinstance(payload, dict):
+            raise EventJournalError('resolution_mismatch')
+        known_request = payload.get('human_request')
+        if verified_human_request is not None:
+            if not isinstance(verified_human_request, dict) or not verified_human_request.get('id'):
+                raise EventJournalError('human_request_unresolved')
+            if known_request is not None and known_request != verified_human_request:
+                raise EventJournalError('resolution_mismatch')
+            operation = {**operation, 'payload': {**payload, 'human_request': verified_human_request}}
+        elif payload.get('human_used') and payload.get('human_intent') and not (
+                isinstance(known_request, dict) and known_request.get('id')):
+            raise EventJournalError('human_request_unresolved')
         with self._transaction() as db:
             batch = self.get_batch(batch_id)
             if not batch['dispatched']:
                 raise EventJournalError('batch_not_started')
             if batch['receipt'] is not None and batch['receipt'].get('operation_id', operation['id']) != operation['id']:
                 raise EventJournalError('resolution_mismatch')
+            self._link_human(db, batch, subscription, operation)
             if batch['resolution'] is not None:
                 if batch['resolution'] != resolution:
                     raise EventJournalError('resolution_mismatch')

@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock
 
 from blackoutburst_agents.board_reader import BoardReadError
-from blackoutburst_agents.event_client import EventBoardClient
+from blackoutburst_agents.event_client import EventBoardClient, HumanEventBoardClient
 
 
 class EventClientTests(unittest.TestCase):
@@ -69,6 +69,24 @@ class EventClientTests(unittest.TestCase):
         registration = self.client._rpc.call_args_list[0].args[1]
         self.assertEqual(registration['name'], 'register_agent')
         self.assertFalse(registration['arguments']['autonomous'])
+
+    def test_human_event_client_composes_both_narrow_contracts_without_queue_access(self):
+        client=HumanEventBoardClient(self.client._config, 'human-event-session', 20)
+        client._registered=True
+        client._rpc=Mock(return_value={'structuredContent': {'result': []}})
+        self.assertEqual(client.call('list_activity', self.args), [])
+        question={'ticket_id':'ticket','owner_id':'named-human','question':'Which test environment?',
+            'kind':'question','idempotency_key':'event-question'}
+        client._tool=Mock(return_value={'found':False})
+        self.assertEqual(client.call('lookup_human_request',question),{'found':False})
+        client._tool.assert_called_with('lookup_human_request',{**question,'session_id':'human-event-session'})
+        client.call('request_human_input',{**question,'expected_version':7})
+        self.assertEqual(client._tool.call_args.args[1]['expected_version'],7)
+        for name,args in [('request_human_input',{**question,'kind':'approval','expected_version':7}),
+                          ('list_activity',{**self.args,'order':'desc'}),('claim_next_ticket',{}),
+                          ('read_inbox',{}),('post_message',{}),('resolve_human_request',{})]:
+            with self.assertRaises(BoardReadError):client.call(name,args)
+        with self.assertRaises(BoardReadError):self.client.call('lookup_human_request',question)
 
 
 if __name__ == '__main__':
