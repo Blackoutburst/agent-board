@@ -91,7 +91,7 @@ def test_scope_filters_previews_search_inbox_pagination_and_legacy_tasks(guarded
                   'group', 'alice', action='inspect', resource='fixture:read')
     standalone = b.create_thread(human, 'Standalone private marker', ['alice'], 'standalone')
     b.post_message(human, standalone['id'], 'Standalone body marker')
-    inbox = b.read_inbox(actor, limit=1)
+    inbox = b.read_inbox(actor, limit=1, include_work=True)
     assert [m['id'] for m in inbox['messages']] == [visible['id']]
     assert inbox['tasks'] == []
     assert b.read_inbox(actor, cursor=inbox['cursor'], limit=1)['messages'] == []

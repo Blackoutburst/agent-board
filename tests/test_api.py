@@ -180,3 +180,27 @@ def test_mcp_requires_agent_credentials_and_cannot_impersonate_owner(application
         result = call_tool(client, device["token"], "read_inbox", {"session_id": "my-chat", "label": "Work", "owner_id": "thescreamer"})
         if not result.get("isError"):
             assert tool_data(result)["session"]["owner_id"] == "blackoutburst"
+
+
+def test_mcp_inbox_defaults_to_messages_and_work_requires_opt_in(application):
+    b=application.state.board
+    human={"kind":"human","owner_id":"blackoutburst"}
+    b.set_policy(human,True,True,True,True,[],[])
+    device=b.create_device(human,"Inbox monitor",[])
+    b.register_agent(b.authenticate(device['token']),'monitor','Monitor',[],'codex',False,'default')
+    project=b.create_project(human,'Ready work',['blackoutburst'],idempotency_key='p')
+    ticket=b.create_ticket(human,project['id'],'Still available',idempotency_key='t')
+    args={'session_id':'monitor','label':'Inbox monitor'}
+    with TestClient(application) as client:
+        tools=rpc(client,device['token'],'tools/list').json()['result']['tools']
+        schema=next(tool['inputSchema'] for tool in tools if tool['name']=='read_inbox')
+        assert schema['properties']['include_work']['default'] is False
+        default=tool_data(call_tool(client,device['token'],'read_inbox',args))
+        assert set(default)=={'messages','cursor','session'}
+        explicit=tool_data(call_tool(client,device['token'],'read_inbox',{**args,'include_work':False,'cursor':default['cursor']}))
+        assert set(explicit)==set(default) and explicit['messages']==[]
+        combined=tool_data(call_tool(client,device['token'],'read_inbox',{**args,'include_work':True,'cursor':explicit['cursor']}))
+        assert set(combined)==set(default)|{'tasks','work'}
+        assert [t['id'] for t in combined['work']['ready']]==[ticket['id']]
+        work=tool_data(call_tool(client,device['token'],'get_work',{'session_id':'monitor'}))
+        assert [t['id'] for t in work['ready']]==[ticket['id']]

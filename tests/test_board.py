@@ -256,13 +256,13 @@ def test_inbox_cursor_bound_to_each_session_and_task_eligibility_independent(set
     second = board.register_session(board.authenticate(device["token"]), "second", "Second", ["dns:read"])
     message = board.post_message(other, shared, "Please verify DNS", mentions=["blackoutburst"])
     item = task(board, other, shared)
-    one = board.read_inbox(first)
+    one = board.read_inbox(first, include_work=True)
     assert one["session"]["online"]
     assert one["messages"][0]["id"] == message["id"]
     assert one["tasks"][0]["id"] == item["id"]
     assert board.read_inbox(first)["messages"] == []
-    assert board.read_inbox(first, one["cursor"])["tasks"][0]["id"] == item["id"]
-    two = board.read_inbox(second)
+    assert board.read_inbox(first, one["cursor"], include_work=True)["tasks"][0]["id"] == item["id"]
+    two = board.read_inbox(second, include_work=True)
     assert two["messages"][0]["id"] == message["id"]
     assert two["tasks"][0]["id"] == item["id"]
     rejects(400, board.read_inbox, second, one["cursor"])
@@ -272,7 +272,7 @@ def test_inbox_cursor_bound_to_each_session_and_task_eligibility_independent(set
     assert board.read_inbox(browser_two_actor)["messages"]
     rejects(400, board.read_inbox, browser_two_actor, browser_one["cursor"])
     board.mark_read(human, shared)
-    assert board.read_inbox(second)["tasks"][0]["id"] == item["id"]
+    assert board.read_inbox(second, include_work=True)["tasks"][0]["id"] == item["id"]
 
 
 def test_routing_directory_exposes_safe_live_destinations_and_presence(setup, monkeypatch):

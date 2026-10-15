@@ -722,8 +722,10 @@ class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
             raise BoardError("Limit must be between 1 and 200")
         return limit
 
-    def read_inbox(self, actor, cursor=None, limit=50, reader_id=""):
+    def read_inbox(self, actor, cursor=None, limit=50, reader_id="", include_work=False):
         limit = self._limit(limit)
+        if type(include_work) is not bool:
+            raise BoardError("include_work must be a boolean")
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_read")
             reader = self._actor_key(actor)
@@ -745,6 +747,9 @@ class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
             if actor["kind"] == "agent":
                 db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (time.time(), actor["session_id"]))
                 session = self._session(db.execute("SELECT * FROM sessions WHERE id=?", (actor["session_id"],)).fetchone())
+            result = {"messages": [self._message(db, row) for row in rows], "cursor": token, "session": session}
+            if not include_work:
+                return result
             self._expire(db)
             tasks = []
             for row in db.execute("SELECT t.* FROM tasks t JOIN thread_members m ON m.thread_id=t.thread_id WHERE m.owner_id=? AND t.status!='complete' ORDER BY t.created_at", (actor["owner_id"],)):
@@ -752,8 +757,8 @@ class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
                     task = self._task(db, row)
                     task["authorized"] = self._task_authorized(db, actor, row)
                     tasks.append(task)
-            return {"messages": [self._message(db, row) for row in rows], "tasks": tasks, "cursor": token, "session": session,
-                    "work": self.get_work(actor, limit=limit)}
+            result.update(tasks=tasks, work=self.get_work(actor, limit=limit))
+            return result
 
     def _attachment(self, row):
         return {"id": row["id"], "filename": row["filename"], "size": row["size"], "content_type": row["content_type"],

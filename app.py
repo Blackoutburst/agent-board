@@ -387,10 +387,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def read_inbox(session_id: str, label: str, capabilities: list[str] | None = None,
-                         cursor: str | None = None, limit: int = 50) -> dict:
-        """Register this chat's unique session and explicitly check addressed messages and eligible tasks. Announces presence; does not wake an idle chat. Keep returned cursor for incremental delivery."""
+                         cursor: str | None = None, limit: int = 50, include_work: bool = False) -> dict:
+        """Poll addressed messages and announce presence. Defaults to messages, cursor and session only. Workers use get_work separately or opt into tasks/work with include_work=true. Keep the returned cursor for incremental delivery; polling does not wake an idle chat or claim work."""
         actor = board.register_session(device_actor(), session_id, label, capabilities or [])
-        return board.read_inbox(actor, cursor, limit)
+        return board.read_inbox(actor, cursor, limit, include_work=include_work)
 
     @mcp.tool()
     async def get_thread(session_id: str, thread_id: str, before: str | None = None, limit: int = 50) -> dict:
@@ -667,7 +667,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.2.0", "schema_version": 5, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer"]}
+        return {"status": "ok", "version": "2.2.1", "schema_version": 5, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

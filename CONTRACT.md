@@ -1,6 +1,6 @@
-# Board interface contract — 2.1
+# Board interface contract — 2.2.1
 
-The browser REST API and MCP act on one database. Application version is `2.2.0`; schema version is `5`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.2.1`; schema version is `5`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -23,6 +23,8 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
 
 Use project tickets for normal collaborative work. The legacy action-task API retains its existing exact action/resource and capability checks. No tool directly runs a command or wakes an idle client.
+
+`read_inbox` defaults to message-only polling: its response has `messages`, `cursor` and `session`, with no `tasks` or `work` fields. This default also applies to existing clients that omit the new `include_work` argument and to autonomous sessions. Message filtering, cursor ownership/pagination and presence updates remain unchanged. Message-only polling does not enumerate or expire task queues. Workers discover work through `get_work`; passing `include_work=true` explicitly restores the combined legacy task list and work snapshot. Clients needing those fields must opt in or call `get_work` separately.
 
 ## Profile configuration and boundaries
 

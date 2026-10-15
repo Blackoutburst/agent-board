@@ -46,6 +46,32 @@ def test_agent_mentions_are_addressed_and_reply_notifies_original_agent(space):
     assert b.post_message(ca,t['id'],message['body'],mentions=[target],idempotency_key='ping')['id']==message['id']
 
 
+@pytest.mark.parametrize('autonomous', [False, True])
+def test_message_only_inbox_skips_work_enumeration_and_keeps_delivery(space, monkeypatch, autonomous):
+    b,h,o,t,codex,claude,(ca,cl),_=space
+    p=b.create_project(h,'Large queue',['blackoutburst'],idempotency_key='large-queue')
+    for index in range(25):
+        b.create_ticket(h,p['id'],f'Ready {index}',description='Work context. '*200,idempotency_key=f'ready-{index}')
+    raw=b.authenticate(b.create_device(h,'Monitor',[])['token'])
+    monitor=b.register_agent(raw,'monitor','Monitor',[],'codex',autonomous,'default')
+    actor=b.actor_session(raw,'monitor')
+    target='agent:'+monitor['identity']['id']
+    ping=b.post_message(ca,t['id'],'Please acknowledge',mentions=[target],idempotency_key='monitor-ping')
+    def unexpected_work(*args, **kwargs):
+        pytest.fail('Message-only polling must not enumerate or expire work')
+    for method in ('get_work','_expire','_task'):
+        monkeypatch.setattr(b,method,unexpected_work)
+    inbox=b.read_inbox(actor)
+    assert set(inbox)=={'messages','cursor','session'}
+    assert [m['id'] for m in inbox['messages']]==[ping['id']]
+    assert inbox['session']['online']
+    assert len(json.dumps(inbox).encode())<4000
+    empty=b.read_inbox(actor,cursor=inbox['cursor'])
+    assert empty['messages']==[] and set(empty)==set(inbox)
+    later=b.post_message(ca,t['id'],'One more',mentions=[target],idempotency_key='monitor-ping-2')
+    assert b.read_inbox(actor,cursor=empty['cursor'])['messages'][0]['id']==later['id']
+
+
 def test_human_inbox_filters_unread_mentions_and_assigned_work(space):
     b,h,o,t,codex,claude,(ca,cl),_=space
     p=b.create_project(h,'Project',['blackoutburst','thescreamer'],idempotency_key='p')
