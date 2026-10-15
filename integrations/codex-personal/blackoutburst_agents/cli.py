@@ -37,6 +37,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Vérifier un Codex personnel connecté à un abonnement.")
     parser.add_argument("--version", action="version", version=__version__)
     subs = parser.add_subparsers(dest="command", required=True)
+    from .runner_cli import configure_parser, run as run_runner
+    configure_parser(subs.add_parser('runner', help='Exécutant personnel local, sans listener du board.'))
     for command, help_text in (
         ("doctor", "Vérifier l’installation et le mode de connexion, sans appel de modèle."),
         ("probe", "Tester une réponse minimale ; consomme une petite part de l’abonnement."),
@@ -48,6 +50,8 @@ def main(argv=None) -> int:
             p.add_argument("--model", help="Modèle choisi explicitement ; sinon défaut du client Codex.")
             p.add_argument("--timeout", type=float, default=120, help="Délai maximum en secondes (1–300).")
     args = parser.parse_args(argv)
+    if args.command == 'runner':
+        return run_runner(args)
     executable = args.codex or shutil.which("codex")
     if not executable:
         print(json.dumps({"status": "blocked", "reason": "codex_not_installed"}))
