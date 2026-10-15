@@ -41,6 +41,8 @@ def main(argv=None) -> int:
     configure_parser(subs.add_parser('runner', help='Exécutant personnel local, sans listener du board.'))
     from .context_cli import configure_parser as configure_context, run as run_context
     configure_context(subs.add_parser('context', help='Préparer et inspecter les sources d’un ticket.'))
+    from .event_cli import configure_parser as configure_events, run as run_events
+    configure_events(subs.add_parser('events', help='Lire ponctuellement les événements d’un ticket.'))
     from .worker_cli import configure_parser as configure_worker, run as run_worker
     configure_worker(subs.add_parser('worker', help='Traiter explicitement un ticket, sans listener.'))
     for command, help_text in (
@@ -58,6 +60,8 @@ def main(argv=None) -> int:
         return run_runner(args)
     if args.command == 'context':
         return run_context(args)
+    if args.command == 'events':
+        return run_events(args)
     if args.command == 'worker':
         return run_worker(args)
     executable = args.codex or shutil.which("codex")

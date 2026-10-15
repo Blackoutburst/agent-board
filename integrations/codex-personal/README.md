@@ -2,7 +2,7 @@
 
 Ce module vérifie une connexion ChatGPT personnelle et fournit un exécutant local capable de conserver puis reprendre les sessions Codex. La première preuve locale du 15 octobre 2026 a réussi avec Codex `0.162.0-alpha.17.2` : connexion ChatGPT reconnue, réponse exacte reçue et tour terminé sans erreur.
 
-Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connexion personnelle**. Les commandes [`runner`](RUNNER.md) ajoutent les tours de texte avec état durable, reprise exacte, déduplication et annulation. Les commandes [`context`](CONTEXT.md) lisent les sources d’un ticket via le MCP 2.0, les conservent localement et vérifient leur version avant un tour explicitement demandé. La commande [`worker`](WORKER.md) réserve un ticket choisi explicitement, exécute un tour textuel et publie sa réponse en revue, avec un journal des effets et une reprise après coupure. Aucun listener, orchestrateur général ou service cloud n’est activé par ce programme.
+Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connexion personnelle**. Les commandes [`runner`](RUNNER.md) ajoutent les tours de texte avec état durable, reprise exacte, déduplication et annulation. Les commandes [`context`](CONTEXT.md) lisent les sources d’un ticket via le MCP 2.0, les conservent localement et vérifient leur version avant un tour explicitement demandé. La commande [`worker`](WORKER.md) réserve un ticket choisi explicitement, exécute un tour textuel et publie sa réponse en revue, avec un journal des effets et une reprise après coupure. La commande [`events drain`](EVENTS.md) conserve les événements d’un ticket et peut soumettre un lot au worker sur demande explicite. Aucun listener, orchestrateur général ou service cloud n’est activé par ce programme.
 
 ## Utilisation
 
@@ -44,7 +44,7 @@ L’[interface du module et la répartition proposée](INTEGRATION.md) permetten
 python3 -m unittest discover -s tests -v
 ```
 
-Les **214 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
+Les **271 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
 
 - [Reçu du diagnostic local](docs/local-doctor-2026-10-15.json)
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
@@ -52,6 +52,7 @@ Les **214 tests** utilisent des exécutables factices, des transports simulés e
 - [Reçu de lecture du contexte sur le MCP réel](docs/local-context-2026-10-15.json)
 - [Reçu du tour Codex avec l’extrait approuvé](docs/local-context-model-2026-10-15.json)
 - [Reçu du ticket réel traité puis rejoué sans second tour](docs/local-worker-2026-10-15.json)
+- [Reçu de lecture réelle des événements sans modèle](docs/local-event-drain-2026-10-15.json)
 
 Le contrôle MCP a vérifié la lecture réelle, la conservation locale et la relecture stable d’un contexte de 9 400 octets. Après autorisation explicite du propriétaire, un contrôle distinct a transmis l’extrait inspecté de 10 686 octets à un unique tour Codex via son abonnement ChatGPT : le titre du ticket a été restitué exactement, sans outil ni modification du dossier de travail. Ce second contrôle utilise la photographie approuvée ; la fraîcheur MCP est vérifiée par le premier contrôle. Il ne démontre pas une mémoire sémantique ni un travail autonome.
 
