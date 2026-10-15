@@ -43,7 +43,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.0.2` and schema 3. Through the public MCP URL with an existing device credential, discover 24 tools, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git.
+Verify local health reports `2.0.3` and schema 3. Through the public MCP URL with an existing device credential, discover 25 tools, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git.
 
 Open the browser and test project/task navigation, dependencies, assignments, a delegated subtask, human responses and agent presence. Refresh/reconnect existing MCP clients once so their cached tool schemas include the new tools. Their old tools remain compatible until then.
 

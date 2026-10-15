@@ -73,7 +73,7 @@ def test_no_anonymous_private_metadata_and_static_assets(browser):
     assert client.get('/workspace.js').status_code==200
     assert client.get('/connect.py').status_code==200
     health=client.get('/health').json()
-    assert health['version']=='2.0.2' and health['schema_version']==3
+    assert health['version']=='2.0.3' and health['schema_version']==3
 
 
 def test_activity_order_is_available_through_rest_and_mcp(browser):
@@ -123,3 +123,46 @@ def test_mcp_human_request_pins_identity_after_browser_answer(browser):
     resumed=rpc(client,token,'claim_next_ticket',{'session_id':'restart','project_id':project['id'],'idempotency_key':'resume'})['ticket']
     assert resumed['claimant']['agent_id']==registration['identity']['id']
     assert resumed['claimant']['session_id']=='restart'
+
+
+def test_mcp_lookup_human_request_does_not_create_and_reads_resolved_answer(browser):
+    client,board=browser
+    human={'kind':'human','owner_id':'blackoutburst'}
+    project=board.create_project(human,'Lookup',['blackoutburst'],idempotency_key='lookup')
+    task=board.create_ticket(human,project['id'],'Task',idempotency_key='task')
+    token=board.create_device(human,'Worker',[])['token']
+    rpc(client,token,'register_agent',{'session_id':'lookup','label':'Lookup','agent_kind':'codex'})
+    arguments={'session_id':'lookup','ticket_id':task['id'],'owner_id':'blackoutburst',
+               'question':'Which value?','idempotency_key':'question'}
+    assert rpc(client,token,'lookup_human_request',arguments)=={'found':False}
+    assert board.get_ticket(human,task['id'])['ticket']==task
+    assert board.list_human_requests(human)==[]
+    assert board.get_thread(human,task['thread_id'])['messages']==[]
+    rpc(client,token,'claim_ticket',{'session_id':'lookup','ticket_id':task['id'],'expected_version':task['version']})
+    request=rpc(client,token,'request_human_input',arguments)
+    assert rpc(client,token,'lookup_human_request',arguments)==request
+    answered=client.post('/api/human-requests/'+request['id']+'/resolve',json={'answer':'Chosen value'}).json()
+    before=board.get_ticket(human,task['id'])
+    assert rpc(client,token,'lookup_human_request',arguments)==answered
+    assert board.get_ticket(human,task['id'])==before
+    assert len(board.get_thread(human,task['thread_id'])['messages'])==2
+
+
+def test_unsupported_mcp_lookup_fails_without_calling_creation(browser,monkeypatch):
+    client,board=browser
+    human={'kind':'human','owner_id':'blackoutburst'}
+    token=board.create_device(human,'Worker',[])['token']
+    # Simulate a server predating the additive tool, while retaining its
+    # creation handler. An optional flag on that old handler would be ignored.
+    client.app.state.mcp.remove_tool('lookup_human_request')
+    creation_calls=[]
+    def unexpected_creation(*args,**kwargs):
+        creation_calls.append((args,kwargs))
+        return {'unexpected':'creation'}
+    monkeypatch.setattr(board,'request_human_input',unexpected_creation)
+    response=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},json={
+        'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'lookup_human_request',
+        'arguments':{'session_id':'lookup','ticket_id':'task','owner_id':'blackoutburst',
+                     'question':'Which value?','idempotency_key':'question'}}})
+    assert response.status_code==200 and response.json()['result']['isError']
+    assert creation_calls==[]

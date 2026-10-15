@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import sqlite3
 import threading
@@ -154,6 +155,128 @@ def test_human_request_blocks_releases_notifies_and_resumes(space):
         assert db.execute("SELECT COUNT(*) FROM notification_events WHERE event_key=?",('human-request:'+request['id'],)).fetchone()[0]==1
     events=board.list_activity(human,ticket_id=task['id'])
     assert {'ticket_created','ticket_claimed','human_input_requested','human_input_resolved'}.issubset({e['event'] for e in events})
+
+
+def database_snapshot(board):
+    with sqlite3.connect(board.db_path) as db:
+        return tuple(db.iterdump())
+
+
+@pytest.mark.parametrize('state',['unclaimed','claimed_elsewhere','expired','done'])
+def test_missing_human_request_lookup_has_no_effect_without_active_claim(space,monkeypatch,state):
+    board,human,_,_,first,second,*_=space
+    task=new(space)
+    if state=='claimed_elsewhere':
+        board.claim_ticket(second,task['id'],task['version'])
+    elif state=='expired':
+        board.claim_ticket(first,task['id'],task['version'])
+        with sqlite3.connect(board.db_path) as db:
+            db.execute('UPDATE tickets SET lease_expires_at=0 WHERE id=?',(task['id'],))
+    elif state=='done':
+        board.update_ticket(human,task['id'],task['version'],status='done',outcome='Finished',evidence='Verified')
+    before=database_snapshot(board)
+    original_connection=board._connection
+    @contextmanager
+    def read_only_connection():
+        with original_connection() as db:
+            db.execute('PRAGMA query_only=ON')
+            yield db
+    # SQLite itself rejects any attempted write on this connection.
+    monkeypatch.setattr(board,'_connection',read_only_connection)
+    assert board.lookup_human_request(first,task['id'],'thescreamer','Which value?','missing')=={'found':False}
+    assert database_snapshot(board)==before
+
+
+def test_lookup_does_not_reserve_key_and_returns_current_resolved_request(space):
+    board,human,other,_,first,second,*_=space
+    task=new(space)
+    arguments=(first,task['id'],'thescreamer','Which value?','question')
+    assert board.lookup_human_request(*arguments)=={'found':False}
+    board.claim_ticket(first,task['id'],task['version'])
+    request=board.request_human_input(*arguments)
+    before=database_snapshot(board)
+    assert board.lookup_human_request(*arguments)==request
+    assert database_snapshot(board)==before
+    answer=board.resolve_human_request(other,request['id'],'Current answer')
+    ready=board.get_ticket(human,task['id'])['ticket']
+    board.claim_ticket(second,task['id'],ready['version'])
+    before=database_snapshot(board)
+    assert board.lookup_human_request(*arguments)==answer
+    assert board.lookup_human_request(*arguments)['answer']=='Current answer'
+    assert database_snapshot(board)==before
+    assert board.request_human_input(*arguments)==answer
+    assert database_snapshot(board)==before
+
+
+@pytest.mark.parametrize('changed',['ticket_id','owner_id','question','kind'])
+def test_human_request_lookup_conflicts_on_changed_payload(space,changed):
+    board,_,_,_,first,*_=space
+    task=new(space)
+    other_task=new(space,'Other task')
+    board.claim_ticket(first,task['id'],task['version'])
+    values={'ticket_id':task['id'],'owner_id':'thescreamer','question':'Which value?',
+            'idempotency_key':'question','kind':'question'}
+    board.request_human_input(first,**values)
+    values[changed]={'ticket_id':other_task['id'],'owner_id':'blackoutburst','question':'Changed?','kind':'approval'}[changed]
+    before=database_snapshot(board)
+    reject(board.lookup_human_request,first,**values,expected_status=409)
+    assert database_snapshot(board)==before
+
+
+def test_human_request_lookup_does_not_reuse_another_actor_key(space):
+    board,_,other,_,first,second,*_=space
+    task=new(space)
+    board.claim_ticket(first,task['id'],task['version'])
+    arguments=(task['id'],'thescreamer','Which value?','question')
+    request=board.request_human_input(first,*arguments)
+    device=board.create_device(other,'Other owner',[])
+    raw=board.authenticate(device['token'])
+    board.register_agent(raw,'other-owner','Other owner',[],'codex',True,'installation')
+    another_owner=board.actor_session(raw,'other-owner')
+    before=database_snapshot(board)
+    for actor in (second,another_owner,other):
+        assert board.lookup_human_request(actor,*arguments)=={'found':False}
+    assert board.lookup_human_request(first,*arguments)==request
+    assert database_snapshot(board)==before
+
+
+@pytest.mark.parametrize('existing',[False,True])
+@pytest.mark.parametrize('denial',['policy','actor_membership','requested_owner_membership','device_revoked'])
+def test_human_request_lookup_rechecks_current_authorization(space,existing,denial):
+    board,human,_,project,first,_,device=space
+    task=new(space)
+    arguments=(first,task['id'],'thescreamer','Which value?','question')
+    if existing:
+        board.claim_ticket(first,task['id'],task['version'])
+        board.request_human_input(*arguments)
+    if denial=='policy':
+        board.set_policy(human,True,True,True,False,[],[])
+        expected_status=403
+    elif denial=='device_revoked':
+        board.revoke_device(human,device['id'])
+        expected_status=401
+    else:
+        removed='blackoutburst' if denial=='actor_membership' else 'thescreamer'
+        with sqlite3.connect(board.db_path) as db:
+            db.execute('DELETE FROM project_members WHERE project_id=? AND owner_id=?',(project['id'],removed))
+        expected_status=404 if denial=='actor_membership' else 400
+    before=database_snapshot(board)
+    reject(board.lookup_human_request,*arguments,expected_status=expected_status)
+    assert database_snapshot(board)==before
+
+
+@pytest.mark.parametrize('field,value',[
+    ('question',''),('question',False),('idempotency_key',''),('idempotency_key',False),
+    ('kind','invalid'),('kind',False),('owner_id','outsider')])
+def test_human_request_lookup_uses_creation_validation(space,field,value):
+    board,_,_,_,first,*_=space
+    task=new(space)
+    values={'ticket_id':task['id'],'owner_id':'thescreamer','question':'Which value?',
+            'idempotency_key':'question','kind':'question'}
+    values[field]=value
+    before=database_snapshot(board)
+    reject(board.lookup_human_request,first,**values,expected_status=400)
+    assert database_snapshot(board)==before
 
 
 def test_human_request_resumes_original_identity_in_new_session_once(space):

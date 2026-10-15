@@ -477,6 +477,12 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.request_human_input(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind)
 
     @mcp.tool()
+    async def lookup_human_request(session_id: str, ticket_id: str, owner_id: str, question: str,
+                                   idempotency_key: str, kind: Literal["question", "action", "approval"] = "question") -> dict:
+        """Reconcile an attempted human request with the exact original actor, retry key and content. Returns its current state, including a resolved answer, or {'found': False}. Requires current work-request permission and project membership, but no claim. Never creates a request, discussion, alert or claim. A key reused with different content conflicts."""
+        return board.lookup_human_request(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind)
+
+    @mcp.tool()
     async def list_human_requests(session_id: str, project_id: str = "", include_resolved: bool = False) -> list[dict]:
         """Read human input requests visible in participating projects. Only the named human can resolve them in the browser; reading does not resolve or authorize an action."""
         return board.list_human_requests(session_actor(session_id), project_id, include_resolved)
@@ -548,7 +554,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.0.2", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
+        return {"status": "ok", "version": "2.0.3", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
