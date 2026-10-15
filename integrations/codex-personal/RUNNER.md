@@ -2,7 +2,7 @@
 
 Le module peut désormais démarrer une conversation Codex, conserver son identifiant et la reprendre dans un autre processus. Chaque entrée est explicitement demandée. Le programme ne sélectionne aucun ticket et n’écoute pas le board.
 
-Cette version traite des **tours de texte avec les outils désactivés**, dans le sandbox en lecture seule. Elle prépare le cycle de vie du connecteur ; les modifications de code, les permissions du board et la publication de réponses restent à intégrer. Elle utilise l’authentification ChatGPT du Codex local, comme la sonde de connexion. Le rejet d’un événement d’outil constate une anomalie ; il ne remplace pas le contrôle d’accès de l’hôte. Les politiques Codex administrées peuvent aussi influer sur l’exécution.
+Cette version traite des **tours de texte avec les outils désactivés**, dans le sandbox en lecture seule. Elle prépare le cycle de vie du connecteur ; les modifications de code et la publication de réponses restent à intégrer. Le [contexte MCP](CONTEXT.md) peut maintenant être joint explicitement, avec contrôle des droits de lecture, de la portée et de la version des sources. Elle utilise l’authentification ChatGPT du Codex local, comme la sonde de connexion. Le rejet d’un événement d’outil constate une anomalie ; il ne remplace pas le contrôle d’accès de l’hôte. Les politiques Codex administrées peuvent aussi influer sur l’exécution.
 
 ## Créer un contexte
 
@@ -61,7 +61,7 @@ La continuation exige une session connue, un processus et son groupe effectiveme
 
 ## Données et limites
 
-L’état SQLite et les verrous sont locaux et privés (dossier 0700, fichiers 0600). La demande est identifiée par son empreinte ; sa réponse est conservée dans l’état privé. Codex conserve aussi la conversation nécessaire à la reprise dans son propre stockage. Ne pas publier ces données ni les inclure dans un dépôt. Le programme ne lit ni ne copie les fichiers d’authentification.
+L’état SQLite et les verrous sont locaux et privés (dossier 0700, fichiers 0600). La demande est identifiée par son empreinte ; sa réponse est conservée dans l’état privé. Codex conserve aussi la conversation nécessaire à la reprise dans son propre stockage. Ne pas publier ces données ni les inclure dans un dépôt. Le programme ne lit ni ne copie les fichiers d’authentification Codex. Le mode contexte lit le fichier de connexion MCP du propriétaire pour contacter le board ; son jeton ne rejoint jamais le prompt ou le cache de sources.
 
 Les tests automatiques utilisent de faux exécutables. Ils vérifient la reprise, les doublons, les accès concurrents, l’annulation, les erreurs et les coupures. Les preuves réelles, lorsqu’elles sont présentes dans `docs/`, portent seulement sur l’installation personnelle testée. Le second compte, l’hébergement partagé, le renouvellement de connexion et le raccordement aux permissions et événements du board restent à valider.
 

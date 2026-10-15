@@ -30,6 +30,11 @@ def configure_parser(parser):
     turn.add_argument('--prompt-file', required=True, type=Path)
     turn.add_argument('--timeout', type=float, default=120)
     turn.add_argument('--output-text', type=Path, help='Écrire explicitement la réponse privée dans ce fichier.')
+    turn.add_argument('--context-state', type=Path)
+    turn.add_argument('--context-key')
+    turn.add_argument('--context-fingerprint')
+    turn.add_argument('--board-connection', type=Path)
+    turn.add_argument('--board-session')
     for command in ('status', 'cancel', 'resolve'):
         child = commands.add_parser(command)
         child.add_argument('--work', required=True)
@@ -58,6 +63,10 @@ def _write_private(path: Path, value: str):
 
 
 def run(args):
+    from .board_reader import BoardReadError
+    from .context import ContextError
+    from .context_cache import ContextCache, ContextCacheError
+    from .context_cli import verified_context, render_prompt
     store = None
     try:
         store = RunStore(args.state)
@@ -90,6 +99,17 @@ def run(args):
             if not raw or len(raw) > 65536:
                 raise ValueError('invalid_prompt_size')
             prompt = raw.decode('utf-8', 'strict')
+            context_args = (args.context_state, args.context_key, args.context_fingerprint,
+                            args.board_connection, args.board_session)
+            if any(v is not None for v in context_args):
+                if not all(v is not None for v in context_args):
+                    raise ContextCacheError('incomplete_context_arguments')
+                work = store.get_work(args.work)
+                scope = {k: work[k] for k in ('owner_id', 'agent_id', 'project_id', 'ticket_id')}
+                with ContextCache(args.context_state) as cache:
+                    artifact = verified_context(cache, args.context_key, args.context_fingerprint,
+                                                args.board_connection, args.board_session, scope)
+                prompt = render_prompt(artifact, prompt)
             cancelled = threading.Event()
             previous = {}
             # Signals only request cancellation; the transport stops its own
@@ -109,7 +129,7 @@ def run(args):
             return 0 if output['status'] == 'completed' else 2
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
-    except StoreError as error:
+    except (StoreError, ContextCacheError, ContextError, BoardReadError) as error:
         print(json.dumps({'status': 'blocked', 'reason': error.code}))
         return 2
     except (OSError, ValueError):

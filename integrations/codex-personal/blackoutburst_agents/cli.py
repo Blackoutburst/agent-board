@@ -39,6 +39,8 @@ def main(argv=None) -> int:
     subs = parser.add_subparsers(dest="command", required=True)
     from .runner_cli import configure_parser, run as run_runner
     configure_parser(subs.add_parser('runner', help='Exécutant personnel local, sans listener du board.'))
+    from .context_cli import configure_parser as configure_context, run as run_context
+    configure_context(subs.add_parser('context', help='Préparer et inspecter les sources d’un ticket.'))
     for command, help_text in (
         ("doctor", "Vérifier l’installation et le mode de connexion, sans appel de modèle."),
         ("probe", "Tester une réponse minimale ; consomme une petite part de l’abonnement."),
@@ -52,6 +54,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == 'runner':
         return run_runner(args)
+    if args.command == 'context':
+        return run_context(args)
     executable = args.codex or shutil.which("codex")
     if not executable:
         print(json.dumps({"status": "blocked", "reason": "codex_not_installed"}))

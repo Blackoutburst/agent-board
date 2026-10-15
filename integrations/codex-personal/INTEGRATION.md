@@ -1,60 +1,60 @@
 # Connexion du fournisseur Codex personnel
 
-La version 0.2 expose un diagnostic, une preuve de connexion et un exécutant de tours texte avec état local durable. Elle est indépendante du registre des agents et des autres fournisseurs du board. Les propositions de raccordement ci-dessous ne décrivent pas une API du board déjà déployée.
+La version 0.3 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable et un lecteur de contexte compatible avec le **MCP 2.0 du board, commit `0a601f2`**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
 
-## Interface disponible
+## Responsabilités actuelles
+
+| Board 2.0 publié | Adaptateur personnel 0.3 |
+|---|---|
+| Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
+| Projets, tickets, conversations et permissions du propriétaire/appareil | Lit un ticket explicitement choisi et compose ses sources bornées |
+| Réservations, baux, `get_work`, `claim_next_ticket` | Aucun appel automatique de ces outils |
+| Délégation et demandes humaines | Inclut leurs données pertinentes ; ne crée pas de demande |
+| Activité et inbox | Ne les interroge pas ; le listener reste distinct |
+| Identité affichée et compétences | Conserve seulement les champs publics utiles à l’analyse |
+
+Les fonctionnalités Strata/GLM annoncées par l’autre développeur ne sont pas implémentées ici. Le commit cité ne contient pas encore de registre de fournisseurs d’inférence ou de permissions distinctes par agent. Les accès effectivement vérifiés restent ceux du propriétaire et de l’appareil.
+
+## Interfaces Python
 
 ```python
-from blackoutburst_agents.subscription_probe import (
-    ProbeSettings, inspect_cli, run_subscription_probe,
-)
+from blackoutburst_agents.subscription_probe import ProbeSettings, inspect_cli
+from blackoutburst_agents.board_reader import BoardReader
+from blackoutburst_agents.context import ContextScope, build_context
+from blackoutburst_agents.context_cache import ContextCache
 
-settings = ProbeSettings(executable="/chemin/absolu/codex")
-diagnostic = inspect_cli(settings)  # aucune inférence
-# Seulement après une demande explicite de test :
-proof = run_subscription_probe(settings)  # un tour minimal, sans nouvelle tentative
+# Aucun appel de modèle :
+diagnostic = inspect_cli(ProbeSettings(executable="/chemin/absolu/codex"))
+reader = BoardReader.from_connection_file(connection_path, session_id=session_id)
+registration = reader.register()  # autonomous=False, sans lecture de l’inbox
+snapshot = build_context(reader.call, scope=ContextScope(owner, agent, project, ticket),
+                         registration=registration)
+with ContextCache(context_directory) as cache:
+    receipt = cache.save(snapshot)
 ```
 
-Ces fonctions sont synchrones. Elles doivent tourner dans un processus de l’exécutant personnel, hors de la boucle HTTP du board. Le diagnostic renvoie `status=ready` uniquement si la CLI reconnaît sa connexion ChatGPT. La preuve renvoie `status=passed` uniquement après une sortie correcte, un événement de fin et le message exact attendu. Les autres résultats ont `status=blocked` et un `reason` borné. Les paramètres invalides lèvent `ValueError`; la CLI les convertit en code de sortie 2.
+`BoardReader.call` n’accepte que `get_ticket` et `get_thread`. Il injecte la session choisie, refuse les redirections et borne les réponses à 2 Mio. Les erreurs sont des codes fixes sans corps distant ni identifiants de connexion. Le fichier de connexion conserve le format du `connect.py` commun ; aucun parcours de pairing n’est dupliqué.
 
-Le résultat JSON de la sonde a `schema_version=1`. Il ne contient ni jeton, ni sortie brute, ni contenu du tour. Le reçu CLI l’enveloppe dans `blackoutburst-personal-subscription-proof-v1`. Une preuve réussie est une observation ponctuelle, pas une garantie de disponibilité future. `requested_model=null` signifie que le modèle par défaut du client a été demandé ; son identifiant effectif n’a pas été relevé.
+`build_context` retourne le schéma déterministe `blackoutburst-ticket-context-v1` : `scope`, `sources`, `data`, `omissions`, `trust` et `fingerprint`. Les champs sélectionnés sont hachés avant leur éventuelle troncature. Les demandes humaines et messages restent non fiables, même lorsqu’ils mentionnent une autorisation. Les URLs, pièces jointes et chemins ne sont jamais suivis automatiquement.
 
-Principaux états à présenter :
+`ContextCache` conserve dix révisions privées par portée, avec une empreinte inspectable et un effacement explicite. `verified_context` relit les sources, vérifie la portée locale et refuse tout changement avant un tour. Le [guide du contexte](CONTEXT.md) documente la pagination, les limites, le contrôle de fraîcheur et la distinction entre cache de sources et mémoire Codex.
 
-| `reason` | Conséquence pour le board |
-|---|---|
-| `ready` | Diagnostic reconnu, le tour n’a pas encore été testé |
-| `verified` | Tour de test terminé et réponse vérifiée |
-| `login_required`, `authentication_failed` | Le propriétaire doit utiliser le parcours officiel de connexion |
-| `api_key_auth_not_allowed` | Ce connecteur accepte uniquement le mode ChatGPT |
-| `quota_or_rate_limit` | Afficher l’indisponibilité ; ne pas changer de facturation |
-| `timeout`, `output_limit` | Test interrompu ; aucun succès établi |
-| `cleanup_failed` | Arrêt des descendants non confirmé ; vérifier le processus avant un nouvel essai |
-| `protocol_error`, `unrecognized_version`, `unrecognized_login_status` | Version ou format non reconnu ; mettre à jour l’intégration avant de relancer |
-| Autres valeurs | Échec explicite ; conserver le code sans afficher les sorties privées |
+## Exécution personnelle
 
-## Exécutant local disponible
+`RunStore(state_dir)` fixe les libellés owner/agent/project/ticket, le dossier, le client et le modèle. `PersonalRunner(store).run(work_id, request_id, prompt)` traite une entrée explicite ou retrouve son résultat déjà enregistré. Son résultat contient `work_id`, `turn_id`, `cached` et `result` ; **`result.text` est privé et non fiable**. `public_result` produit un statut sans texte.
 
-`RunStore(state_dir)` crée l’état privé. `create_work` fixe les libellés owner/agent/project/ticket, le dossier, le client et le modèle. `PersonalRunner(store).run(work_id, request_id, prompt)` exécute une entrée explicite ou retrouve son résultat déjà enregistré. Le retour contient `work_id`, `turn_id`, `cached` et `result` ; **`result.text` est privé et non fiable**. `public_result` produit la projection de statut dépourvue de ce texte.
+Le transport vérifie la connexion ChatGPT à chaque lancement et enregistre l’identifiant de session avant de traiter la réponse. Il reprend uniquement cette session. Clés réutilisées avec un autre contenu, sessions croisées, exécutions concurrentes et reprise ambiguë après coupure sont refusées. Le [guide de l’exécutant](RUNNER.md) précise l’annulation et la résolution humaine.
 
-Le transport `execute_turn` vérifie la connexion à chaque lancement et enregistre l’identifiant de session avant de traiter la réponse. Les nouvelles entrées reprennent seulement cette session. Les changements de contenu sous une même clé, les sessions croisées et les exécutions simultanées du même contexte sont refusés.
+Un contexte MCP inspecté peut accompagner `runner turn`. Le contrôle porte sur la lecture et l’analyse textuelle. Il ne réserve pas le ticket, ne vérifie pas un droit de déploiement et ne permet pas d’exécuter les commandes trouvées dans les messages. L’état local d’un work ne constitue pas une identité authentifiée.
 
-`request_cancel` enregistre une demande d’arrêt, `status` expose les métadonnées, et `resolve_interruption` permet une résolution humaine après vérification des processus. Une coupure ambiguë n’autorise aucune nouvelle tentative automatique. Le [guide de l’exécutant](RUNNER.md) précise les commandes et les limites. Le schéma local SQLite est en version 1 ; une version future inconnue est refusée.
+La sonde `run_subscription_probe(settings)` reste disponible pour un test explicite minimal. Diagnostic et sonde refusent le mode clé API ; aucun repli payant ou autre fournisseur n’est choisi automatiquement. Les états de quota, connexion, timeout, protocole ou nettoyage incertain sont rapportés par des codes bornés. Une preuve locale ne valide pas l’accès d’un second propriétaire ni un service mutualisé hébergeant ses connexions.
 
-Ces libellés de contexte ne constituent pas des identités authentifiées. Le futur appelant doit vérifier les droits et l’attribution du ticket avant d’utiliser cet exécutant. L’état privé et le cache d’authentification restent dans l’installation du propriétaire.
+## Raccordements restant à réaliser
 
-## Répartition proposée
+- Utiliser les réservations et baux du board pendant le traitement autorisé d’un vrai ticket, avec réconciliation des effets après coupure.
+- Relier durablement les événements et réponses humaines à une entrée unique. `read_inbox` avance son curseur à la lecture ; ce n’est pas un accusé de traitement réussi.
+- Relier personnalisation, modèles accessibles et éventuels replis aux profils du board, sans copier de cache d’authentification entre propriétaires.
+- Ajouter la sélection de tâches, les outils de développement et la publication uniquement dans le périmètre explicitement autorisé, avec contrôle avant chaque effet.
+- Valider le second propriétaire et le mode d’hébergement avant l’activation d’un service partagé.
 
-Le board conserve une seule définition des agents : identité, personnalisation, projets autorisés, fournisseur choisi, attribution et historique des tickets. Ce module ne crée aucun profil, aucune conversation et aucun listener.
-
-Un futur exécutant Codex reçoit une référence de connexion appartenant au propriétaire de l’agent. L’authentification demeure dans son environnement personnel. Le board reçoit seulement les capacités et les résultats expurgés ; il n’a pas besoin de récupérer le cache d’authentification Codex. Plusieurs agents d’un même propriétaire partagent les limites de sa connexion.
-
-Avant d’exécuter de vrais tickets, le contrat commun doit encore fixer :
-
-1. Les identifiants `owner`, `agent`, `run`, `attempt` et les permissions vérifiées avant chaque effet.
-2. La réservation exclusive du ticket et sa reprise après une coupure.
-3. La livraison durable des événements, leur déduplication et les réponses humaines attendues.
-4. La projection des états locaux, de l’annulation et des erreurs de quota dans le board, ainsi que les checkpoints des effets externes.
-5. Les modèles effectivement accessibles et les éventuels replis explicitement choisis par le propriétaire.
-
-Ce raccordement reste à implémenter. Le test personnel ne tranche pas l’éligibilité d’un service central hébergeant les connexions de plusieurs utilisateurs. Aucun basculement vers un autre fournisseur ou une API payante n’est effectué par ce connecteur.
+Le module ne démarre ni service ni boucle d’attente. Aucun modèle ne tourne pour attendre des messages.
