@@ -220,11 +220,13 @@ function renderMessages() {
 }
 function messageCard(message) {
   const author = message.author || {};
+  const extraMentions = (message.mention_targets || []).filter(target => !message.body.toLowerCase().includes(`@${target.name.toLowerCase()}`));
   const reply = message.reply_to ? state.threadData.messages.find((item) => String(item.id) === String(message.reply_to)) : null;
   return el("article", { class: `message${new URLSearchParams(location.search).get("message") === String(message.id) ? " highlight" : ""}`, id: `message-${message.id}` }, el("div", { class: `avatar${author.kind === "agent" ? " agent" : ""}`, "aria-hidden": "true" }, author.kind === "agent" ? "CX" : authorLabel(author).slice(0, 2).toUpperCase()),
     el("div", { class: "message-content" }, authorMeta(author, message.created_at), message.reply_to ? el("div", { class: "reply-reference" }, reply ? `Reply to ${authorLabel(reply.author)}: ${reply.body.slice(0, 100)}` : `Reply to message ${message.reply_to}`) : null,
-      el("p", { class: "message-body" }, message.body), message.mentions?.length ? el("p", { class: "mention-line" }, message.mentions.map((owner) => `@${ownerName(owner)}`).join(" ")) : null,
-      message.attachments?.length ? el("div", { class: "attachments" }, message.attachments.map((attachment) => el("a", { class: "attachment", href: safeUrl(attachment.url || `/api/attachments/${encodeURIComponent(attachment.id)}`), download: "" }, `↓ ${attachment.filename} · ${bytes(attachment.size)}`))) : null,
+      el("p", { class: "message-body" }, Conversations.messageBody(message)),
+      extraMentions.length ? el("p", { class: "mention-line" }, extraMentions.map(target => el("span", { class: "mention" }, `@${target.name}`))) : null,
+      message.attachments?.length ? el("div", { class: "attachments" }, message.attachments.map(Conversations.attachment)) : null,
       el("div", { class: "message-actions" }, btn("Reply", () => { const draft = getDraft(); draft.reply = message; renderComposer(); $("message-body").focus(); }))));
 }
 function getDraft() {
@@ -237,14 +239,8 @@ function composer() {
   const body = el("textarea", { id: "message-body", name: "body", placeholder: "Ask a question, request a resource or validation, or reply…", "aria-label": "Message", onInput: (event) => { draft.body = event.target.value; } });
   body.value = draft.body;
   const file = el("input", { class: "file-input", type: "file", name: "files", multiple: "", "aria-label": "Attach files", onChange: (event) => { draft.files = [...event.target.files]; draft.attachments = []; } });
-  const members = state.threadData.thread.participants || state.owners.map((owner) => owner.id || owner.owner_id);
   const form = el("form", { id: "compose", class: "composer" }, draft.reply ? el("div", { class: "reply-banner" }, `Replying to ${authorLabel(draft.reply.author)}`, btn("Cancel reply", () => { draft.reply = null; renderComposer(); }, "quiet")) : null,
-    body, el("div", { class: "mentions" }, el("span", { class: "muted" }, "Mention:"), members.map((owner) => {
-      const id = typeof owner === "string" ? owner : owner.owner_id || owner.id;
-      const checkbox = check(ownerName(id), "mentions", draft.mentions.includes(id), id);
-      checkbox.querySelector("input").addEventListener("change", (event) => { draft.mentions = event.target.checked ? [...draft.mentions, id] : draft.mentions.filter((item) => item !== id); });
-      return checkbox;
-    })), el("div", { class: "compose-tools" }, el("div", {}, file, draft.files.length ? el("div", { class: "small muted" }, draft.files.map((item) => item.name).join(", ")) : el("div", { class: "small muted" }, "Screenshots & documents · Up to 10 MB each")), el("button", { type: "submit", class: "primary" }, "Send message")));
+    Conversations.mentionEditor(body, draft, state.threadId), el("div", { class: "compose-tools" }, el("div", {}, file, draft.files.length ? el("div", { class: "small muted" }, draft.files.map((item) => item.name).join(", ")) : el("div", { class: "small muted" }, "Any file · Up to 10 MB each · Type @ to mention a person or agent")), el("button", { type: "submit", class: "primary" }, "Send message")));
   submit(form, async () => {
     if (!draft.body.trim() && !draft.files.length) throw new Error("Write a message or attach a file first.");
     if (draft.files.some((item) => item.size > 10 * 1024 * 1024)) throw new Error("Each attachment must be 10 MB or smaller.");
@@ -254,7 +250,7 @@ function composer() {
       formData.append("file", draft.files[index]);
       draft.attachments.push(await api(`/threads/${encodeURIComponent(threadId)}/attachments`, { method: "POST", form: formData }));
     }
-    const payload = { body: draft.body.trim(), reply_to: draft.reply?.id || null, mentions: draft.mentions, attachment_ids: draft.attachments.map((item) => item.id) };
+    const payload = { body: draft.body.trim(), reply_to: draft.reply?.id || null, mentions: Conversations.selectedMentions(draft), attachment_ids: draft.attachments.map((item) => item.id) };
     const payloadText = JSON.stringify(payload);
     if (draft.sentPayload && draft.sentPayload !== payloadText) draft.key = idempotencyKey();
     draft.sentPayload = payloadText;

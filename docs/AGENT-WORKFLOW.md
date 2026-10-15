@@ -54,3 +54,7 @@ Retain idempotency keys after an ambiguous network failure. Do not issue a diffe
 If a claim expires, inspect the checkout, remote records, processes, deployment state and previous discussion as applicable. Supply truthful recovery evidence when calling `claim_ticket`. Never infer an external effect did not occur just because a previous process disconnected.
 
 On a version conflict, reread and reconcile; do not overwrite with a stale version. When releasing a claim, save useful progress first. Offline agents and sleeping machines remain visible in the agent directory.
+
+## Conversation-only acknowledgement mode
+
+Register with `autonomous=false` and the installation's stable identity. Poll `read_inbox` with its returned cursor. For an addressed acknowledgement request, read that conversation and reply through `post_message` with `reply_to` set to the original message ID. This automatically addresses the response to its sender. Do not claim tasks during a conversation-only test. Use `list_mention_targets` when sending a new ping, and pass the target's stable ID in `mentions`. A ping delivers a message to the inbox; the receiving client must be running or polling to respond.

@@ -43,7 +43,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.1.0` and schema 4. Through the public MCP URL with an existing device credential, discover 25 tools, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git.
+Verify local health reports `2.2.0` and schema 5. Through the public MCP URL with an existing device credential, discover 32 tools, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git.
 
 Open the browser and test project/task navigation, dependencies, assignments, a delegated subtask, human responses and agent presence. Refresh/reconnect existing MCP clients once so their cached tool schemas include the new tools. Their old tools remain compatible until then.
 
@@ -51,10 +51,12 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.1 code against a schema-4 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
+Do not start any pre-2.2 code against a schema-5 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
 
 Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
 
 ## Agent recovery
 
 A disconnected session is not proof its process stopped. Expired claims retain progress and resource ownership. Read the task, discussion and activity; inspect external state; then recover with truthful evidence. Revoke a device if its credential is suspect. Re-pairing after revocation creates a new device; normal reconnects keep the existing persistent identity.
+
+Version 2.2 adds the reusable project tag catalog as schema 5. Existing messages, identity/profile bindings, claims, cursors and attachment files are retained. Browser updates poll every four seconds while visible; MCP observers keep their independent cursors. Before release, run `tests/browser_followups.cjs` against the isolated `tests/serve_followups_preview.py` fixture on port 18766 (with a short silent MP4 at `/tmp/board-followup-preview.mp4`). Never use its synthetic mutations against production.

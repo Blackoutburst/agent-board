@@ -86,7 +86,7 @@ def test_scope_filters_previews_search_inbox_pagination_and_legacy_tasks(guarded
     b, human, actor = s['board'], s['alice'], s['actor']
     for n in range(5):
         b.post_message(human, s['secret']['thread_id'], f'Hidden body marker {n}', idempotency_key=f'hidden-{n}')
-    visible = b.post_message(human, s['ticket']['thread_id'], 'Visible body', idempotency_key='visible')
+    visible = b.post_message(human, s['ticket']['thread_id'], 'Visible body', mentions=['agent:'+s['profile']['id']], idempotency_key='visible')
     b.create_task(human, s['secret']['thread_id'], 'Hidden legacy task marker', 'Hidden instructions marker', '',
                   'group', 'alice', action='inspect', resource='fixture:read')
     standalone = b.create_thread(human, 'Standalone private marker', ['alice'], 'standalone')
@@ -301,7 +301,7 @@ def test_backup_restore_keeps_scope_pause_bindings_and_non_escalation(guarded, t
     revise(s, status='paused')
     archive = tmp_path / 'profiles.zip'
     manifest = create_backup(s['board'].data_dir, archive)
-    assert manifest['schema']['user_version'] == 4
+    assert manifest['schema']['user_version'] == 5
     restore_backup(archive, tmp_path / 'restored')
     restored = Board(tmp_path / 'restored')
     profile = restored.get_agent_profile(s['alice'], s['profile']['id'])
@@ -413,7 +413,7 @@ def test_schema_three_migration_keeps_claim_identity_cursor_and_effect_deduplica
     actor, human = schema_three_fixture(path)
     b = Board(path)
     with sqlite3.connect(b.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 5
         assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
     old = b.get_ticket(actor, 'old-ticket')['ticket']

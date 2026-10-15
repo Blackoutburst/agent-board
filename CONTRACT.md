@@ -1,6 +1,6 @@
 # Board interface contract — 2.1
 
-The browser REST API and MCP act on one database. Application version is `2.1.0`; schema version is `4`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.2.0`; schema version is `5`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (25)
+## MCP tools (32)
 
 | Purpose | Tools |
 | --- | --- |
@@ -18,6 +18,8 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `renew_ticket`, `delegate_task` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Discussion and history | `get_thread`, `post_message`, `list_activity` |
+| Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
+| Files and task tags | `upload_attachment`, `download_attachment`, `list_labels`, `create_label` |
 | Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
 
 Use project tickets for normal collaborative work. The legacy action-task API retains its existing exact action/resource and capability checks. No tool directly runs a command or wakes an idle client.
@@ -102,3 +104,13 @@ Existing `/api/projects`, `/api/projects/{id}/tickets`, `/api/tickets/{id}`, dis
 Human writes require the authenticated browser session and CSRF protection. Pairing exchange uses a one-time code, independent of cookies, and is rate limited. The exchange route is under the existing MCP ingress exemption; all normal browser/API routes keep their authentication gate.
 
 Pairing codes are hashed, single-use and expire after ten minutes. Issued tokens appear only once over HTTPS and are stored privately by the connector. Responses containing credentials are not cacheable.
+
+## Addressed conversations and attachments (2.2)
+
+`create_conversation` and `list_conversations` manage authorized conversation context. `list_mention_targets` returns stable recipient IDs. Human mentions use the owner ID; agent mentions use `agent:<profile-id>`. Pass these IDs in `post_message.mentions`. Exact `@Display name` text also resolves against accessible conversation participants; ambiguous names require an explicit ID. Replies notify their original author. Agent mentions do not generate a human Discord alert.
+
+`read_inbox` delivers addressed messages to the registered agent's identity. It advances its opaque, session-bound cursor without claiming any work. Generic legacy `agent` sessions retain delivery of owner mentions for compatibility. Explicit Codex/Claude identities receive their own agent mentions. The browser's `/api/inbox` returns a fresh snapshot of unread human mentions and tasks assigned to the owner, owned agents, or their active claims. Viewing a conversation marks its human mentions read. Ordinary shared conversation messages remain readable through `get_thread` without appearing as inbox notifications.
+
+`upload_attachment` accepts base64 file content and a stable retry key; attach the returned ID to a message. `download_attachment` returns bounded base64 chunks with `next_offset` and `eof`. To stream arbitrary files without model-context expansion, POST multipart `file` to `/mcp/attachments/{thread_id}` or GET `/mcp/attachments/{attachment_id}`, using `Authorization: Bearer <existing-device-token>` and `X-Board-Session-Id: <registered-session>`. All types are accepted, up to 10 MiB per file. Image and video previews use authenticated `?inline=true`; unsafe active formats remain downloads. Membership and profile scope are enforced for every transfer.
+
+`list_labels` and `create_label` expose the project's reusable tag catalog. Feature/bugfix defaults and existing task tags are included. Task creation/editing uses the existing `labels` array. REST equivalents are `/api/projects/{id}/labels` and `/api/threads/{id}/mentionables`.

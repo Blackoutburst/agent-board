@@ -176,6 +176,7 @@ fs.mkdirSync(output, { recursive: true });
     const captured = (await api(`/agent-profiles/${created.id}`)).version;
     await api(`/agent-profiles/${created.id}`, { expected_version: captured, description: 'Configuration changed after claim' }, 'PATCH');
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await card(name).locator('details.profile-work > summary').click();
     await card(name).getByRole('button', { name: `Captured configuration v${captured}`, exact: true }).click();
     assert.equal(await dialog().getByLabel('Configuration version', { exact: true }).inputValue(), String(captured));
     await dialog().getByText(`Version ${captured} ·`, { exact: false }).waitFor();

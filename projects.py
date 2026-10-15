@@ -269,6 +269,7 @@ class ProjectsMixin:
             db.execute("UPDATE tickets SET labels=?,required_skills=?,resource=?,assignee_agent_id=? WHERE id=?",
                        (coordination["labels"], coordination["required_skills"], coordination["resource"], assignee_agent_id, ticket_id))
             self._set_dependencies(db, ticket_id, project_id, depends_on or [])
+            self._remember_labels(db, project_id, labels or [])
             db.execute("UPDATE projects SET next_ticket_number=next_ticket_number+1,updated_at=? WHERE id=?", (now, project_id))
             self._remember(db, actor, "create_ticket", idempotency_key, payload, ticket_id)
             self._audit(db, actor, "ticket_created", {"project_id": project_id, "ticket_id": ticket_id, "number": number})
@@ -309,6 +310,8 @@ class ProjectsMixin:
                 _fail("Claim expired; inspect and recover before updating", 409)
             if "depends_on" in changes:
                 self._set_dependencies(db, ticket_id, row["project_id"], changes["depends_on"])
+            if "labels" in changes:
+                self._remember_labels(db, row["project_id"], changes["labels"])
             if "assignee_owner_id" in changes:
                 assigned = self._project_assignee(db, row["project_id"], changes["assignee_owner_id"])
                 if assigned != row["assignee_owner_id"]:

@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
 from profiles import ProfilesMixin, migrate_profiles
+from communication import CommunicationMixin, migrate_communication
 
 
 class BoardError(Exception):
@@ -44,7 +45,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(ProfilesMixin, CoordinationMixin):
+class Board(CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -59,7 +60,7 @@ class Board(ProfilesMixin, CoordinationMixin):
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 4:
+            if version > 5:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -123,6 +124,9 @@ class Board(ProfilesMixin, CoordinationMixin):
             if version < 4:
                 migrate_profiles(db)
                 db.execute("PRAGMA user_version=4")
+            if version < 5:
+                migrate_communication(db)
+                db.execute("PRAGMA user_version=5")
 
     @contextmanager
     def _connection(self):
@@ -459,7 +463,8 @@ class Board(ProfilesMixin, CoordinationMixin):
                 attachments.append(self._attachment(attachment))
         return {"id": row["id"], "thread_id": row["thread_id"], "body": row["body"], "author": _decode(row["author"]),
                 "created_at": row["created_at"], "reply_to": row["reply_to"], "mentions": _decode(row["mentions"]),
-                "attachments": attachments, "url": self.base_url + "/?thread=" + row["thread_id"] + "&message=" + row["id"]}
+                "attachments": attachments, "mention_targets": self._mention_details(db, _decode(row["mentions"])),
+                "url": self.base_url + "/?thread=" + row["thread_id"] + "&message=" + row["id"]}
 
     def get_thread(self, actor, thread_id, before=None, limit=50):
         limit = self._limit(limit)
@@ -496,9 +501,7 @@ class Board(ProfilesMixin, CoordinationMixin):
                 return self._message(db, db.execute("SELECT * FROM messages WHERE id=?", (previous,)).fetchone())
             if reply_to and not db.execute("SELECT id FROM messages WHERE id=? AND thread_id=?", (reply_to, thread_id)).fetchone():
                 raise BoardError("Reply must reference a message in this conversation")
-            for owner_id in mentions:
-                if not db.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND owner_id=?", (thread_id, owner_id)).fetchone():
-                    raise BoardError("Mentions must refer to conversation participants")
+            mentions = self._resolve_mentions(db, actor, thread_id, body, mentions, reply_to)
             for attachment_id in attachment_ids:
                 if not db.execute("SELECT 1 FROM attachments WHERE id=? AND thread_id=?", (attachment_id, thread_id)).fetchone():
                     raise BoardError("Attachment must belong to this conversation")
@@ -516,7 +519,7 @@ class Board(ProfilesMixin, CoordinationMixin):
                 self._audit(db, actor, "ticket_message_posted", {
                     "ticket_id": ticket["id"], "thread_id": thread_id, "message_id": message_id})
             self._queue_notification(db, thread_id, "mention", "mention:" + message_id,
-                                     [owner_id for owner_id in mentions if owner_id != actor["owner_id"]],
+                                     [owner_id for owner_id in mentions if not owner_id.startswith('agent:') and owner_id != actor["owner_id"]],
                                      "Message in " + thread["title"])
             return self._message(db, db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone())
 
@@ -733,14 +736,8 @@ class Board(ProfilesMixin, CoordinationMixin):
                 if not issued:
                     raise BoardError("Cursor was not issued for this session", 400)
                 boundary = issued[0]
-            # Deliver conversation messages, including untargeted announcements. Mentions remain explicit metadata.
-            allowed_threads = [row['thread_id'] for row in db.execute('SELECT thread_id FROM thread_members WHERE owner_id=?', (actor['owner_id'],))
-                               if self._profile_thread_allowed(db, actor, row['thread_id'])]
-            placeholders = ','.join('?' for _ in allowed_threads) or 'NULL'
-            rows = list(db.execute(f"""SELECT x.* FROM messages x JOIN thread_members m ON m.thread_id=x.thread_id
-                WHERE m.owner_id=? AND x.seq>? AND x.thread_id IN ({placeholders}) ORDER BY x.seq LIMIT ?""",
-                (actor['owner_id'], boundary, *allowed_threads, limit)))
-            next_seq = rows[-1]["seq"] if rows else boundary
+            rows = self._addressed_messages(db, actor, boundary=boundary, limit=limit)
+            next_seq = rows[-1]["seq"] if len(rows)==limit else db.execute('SELECT COALESCE(MAX(seq),0) FROM messages').fetchone()[0]
             token = secrets.token_urlsafe(32)
             db.execute("INSERT INTO cursors VALUES(?,?,?)", (_hash(token), reader, next_seq))
             db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader, next_seq))
@@ -762,7 +759,7 @@ class Board(ProfilesMixin, CoordinationMixin):
         return {"id": row["id"], "filename": row["filename"], "size": row["size"], "content_type": row["content_type"],
                 "url": self.base_url + "/api/attachments/" + row["id"]}
 
-    def add_attachment(self, actor, thread_id, filename, content_type, content):
+    def add_attachment(self, actor, thread_id, filename, content_type, content, idempotency_key=""):
         if not isinstance(content, bytes) or len(content) > 10 * 1024 * 1024:
             raise BoardError("Attachments must be at most 10 MiB", 413)
         if not isinstance(filename, str) or not filename or len(filename) > 255:
@@ -778,11 +775,16 @@ class Board(ProfilesMixin, CoordinationMixin):
             with self._tx() as db:
                 actor = self._actor(db, actor, "allow_reply")
                 self._member(db, actor, thread_id)
+                payload={'thread_id':thread_id,'filename':filename,'content_type':content_type,'sha256':hashlib.sha256(content).hexdigest()}
+                previous=self._retry(db,actor,'add_attachment',idempotency_key,payload)
+                if previous:
+                    return self._attachment(db.execute('SELECT * FROM attachments WHERE id=?',(previous,)).fetchone())
                 with path.open("xb") as handle:
                     handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
                 db.execute("INSERT INTO attachments VALUES(?,?,?,?,?,?)", (attachment_id, thread_id, filename, content_type or "application/octet-stream", len(content), time.time()))
+                self._remember(db,actor,'add_attachment',idempotency_key,payload,attachment_id)
                 return self._attachment(db.execute("SELECT * FROM attachments WHERE id=?", (attachment_id,)).fetchone())
         except BaseException:
             path.unlink(missing_ok=True)

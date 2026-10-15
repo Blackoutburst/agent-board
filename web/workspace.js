@@ -35,12 +35,15 @@ const Workspace = (() => {
     workRoute({ page: "projects" }, push);
     const body = frame("Projects", "A shared place for goals, tasks, and the agents doing the work.", [btn("New project", () => projectEditor(), "primary")]);
     const search = field("Find a project", "query", { type: "search", value: state.projectQuery, placeholder: "Search projects…" });
-    const filters = el("form", { class: "project-toolbar" }, search, check("Include archived", "archived", state.includeArchived), el("button", { type: "submit" }, "Search"));
+    const archived = check("Include archived", "archived", state.includeArchived);
+    const filters = el("form", { class: "project-toolbar" }, search, archived);
     const list = el("div", { class: "project-list" }, empty("Loading projects…"));
     body.append(filters, list);
+    let generation = 0, debounce;
     async function refresh() {
+      const current = ++generation;
       const data = await api(`/projects?${new URLSearchParams({ query: state.projectQuery, include_archived: String(state.includeArchived) })}`);
-      if (request !== state.request) return;
+      if (request !== state.request || current !== generation) return;
       state.projects = data;
       list.replaceChildren(...(data.length ? data.map(p => {
         const total = p.ticket_counts.total || 0, done = p.ticket_counts.done || 0;
@@ -55,6 +58,11 @@ const Workspace = (() => {
       }) : [box("Create your first project", "Describe a goal, invite the people involved, and break it into tasks.", btn("New project", () => projectEditor(), "primary"))]));
     }
     submit(filters, async data => { state.projectQuery = String(data.get("query")).trim(); state.includeArchived = data.has("archived"); await refresh(); });
+    search.querySelector('input').addEventListener('input', event => {
+      state.projectQuery = event.target.value.trim(); ++generation; clearTimeout(debounce);
+      debounce = setTimeout(() => refresh().catch(workError), 250);
+    });
+    archived.querySelector('input').addEventListener('change', event => { state.includeArchived = event.target.checked; clearTimeout(debounce); refresh().catch(workError); });
     await refresh();
   }
 
@@ -187,6 +195,16 @@ const Workspace = (() => {
     body.append(el("div", { class: "task-detail-layout" }, main, sidebar));
     renderMessages();
   }
+  function refreshTicket(info) {
+    const compose = $("compose"), focus = document.activeElement;
+    const selection = focus?.selectionStart !== undefined ? [focus.selectionStart, focus.selectionEnd] : null;
+    const scroll = window.scrollY;
+    state.ticket = info.ticket; state.project = info.project;
+    renderTicket(info);
+    if (compose) $("compose").replaceWith(compose);
+    if (focus?.isConnected) { focus.focus({preventScroll:true}); if (selection) focus.setSelectionRange(...selection); }
+    window.scrollTo(0, scroll);
+  }
   const sideSection = (title, ...content) => el("section", {}, el("h2", {}, title), ...content.flat());
   function dependencyLinks(tasks) {
     return tasks.length ? el("ul", { class: "dependency-links" }, tasks.map(t => el("li", {}, el("span", { class: t.status === "done" ? "done" : "muted" }, t.status === "done" ? "✓" : "◉"), workLink(`#${t.number} ${t.title}`, { ticket: t.id })))) : el("p", { class: "muted" }, "None");
@@ -224,8 +242,21 @@ const Workspace = (() => {
     openModal(p ? "Project settings" : "New project", form);
   }
   async function ticketEditor(t, p) {
-    const [allTasks, agentEntries] = await Promise.all([api(`/projects/${workPath(p.id)}/tickets`), api(`/agents?project_id=${workPath(p.id)}`)]);
+    const [allTasks, agentEntries, labels] = await Promise.all([api(`/projects/${workPath(p.id)}/tickets`), api(`/agents?project_id=${workPath(p.id)}`), api(`/projects/${workPath(p.id)}/labels`)]);
     const key = idempotencyKey();
+    const uploaded = [];
+    const file = el('input', {type:'file',multiple:'',name:'task_files','aria-label':'Task attachments'});
+    const tagOptions = el('div',{class:'tag-options'},labels.map(label => check(label.name,'labels',t?.labels?.includes(label.name),label.name)));
+    const tagName = el('input',{name:'new_tag','aria-label':'New tag name',placeholder:'Create a tag…',maxLength:80});
+    const tagColor = el('input',{type:'color',value:'#8250df','aria-label':'Tag color'});
+    const tags = el('fieldset',{class:'tag-picker'},el('legend',{},'Tags'),tagOptions,
+      el('div',{class:'tag-create'},tagName,tagColor,btn('Create tag',guard(async () => {
+        if (!tagName.value.trim()) return;
+        const saved = await api(`/projects/${workPath(p.id)}/labels`,{method:'POST',data:{name:tagName.value.trim(),color:tagColor.value}});
+        const existing = [...tagOptions.querySelectorAll('input')].find(input => input.value.toLowerCase() === saved.name.toLowerCase());
+        if (existing) existing.checked = true; else tagOptions.append(check(saved.name,'labels',true,saved.name));
+        tagName.value = '';
+      }))));
     const who = t?.assignee_agent_id ? "agent:" + t.assignee_agent_id : t?.assignee_owner_id ? "owner:" + t.assignee_owner_id : "";
     const assignable = agentEntries.filter(a => !a.id.startsWith("device:") && (a.status === "active" || !a.status || a.id === t?.assignee_agent_id));
     const agentOptions = assignable.map(a => ["agent:" + a.id, `${a.name}${a.status && a.status !== "active" ? ` (${a.status})` : ""}`]);
@@ -235,13 +266,14 @@ const Workspace = (() => {
     const form = el("form", { class: "work-form" }, field("Task title", "title", { value: t?.title || "", required: true, placeholder: "Describe the result you want" }), field("Description", "description", { type: "textarea", rows: 5, value: t?.description || "" }), field("Acceptance criteria", "acceptance_criteria", { type: "textarea", rows: 3, value: t?.acceptance_criteria || "", placeholder: "What needs to be true when this is complete?" }),
       el("div", { class: "form-row" }, select("Priority", "priority", Object.entries(ticketPriorities), t?.priority || "normal"), select("Assigned to", "assignee", [["", "Any available agent"], ...p.participants.map(id => ["owner:" + id, ownerName(id)]), ...agentOptions], who)),
       t ? select("Status", "status", Object.entries(ticketStatuses), t.status) : null,
-      el("details", { class: "metadata-editor" }, el("summary", {}, "Dependencies, labels & work requirements"), dependencyPicker, field("Labels", "labels", { value: (t?.labels || []).join(", "), placeholder: "backend, ux, documentation" }), field("Required skills", "required_skills", { value: (t?.required_skills || []).join(", "), placeholder: "Optional: python, android" }), field("Shared resource", "resource", { value: t?.resource || "", hint: "Tasks using the same resource cannot run at the same time.", placeholder: "Optional: agent-board:main" })),
+      tags, el('label',{},'Task attachments',file,el('span',{class:'field-hint'},'Any file · Up to 10 MB each · Added to the task discussion')),
+      el("details", { class: "metadata-editor" }, el("summary", {}, "Dependencies & work requirements"), dependencyPicker, field("Required skills", "required_skills", { value: (t?.required_skills || []).join(", "), placeholder: "Optional: python, android" }), field("Shared resource", "resource", { value: t?.resource || "", hint: "Tasks using the same resource cannot run at the same time.", placeholder: "Optional: agent-board:main" })),
       t ? el("details", { class: "metadata-editor", open: t.status === "done" ? "" : null }, el("summary", {}, "Outcome & verification"), field("Outcome", "outcome", { type: "textarea", value: t.outcome }), field("Verification evidence", "evidence", { type: "textarea", value: t.evidence, hint: "Required together with an outcome when marking a task done." })) : null,
       formButtons(t ? "Save task" : "Create task"));
     bindForm(form, async data => {
       const payload = Object.fromEntries(["title", "description", "acceptance_criteria", "priority", "resource"].map(key => [key, String(data.get(key) || "").trim()]));
       const assignee = String(data.get("assignee") || "");
-      Object.assign(payload, { assignee_owner_id: assignee.startsWith("owner:") ? assignee.slice(6) : null, assignee_agent_id: assignee.startsWith("agent:") ? assignee.slice(6) : null, depends_on: data.getAll("depends_on"), labels: csv(data.get("labels")), required_skills: csv(data.get("required_skills")) });
+      Object.assign(payload, { assignee_owner_id: assignee.startsWith("owner:") ? assignee.slice(6) : null, assignee_agent_id: assignee.startsWith("agent:") ? assignee.slice(6) : null, depends_on: data.getAll("depends_on"), labels: data.getAll("labels"), required_skills: csv(data.get("required_skills")) });
       if (t) {
         if (assignee === who) { delete payload.assignee_owner_id; delete payload.assignee_agent_id; }
         Object.assign(payload, { expected_version: t.version, status: data.get("status"), outcome: data.get("outcome"), evidence: data.get("evidence") });
@@ -251,7 +283,13 @@ const Workspace = (() => {
         }
       }
       else payload.idempotency_key = key;
+      if ([...file.files].some(item => item.size > 10*1024*1024)) throw new Error('Each attachment must be 10 MB or smaller.');
       const saved = await api(t ? `/tickets/${workPath(t.id)}` : `/projects/${workPath(p.id)}/tickets`, { method: t ? "PATCH" : "POST", data: payload });
+      for (let index = uploaded.length; index < file.files.length; index++) {
+        const formData = new FormData(); formData.append('file',file.files[index]);
+        uploaded.push(await api(`/threads/${workPath(saved.thread_id)}/attachments`,{method:'POST',form:formData}));
+      }
+      if (uploaded.length) await api(`/threads/${workPath(saved.thread_id)}/messages`,{method:'POST',data:{body:'Task attachments',attachment_ids:uploaded.map(item=>item.id),idempotency_key:key+'-attachments'}});
       closeModal(); await ticket(saved.id); notify(t ? "Task updated." : "Task created.");
     });
     openModal(t ? `Edit task #${t.number}` : "New task", form);
@@ -353,7 +391,7 @@ const Workspace = (() => {
         p.legacy ? badge("Existing installation") : null),
       el("p", { class: "small muted" }, `${p.project_ids === null ? "Existing account project scope" : `${(p.project_ids || []).length} followed project${p.project_ids?.length === 1 ? "" : "s"}`} · ${(p.bindings || []).filter(b => !b.revoked).length} connected executor${p.bindings?.filter(b => !b.revoked).length === 1 ? "" : "s"}`));
     const work = p.active_work || [];
-    card.append(el("section", { class: "profile-work", "aria-label": "Current work" }, el("h3", {}, "Current work"),
+    card.append(el("details", { class: "profile-work", "aria-label": "Current work" }, el("summary", {}, `Current work (${work.length})`),
       work.length ? work.map(item => el("div", { class: "profile-work-item" },
         item.kind === "ticket" ? workLink(item.title, { ticket: item.id }) : el("span", {}, item.title),
         el("span", { class: "small muted" }, ticketStatuses[item.status] || item.status),
@@ -621,27 +659,26 @@ const Workspace = (() => {
   }
   async function inbox() {
     const request = ++state.request; navigate("inbox"); workRoute({ page: "inbox" });
-    const body = frame("Inbox", "Ready work, mentions, and conversations across your projects.", [btn("Refresh", guard(inbox))]);
-    const data = await api(`/inbox${state.inboxCursor ? '?cursor='+workPath(state.inboxCursor) : ''}`);
-    if (request !== state.request) return;
-    state.inboxCursor = data.cursor;
-    const messages = new Map(state.inboxMessages.map(m => [m.id, m]));
-    data.messages.forEach(m => messages.set(m.id, m));
-    state.inboxMessages = [...messages.values()].sort((a,b) => b.created_at-a.created_at);
-    const ready = data.work?.ready || [];
-    body.append(panel("Ready work", ready.length ? el("div", { class: "issue-list" }, ready.map(taskRow)) : box("No ready work", "Tasks will appear here when their prerequisites are satisfied.")));
-    const discussions = state.inboxMessages.map(message => {
+    const body = frame("Inbox", "Tasks assigned to you and unread messages that mention you.");
+    body.append(el("div", {id:"inbox-content"}, empty("Loading…")));
+    const data = await api("/inbox");
+    if (request === state.request) renderInbox(data);
+    await refreshRequestCount();
+  }
+  function renderInbox(data) {
+    const container = $("inbox-content"); if (!container) return;
+    const discussions = data.messages.map(message => {
       const item = btn("", guard(() => openThread(message.thread_id)), "inbox-message");
-      item.append(authorMeta(message.author, message.created_at), el("p", { class: "prose" }, message.body));
-      if (message.mentions?.includes(state.actor.owner_id)) item.append(badge("Mentioned you", "status-running"));
+      item.append(authorMeta(message.author, message.created_at), el("p", {class:"prose"}, message.body), badge("Mentioned you", "status-running"));
       return item;
     });
-    body.append(panel("Discussions", discussions.length ? discussions : box("No new discussions", "Project conversations and mentions will appear here.")));
-    if (data.tasks.length) body.append(panel("Legacy action requests", data.tasks.map(taskCard)));
-    await refreshRequestCount();
+    container.replaceChildren(
+      panel("Assigned to you", data.tickets.length ? el("div", {class:"issue-list"}, data.tickets.map(taskRow)) : box("No assigned tasks", "Tasks assigned to you or your agents will appear here.")),
+      panel("Unread mentions", discussions.length ? discussions : box("No unread mentions", "You are all caught up.")),
+      ...(data.tasks.length ? [panel("Action requests", data.tasks.map(taskCard))] : []));
   }
   $("agents-nav").addEventListener("click", guard(agents));
   $("requests-nav").addEventListener("click", guard(requests));
   $("guide-link").addEventListener("click", event => { event.preventDefault(); guard(setup)(); });
-  return { projects, project, ticket, renderTicket, projectEditor, ticketEditor, agents, requests, setup, settings, inbox, refreshRequestCount };
+  return { projects, project, ticket, renderTicket, refreshTicket, renderInbox, projectEditor, ticketEditor, agents, requests, setup, settings, inbox, refreshRequestCount };
 })();
