@@ -424,19 +424,39 @@ class CoordinationMixin(ProjectsMixin):
                 self._project_member(db, actor, project_id)
             return self._list_requests_tx(db, actor, project_id, include_resolved)
 
-    def request_human_input(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question'):
+    def _human_request_retry(self, db, actor, ticket_id, owner_id, question, idempotency_key, kind):
         _text(question, 'question', 1, 20000)
         _text(idempotency_key, 'idempotency_key', 1, 200)
         if kind not in ('question', 'action', 'approval'):
             _fail('kind must be question, action, or approval')
+        actor = self._actor(db, actor, 'allow_requests')
+        row = self._ticket_member(db, actor, ticket_id)
+        self._project_assignee(db, row['project_id'], owner_id)
+        payload = {'ticket_id': ticket_id, 'owner_id': owner_id, 'question': question, 'kind': kind}
+        previous = self._retry(db, actor, 'request_human_input', idempotency_key, payload)
+        return actor, row, payload, previous
+
+    def lookup_human_request(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question'):
+        """Reconcile an exact attempted request without creating or claiming work."""
+        with self._connection() as db:
+            _, _, _, previous = self._human_request_retry(
+                db, actor, ticket_id, owner_id, question, idempotency_key, kind)
+            if not previous:
+                return {'found': False}
+            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (previous,)).fetchone())
+
+    def request_human_input(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question', expected_version=None):
+        if expected_version is not None:
+            _version(expected_version)
         with self._tx() as db:
-            actor = self._actor(db, actor, 'allow_requests')
-            row = self._ticket_member(db, actor, ticket_id)
-            self._project_assignee(db, row['project_id'], owner_id)
-            payload = {'ticket_id': ticket_id, 'owner_id': owner_id, 'question': question, 'kind': kind}
-            previous = self._retry(db, actor, 'request_human_input', idempotency_key, payload)
+            actor, row, payload, previous = self._human_request_retry(
+                db, actor, ticket_id, owner_id, question, idempotency_key, kind)
             if previous:
                 return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (previous,)).fetchone())
+            # Compare in the same transaction as the handoff, after successful
+            # retries have been reconciled even if the ticket has advanced.
+            if expected_version is not None and row['version'] != expected_version:
+                _fail('Task version conflict; refresh before requesting human input', 409)
             if row['status'] == 'done':
                 _fail('Reopen the task before requesting input', 409)
             if actor['kind'] == 'agent' and not _same_claim(json.loads(row['claimant']) if row['claimant'] else None, actor):

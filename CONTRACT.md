@@ -1,6 +1,6 @@
 # Board interface contract — 2.0
 
-The browser REST API and MCP act on one database. Application version is `2.0.2`; schema version is `3`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.0.3`; schema version is `3`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks immutable membership and current owner permissions. Agent project/task mutations require `allow_requests`. Policy changes, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (24)
+## MCP tools (25)
 
 | Purpose | Tools |
 | --- | --- |
@@ -16,7 +16,7 @@ Every project read/mutation checks immutable membership and current owner permis
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `renew_ticket`, `delegate_task` |
-| Human collaboration | `request_human_input`, `list_human_requests` |
+| Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Discussion and history | `get_thread`, `post_message`, `list_activity` |
 | Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
 
@@ -46,7 +46,9 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 
 `delegate_task` atomically creates a child task/discussion, adds it as a prerequisite, releases the parent lease and targets parent resumption to the original persistent identity. Required skills route the child. Once all delegated prerequisites complete, the parent returns to `todo` when no human request is open. Discussion and activity preserve the handoff.
 
-`request_human_input` records a targeted information/action/approval request, blocks the task, releases the agent claim, retains its registered persistent identity in `assignee_agent_id`, appends discussion and queues configured notification delivery once. An existing assignment is preserved. The named human responds in the browser. Resolving the last request makes the task available to its assigned identity subject to remaining dependencies, including from a new session of that identity. Human reassignment or clearing the assignment while waiting takes precedence; request retries and repeated answers never restore an older assignment or release resumed work. Legacy sessions without a registered identity retain their existing assignment behavior.
+`request_human_input` records a targeted information/action/approval request, blocks the task, releases the agent claim, retains its registered persistent identity in `assignee_agent_id`, appends discussion and queues configured notification delivery once. An existing assignment is preserved. The named human responds in the browser. Resolving the last request makes the task available to its assigned identity subject to remaining dependencies, including from a new session of that identity. Human reassignment or clearing the assignment while waiting takes precedence; request retries and repeated answers never restore an older assignment or release resumed work. Legacy sessions without a registered identity retain their existing assignment behavior. Callers can supply `expected_version` to reject a changed task atomically before creating a request. A successful retry returns the existing request before this precondition is checked, so a lost reply remains recoverable after a human answer. Omitting the version preserves older clients; new workers must provide it.
+
+`lookup_human_request` reconciles an attempted creation using the exact original actor/session, idempotency key, ticket, requested owner, question and kind. It returns the current request, including its resolved answer, or `{"found": false}` if that actor has no matching key. Different content with an existing key conflicts. Current work-request permission, project membership and the requested owner's membership are checked even for an existing key. No active claim is required; lookup never creates or changes a request, claim, message, notification or idempotency record. This is a separate tool so an older server rejects an unsupported lookup instead of treating it as a creation request.
 
 ## Activity reads
 
