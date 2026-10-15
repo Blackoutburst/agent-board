@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-15",
+  "adapter_version": "0.5.0",
+  "board_version": "2.0.2",
+  "first_status": "idle",
+  "first_reason": "no_pending_events",
+  "first_ingested_count": 4,
+  "first_pages": 1,
+  "second_status": "idle",
+  "second_ingested_count": 0,
+  "cursor_preserved": true,
+  "worker_constructed": false,
+  "model_calls": 0,
+  "execute_requested": false,
+  "limitations": [
+    "Read-only production check; execution and fault paths tested with synthetic local data."
+  ],
+  "passed": true
+}

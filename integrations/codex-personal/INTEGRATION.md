@@ -1,16 +1,16 @@
 # Connexion du fournisseur Codex personnel
 
-La version 0.4 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
+La version 0.5 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
 
 ## Responsabilités actuelles
 
-| Board 2.0 publié | Adaptateur personnel 0.4 |
+| Board 2.0 publié | Adaptateur personnel 0.5 |
 |---|---|
 | Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
 | Projets, tickets, conversations et permissions du propriétaire/appareil | Lit un ticket explicitement choisi et compose ses sources bornées |
 | Réservations, baux, `get_work`, `claim_next_ticket` | `worker` réserve seulement un ticket explicitement choisi ; aucune sélection automatique |
 | Délégation et demandes humaines | Inclut leurs données pertinentes ; ne crée pas de demande |
-| Activité et inbox | Ne les interroge pas ; le listener reste distinct |
+| Activité et inbox | `events drain` lit l’activité ascendante d’un ticket et journalise ses lots ; il ne lit pas l’inbox et ne démarre pas de listener |
 | Identité affichée et compétences | Conserve seulement les champs publics utiles à l’analyse |
 
 Les fonctionnalités Strata/GLM annoncées par l’autre développeur ne sont pas implémentées ici. Le commit cité ne contient pas encore de registre de fournisseurs d’inférence ou de permissions distinctes par agent. Les accès effectivement vérifiés restent ceux du propriétaire et de l’appareil.
@@ -56,7 +56,7 @@ La sonde `run_subscription_probe(settings)` reste disponible pour un test explic
 ## Raccordements restant à réaliser
 
 - Étendre le traitement textuel explicite aux outils de développement autorisés et aux baux longs, sans affaiblir la réconciliation des effets après coupure.
-- Relier durablement les événements et réponses humaines à une entrée unique. `read_inbox` avance son curseur à la lecture ; ce n’est pas un accusé de traitement réussi.
+- Étendre le drain ponctuel des événements d’un ticket aux réveils distants et aux autres sources autorisées. `read_inbox` avance son curseur à la lecture ; ce n’est pas un accusé de traitement réussi.
 - Relier personnalisation, modèles accessibles et éventuels replis aux profils du board, sans copier de cache d’authentification entre propriétaires.
 - Ajouter la sélection de tâches, les outils de développement et la publication uniquement dans le périmètre explicitement autorisé, avec contrôle avant chaque effet.
 - Valider le second propriétaire et le mode d’hébergement avant l’activation d’un service partagé.
