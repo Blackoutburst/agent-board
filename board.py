@@ -496,6 +496,14 @@ class Board(CoordinationMixin):
                        (message_id, thread_id, body, _json(self._author(db, actor)), now, reply_to, _json(mentions), _json(attachment_ids)))
             db.execute("UPDATE threads SET updated_at=? WHERE id=?", (now, thread_id))
             self._remember(db, actor, "post_message", idempotency_key, payload, message_id)
+            # A discussion message and its ticket event commit together. The
+            # retry above returns before this append, so replaying an accepted
+            # post never creates a second event. Standalone threads stay out of
+            # ticket activity; payloads contain references, never message text.
+            ticket = db.execute("SELECT id FROM tickets WHERE thread_id=?", (thread_id,)).fetchone()
+            if ticket:
+                self._audit(db, actor, "ticket_message_posted", {
+                    "ticket_id": ticket["id"], "thread_id": thread_id, "message_id": message_id})
             self._queue_notification(db, thread_id, "mention", "mention:" + message_id,
                                      [owner_id for owner_id in mentions if owner_id != actor["owner_id"]],
                                      "Message in " + thread["title"])

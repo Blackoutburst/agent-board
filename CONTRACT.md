@@ -52,6 +52,27 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 
 `list_activity` and `GET /api/activity` accept `order="asc"|"desc"` (default `"desc"`), an exclusive nonnegative `after` event ID, and `limit` from 1 to 200. The response remains an array. Default descending order preserves the newest-first history UI. Incremental consumers must explicitly select ascending order and save the last durably processed event ID before requesting the next page. Use the same project/task filter and authenticated scope for that position; replay the saved position and deduplicate IDs after an interruption. IDs need not be consecutive. Ascending pages include later insertions without skipping the earlier unread backlog; descending pages are not suitable for this cursor algorithm. Neither read acknowledges processing or claims work. Current project membership and owner read policy are checked on every request.
 
+
+Messages accepted through `post_message` in a ticket's discussion now append
+`ticket_message_posted` in the same transaction as the message. Its `detail`
+contains only `ticket_id`, `thread_id` and `message_id`; read the authorized
+thread to obtain message content. The existing activity `actor` identifies the
+human or the persistent agent, device and session that posted it. Consumers can
+ignore agent-authored messages to avoid response loops. A retry with the same
+accepted post idempotency key returns the same message without another event.
+Standalone conversations produce no ticket activity. Posting a message does not
+change the ticket version, status, assignment or claim.
+
+This message coverage is **prospective from deployment of this change**. Existing
+messages are not backfilled. A consumer that needs earlier discussion must
+explicitly bootstrap it with authorized `get_thread` pagination. Structured
+human requests, their resolutions and delegation retain their existing semantic
+activity events; their generated discussion messages do not gain a second
+message event. Project updates, policy changes and device revocations are not
+part of this ticket event stream; consumers must still check current scope and
+permissions before work. This change neither starts a listener nor authorizes
+work from message text.
+
 ## REST
 
 Existing `/api/projects`, `/api/projects/{id}/tickets`, `/api/tickets/{id}`, discussion, inbox and settings routes remain. New routes include:
