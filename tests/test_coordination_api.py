@@ -73,4 +73,53 @@ def test_no_anonymous_private_metadata_and_static_assets(browser):
     assert client.get('/workspace.js').status_code==200
     assert client.get('/connect.py').status_code==200
     health=client.get('/health').json()
-    assert health['version']=='2.0.0' and health['schema_version']==3
+    assert health['version']=='2.0.1' and health['schema_version']==3
+
+
+def test_activity_order_is_available_through_rest_and_mcp(browser):
+    client,board=browser
+    human={'kind':'human','owner_id':'blackoutburst'}
+    project=board.create_project(human,'Activity',['blackoutburst'],idempotency_key='activity')
+    task=board.create_ticket(human,project['id'],'Task',idempotency_key='task')
+    for number in range(3):
+        task=board.update_ticket(human,task['id'],task['version'],description=f'Update {number}')
+    params={'project_id':project['id'],'limit':2,'order':'asc'}
+    first=client.get('/api/activity',params=params).json()
+    second=client.get('/api/activity',params={**params,'after':first[-1]['id']}).json()
+    ids=[event['id'] for event in first+second]
+    assert len(ids)==4 and ids==sorted(set(ids))
+    newest=client.get('/api/activity',params={'project_id':project['id'],'limit':2}).json()
+    assert [event['id'] for event in newest]==list(reversed(ids[-2:]))
+    assert client.get('/api/activity',params={'order':'unsupported'}).status_code==422
+
+    token=board.create_device(human,'Activity reader',[])['token']
+    rpc(client,token,'register_agent',{'session_id':'activity-reader','label':'Reader','agent_kind':'codex'})
+    def activity(arguments):
+        result=rpc(client,token,'list_activity',{'session_id':'activity-reader',**arguments})
+        return result['result'] if isinstance(result,dict) else result
+    assert activity(params)==first
+    assert activity({**params,'after':first[-1]['id']})==second
+    assert activity({'project_id':project['id'],'limit':2})==newest
+    rejected=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},json={
+        'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'list_activity',
+        'arguments':{'session_id':'activity-reader','order':'unsupported'}}})
+    assert rejected.status_code==200 and rejected.json()['result']['isError']
+
+
+def test_mcp_human_request_pins_identity_after_browser_answer(browser):
+    client,board=browser
+    human={'kind':'human','owner_id':'blackoutburst'}
+    project=board.create_project(human,'Handoff',['blackoutburst'],idempotency_key='handoff')
+    task=board.create_ticket(human,project['id'],'Task',idempotency_key='task')
+    token=board.create_device(human,'Worker',[])['token']
+    registration=rpc(client,token,'register_agent',{'session_id':'original','label':'Original','agent_kind':'codex','identity_key':'worker'})
+    rpc(client,token,'claim_ticket',{'session_id':'original','ticket_id':task['id'],'expected_version':task['version']})
+    request=rpc(client,token,'request_human_input',{'session_id':'original','ticket_id':task['id'],
+        'owner_id':'blackoutburst','question':'Which value?','idempotency_key':'question'})
+    pinned=client.get('/api/tickets/'+task['id']).json()['ticket']
+    assert pinned['assignee_agent_id']==registration['identity']['id'] and pinned['claimant'] is None
+    assert client.post('/api/human-requests/'+request['id']+'/resolve',json={'answer':'Chosen value'}).status_code==200
+    rpc(client,token,'register_agent',{'session_id':'restart','label':'Restart','agent_kind':'codex','identity_key':'worker','autonomous':True})
+    resumed=rpc(client,token,'claim_next_ticket',{'session_id':'restart','project_id':project['id'],'idempotency_key':'resume'})['ticket']
+    assert resumed['claimant']['agent_id']==registration['identity']['id']
+    assert resumed['claimant']['session_id']=='restart'

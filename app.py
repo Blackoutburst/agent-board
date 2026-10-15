@@ -473,7 +473,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @mcp.tool()
     async def request_human_input(session_id: str, ticket_id: str, owner_id: str, question: str,
                                   idempotency_key: str, kind: Literal["question", "action", "approval"] = "question") -> dict:
-        """Ask a project human for specific information, an action or approval. Requires your active task claim. Records the request/discussion, blocks the task, releases the work lease, and queues a targeted human alert. Never include credentials."""
+        """Ask a project human for specific information, an action or approval. Requires your active task claim. Records the request/discussion, blocks the task, releases the work lease while retaining your persistent identity for resumption, and queues a targeted human alert. Later human reassignment takes precedence. Never include credentials."""
         return board.request_human_input(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind)
 
     @mcp.tool()
@@ -482,9 +482,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.list_human_requests(session_actor(session_id), project_id, include_resolved)
 
     @mcp.tool()
-    async def list_activity(session_id: str, project_id: str = "", ticket_id: str = "", after: int = 0, limit: int = 50) -> list[dict]:
-        """Read a project's or task's durable activity with precise human/agent/session attribution. Use event IDs for incremental polling. Does not claim work or change its state."""
-        return board.list_activity(session_actor(session_id), project_id, ticket_id, after, limit)
+    async def list_activity(session_id: str, project_id: str = "", ticket_id: str = "", after: int = 0, limit: int = 50,
+                            order: Literal["asc", "desc"] = "desc") -> list[dict]:
+        """Read durable activity with precise human/agent/session attribution. History defaults to newest first. For incremental polling use order='asc', drain pages, and advance after to the last durably processed event ID. Reuse after on retry; gaps in IDs are normal. Reading is not a processing acknowledgement and never claims work."""
+        return board.list_activity(session_actor(session_id), project_id, ticket_id, after, limit, order)
 
     mcp_app = mcp.streamable_http_app()
 
@@ -547,7 +548,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.0.0", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
+        return {"status": "ok", "version": "2.0.1", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -723,8 +724,9 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.resolve_human_request(actor, request_id, values.answer)
 
     @app.get("/api/activity")
-    async def activity(project_id: str = "", ticket_id: str = "", after: int = 0, limit: int = 50, actor=Depends(human)):
-        return board.list_activity(actor, project_id, ticket_id, after, limit)
+    async def activity(project_id: str = "", ticket_id: str = "", after: int = 0, limit: int = 50,
+                       order: Literal["asc", "desc"] = "desc", actor=Depends(human)):
+        return board.list_activity(actor, project_id, ticket_id, after, limit, order)
 
     @app.post("/api/tickets/{ticket_id}/delegate")
     async def delegate(ticket_id: str, values: Delegation, actor=Depends(human)):

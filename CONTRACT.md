@@ -1,6 +1,6 @@
 # Board interface contract — 2.0
 
-The browser REST API and MCP act on one database. Application version is `2.0.0`; schema version is `3`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.0.1`; schema version is `3`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -46,7 +46,11 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 
 `delegate_task` atomically creates a child task/discussion, adds it as a prerequisite, releases the parent lease and targets parent resumption to the original persistent identity. Required skills route the child. Once all delegated prerequisites complete, the parent returns to `todo` when no human request is open. Discussion and activity preserve the handoff.
 
-`request_human_input` records a targeted information/action/approval request, blocks the task, releases the agent claim, appends discussion and queues configured notification delivery once. The named human responds in the browser. Resolving the last request makes the task available subject to its remaining dependencies.
+`request_human_input` records a targeted information/action/approval request, blocks the task, releases the agent claim, retains its registered persistent identity in `assignee_agent_id`, appends discussion and queues configured notification delivery once. An existing assignment is preserved. The named human responds in the browser. Resolving the last request makes the task available to its assigned identity subject to remaining dependencies, including from a new session of that identity. Human reassignment or clearing the assignment while waiting takes precedence; request retries and repeated answers never restore an older assignment or release resumed work. Legacy sessions without a registered identity retain their existing assignment behavior.
+
+## Activity reads
+
+`list_activity` and `GET /api/activity` accept `order="asc"|"desc"` (default `"desc"`), an exclusive nonnegative `after` event ID, and `limit` from 1 to 200. The response remains an array. Default descending order preserves the newest-first history UI. Incremental consumers must explicitly select ascending order and save the last durably processed event ID before requesting the next page. Use the same project/task filter and authenticated scope for that position; replay the saved position and deduplicate IDs after an interruption. IDs need not be consecutive. Ascending pages include later insertions without skipping the earlier unread backlog; descending pages are not suitable for this cursor algorithm. Neither read acknowledges processing or claims work. Current project membership and owner read policy are checked on every request.
 
 ## REST
 
