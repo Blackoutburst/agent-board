@@ -2,7 +2,10 @@ import importlib.util
 import json
 from pathlib import Path
 import stat
-import tomli
+try:
+    import tomllib as tomli
+except ModuleNotFoundError:  # Python 3.10
+    import tomli
 
 
 spec=importlib.util.spec_from_file_location('board_connector',Path(__file__).parents[1]/'connect.py')

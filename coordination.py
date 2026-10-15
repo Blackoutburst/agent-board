@@ -448,8 +448,13 @@ class CoordinationMixin(ProjectsMixin):
             db.execute('INSERT INTO human_requests(id,ticket_id,owner_id,question,kind,requested_by,created_at) VALUES(?,?,?,?,?,?,?)',
                 (request_id, ticket_id, owner_id, question.strip(), kind, _json(author), now))
             self._discussion_event(db, actor, row['thread_id'], f'Human {kind} requested: {question}', [owner_id])
+            # Release the precise session's lease but retain the persistent
+            # worker as the resumption target. Later human reassignment wins;
+            # resolving/retrying the request never restores this assignment.
+            agent_id = author.get('agent_id') if actor['kind'] == 'agent' else None
             db.execute("""UPDATE tickets SET status='blocked',claimant=NULL,claim_started_version=NULL,
-                lease_expires_at=NULL,version=version+1,updated_at=? WHERE id=?""", (now, ticket_id))
+                assignee_agent_id=COALESCE(assignee_agent_id,?),
+                lease_expires_at=NULL,version=version+1,updated_at=? WHERE id=?""", (agent_id, now, ticket_id))
             self._remember(db, actor, 'request_human_input', idempotency_key, payload, request_id)
             self._audit(db, actor, 'human_input_requested', {'ticket_id': ticket_id, 'request_id': request_id, 'owner_id': owner_id})
             self._queue_notification(db, row['thread_id'], 'needs_input', 'human-request:'+request_id, [owner_id], row['title'])
@@ -482,20 +487,26 @@ class CoordinationMixin(ProjectsMixin):
             self._audit(db, actor, 'human_input_resolved', {'ticket_id': row['id'], 'request_id': request_id})
             return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone())
 
-    def list_activity(self, actor, project_id='', ticket_id='', after=0, limit=100):
+    def list_activity(self, actor, project_id='', ticket_id='', after=0, limit=100, order='desc'):
         limit = self._limit(limit)
         if type(after) is not int or after < 0:
             _fail('after must be a nonnegative event ID')
+        if order not in ('asc', 'desc'):
+            _fail('order must be asc or desc')
         with self._connection() as db:
             actor = self._actor(db, actor, 'allow_read')
             if project_id:
                 self._project_member(db, actor, project_id)
             if ticket_id:
                 self._ticket_member(db, actor, ticket_id)
-            rows = db.execute("""SELECT e.*,t.number,t.title,t.project_id FROM ticket_events e
+            # The only interpolated value is one of these validated SQL
+            # keywords. Ascending pages drain an incremental backlog without
+            # skipping older events; descending remains the history UI default.
+            direction = 'ASC' if order == 'asc' else 'DESC'
+            rows = db.execute(f"""SELECT e.*,t.number,t.title,t.project_id FROM ticket_events e
                 JOIN tickets t ON t.id=e.ticket_id JOIN project_members m ON m.project_id=t.project_id
                 WHERE m.owner_id=? AND (?='' OR t.project_id=?) AND (?='' OR t.id=?) AND e.id>?
-                ORDER BY e.id DESC LIMIT ?""", (actor['owner_id'], project_id, project_id, ticket_id, ticket_id, after, limit))
+                ORDER BY e.id {direction} LIMIT ?""", (actor['owner_id'], project_id, project_id, ticket_id, ticket_id, after, limit))
             return [{**dict(row), 'actor': json.loads(row['actor']), 'detail': json.loads(row['detail'])} for row in rows]
 
     def delegate_task(self, actor, parent_ticket_id, expected_version, title, description,

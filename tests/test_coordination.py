@@ -156,6 +156,107 @@ def test_human_request_blocks_releases_notifies_and_resumes(space):
     assert {'ticket_created','ticket_claimed','human_input_requested','human_input_resolved'}.issubset({e['event'] for e in events})
 
 
+def test_human_request_resumes_original_identity_in_new_session_once(space):
+    board,human,other,project,first,_,device=space
+    task=new(space)
+    claimed=board.claim_ticket(first,task['id'],task['version'])
+    identity=claimed['claimant']['agent_id']
+    competing_device=board.create_device(human,'Other agent',[])
+    competing_raw=board.authenticate(competing_device['token'])
+    board.register_agent(competing_raw,'competing','Another agent',['python'],'codex',True,'other')
+    competing=board.actor_session(competing_raw,'competing')
+    request=board.request_human_input(first,task['id'],'thescreamer','Which value?','question')
+    waiting=board.get_ticket(human,task['id'])['ticket']
+    assert waiting['assignee_agent_id']==identity
+    assert waiting['claimant'] is None
+
+    board=Board(board.data_dir,base_url=board.base_url)
+    raw=board.authenticate(device['token'])
+    registration=board.register_agent(raw,'restarted','Resumed session',['python'],'codex',True,'installation')
+    restarted=board.actor_session(raw,'restarted')
+    assert registration['identity']['id']==identity
+    board.resolve_human_request(other,request['id'],'Chosen value')
+    assert not board.get_work(competing,project['id'])['ready']
+    resumed=board.claim_next_ticket(restarted,'resume-question',project['id'])['ticket']
+    assert resumed['id']==task['id']
+    assert resumed['claimant']['session_id']=='restarted'
+    assert resumed['claimant']['agent_id']==identity
+
+    # Repeated delivery must neither release the resumed work nor add another
+    # question, answer or resumption event.
+    again=board.request_human_input(first,task['id'],'thescreamer','Which value?','question')
+    assert again['id']==request['id'] and again['status']=='resolved'
+    answer=board.resolve_human_request(other,request['id'],'A duplicate answer')
+    assert answer['answer']=='Chosen value'
+    assert board.get_ticket(human,task['id'])['ticket']['version']==resumed['version']
+    assert board.get_ticket(human,task['id'])['ticket']['claimant']==resumed['claimant']
+    assert len(board.get_thread(human,task['thread_id'])['messages'])==2
+    events=board.list_activity(human,ticket_id=task['id'])
+    assert sum(e['event']=='human_input_resolved' for e in events)==1
+
+
+@pytest.mark.parametrize('clear_assignment',[False,True])
+def test_human_reassignment_during_question_survives_retries_and_answer(space,clear_assignment):
+    board,human,other,project,first,*_=space
+    task=new(space)
+    board.claim_ticket(first,task['id'],task['version'])
+    request=board.request_human_input(first,task['id'],'thescreamer','Which value?','question')
+    raw=board.authenticate(board.create_device(other,'Replacement',[])['token'])
+    replacement=board.register_agent(raw,'replacement','Replacement worker',['python'],'codex',True,'replacement')
+    identity=None if clear_assignment else replacement['identity']['id']
+    waiting=board.get_ticket(human,task['id'])['ticket']
+    changed=board.update_ticket(human,task['id'],waiting['version'],
+                               assignee_owner_id='thescreamer',assignee_agent_id=identity)
+    board.request_human_input(first,task['id'],'thescreamer','Which value?','question')
+    assert board.get_ticket(human,task['id'])['ticket']['version']==changed['version']
+    board.resolve_human_request(other,request['id'],'Chosen value')
+    resolved=board.get_ticket(human,task['id'])['ticket']
+    assert resolved['assignee_owner_id']=='thescreamer'
+    assert resolved['assignee_agent_id']==identity
+    assert not board.get_work(first,project['id'])['ready']
+    worker=board.actor_session(raw,'replacement')
+    assert board.claim_next_ticket(worker,'replacement-claim',project['id'])['ticket']['id']==task['id']
+
+
+def test_activity_incremental_pages_drain_backlog_with_gaps_and_new_events(space):
+    board,human,other,project,*_=space
+    task=new(space)
+    expected=[event['id'] for event in board.list_activity(other,ticket_id=task['id'],order='asc')]
+    private=board.create_project(human,'Private',['blackoutburst'],idempotency_key='private')
+    private_task=board.create_ticket(human,private['id'],'Private task',idempotency_key='private-task')
+
+    def append(count):
+        with board._tx() as db:
+            for number in range(count):
+                board._audit(db,human,'ticket_progress',{'ticket_id':task['id'],'progress':str(number)})
+                expected.append(db.execute('SELECT last_insert_rowid()').fetchone()[0])
+                # Global event IDs have gaps for this reader; the private
+                # event must never become visible just to complete a page.
+                board._audit(db,human,'ticket_progress',{'ticket_id':private_task['id'],'progress':'private'})
+
+    append(207)
+    page=board.list_activity(other,after=0,limit=200,order='asc')
+    assert [event['id'] for event in page]==expected[:200]
+    assert board.list_activity(other,after=0,limit=200,order='asc')==page
+    cursor=page[-1]['id']
+    append(5)  # Another writer commits between page reads.
+    remaining=board.list_activity(other,after=cursor,limit=200,order='asc')
+    assert [event['id'] for event in remaining]==expected[200:]
+    assert all(event['ticket_id']==task['id'] for event in page+remaining)
+    assert board.list_activity(other,after=remaining[-1]['id'],order='asc')==[]
+    assert [event['id'] for event in board.list_activity(other,limit=3)]==list(reversed(expected[-3:]))
+    assert [event['id'] for event in board.list_activity(other,project_id=project['id'],after=cursor,order='asc')]==expected[200:]
+    assert [event['id'] for event in board.list_activity(other,ticket_id=task['id'],after=cursor,order='asc')]==expected[200:]
+    reject(board.list_activity,other,project_id=private['id'],order='asc',expected_status=404)
+    reject(board.list_activity,other,ticket_id=private_task['id'],order='asc',expected_status=404)
+
+
+@pytest.mark.parametrize('order',['ASC','',None,False,[],{},'asc; DROP TABLE tickets'])
+def test_activity_rejects_invalid_order(space,order):
+    board,human,*_=space
+    reject(board.list_activity,human,order=order,expected_status=400)
+
+
 def test_pairing_is_hashed_expiring_atomic_and_human_only(space):
     board,human,_,_,first,*_=space
     reject(board.create_pairing,first,'Device',expected_status=403)
