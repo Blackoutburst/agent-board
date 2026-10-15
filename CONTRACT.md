@@ -1,6 +1,6 @@
-# Board interface contract — 2.4
+# Board interface contract — 2.5
 
-The browser REST API and MCP act on one database. Application version is `2.4.0`; schema version is `6`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.5.0`; schema version is `7`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (39)
+## MCP tools (40)
 
 | Purpose | Tools |
 | --- | --- |
@@ -17,6 +17,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `delegate_task` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
+| Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Discussion and history | `get_thread`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
@@ -83,11 +84,11 @@ Existing-execution lookup/control/heartbeat/finish use a restricted exact identi
 
 Metadata contains only `id`, `owner_id`, `agent_id`, `profile_version`, `device_id`, `session_id`, `project_id`, `ticket_id`, opaque `work_id`/`turn_id`, `provider`, `model`, `state`, `revision`, `outcome`, categorized `reason`, timestamps, `stop_requested`, `should_stop`, `control_reason`, `cleanup_confirmed` and `stale`. It excludes the idempotency key, prompt, response, executable/workspace path, PID, provider session and credentials. Owner views include all active reservations and at most 50 recently finished executions, and never another owner's registry.
 
-A reported `quota_or_rate_limit` or `authentication_failed` outcome atomically pauses the owner and increments the limits version. The runtime view then reports `quota: {status: "blocked_observed", reason: <category>}`. This is a bounded observation from the executor, not a precise measurement of the subscription. Otherwise quota is `{status: "unavailable"}`; no percentage or reset time is invented. Explicit human `PATCH` with `paused=false` clears the observation. There is no automatic retry, provider/account/model fallback, listener or daemon.
+A reported `quota_or_rate_limit` or `authentication_failed` outcome atomically pauses the owner and increments the limits version. The runtime view then reports `quota: {status: "blocked_observed", reason: <category>}`. This is a bounded observation from the executor, not a precise measurement of the subscription. Otherwise quota reflects the availability of the informational connection observations described below; no percentage or reset time is invented. Explicit human `PATCH` with `paused=false` clears the observation. There is no automatic retry, provider/account/model fallback, listener or daemon.
 
 Owner-only REST routes:
 
-- `GET /api/runtime` returns `{limits: {owner_id, max_concurrent, paused, version}, active_count, quota, executions}`.
+- `GET /api/runtime` returns `{limits: {owner_id, max_concurrent, paused, version}, active_count, quota, usage_observations, executions}`.
 - `PATCH /api/runtime/limits` accepts exactly `{expected_version, max_concurrent, paused}`; the strict integer limit is 1–8. Lowering it preserves existing reservations and blocks new starts beyond the limit.
 - `POST /api/runtime/executions/{id}/stop` accepts exactly `{expected_revision}` and requests cooperative cancellation. It does not release capacity. Reading control then finishing after confirmed cleanup completes the cancellation.
 
@@ -153,3 +154,18 @@ Pairing codes are hashed, single-use and expire after ten minutes. Issued tokens
 `upload_attachment` accepts base64 file content and a stable retry key; attach the returned ID to a message. `download_attachment` returns bounded base64 chunks with `next_offset` and `eof`. To stream arbitrary files without model-context expansion, POST multipart `file` to `/mcp/attachments/{thread_id}` or GET `/mcp/attachments/{attachment_id}`, using `Authorization: Bearer <existing-device-token>` and `X-Board-Session-Id: <registered-session>`. All types are accepted, up to 10 MiB per file. Image and video previews use authenticated `?inline=true`; unsafe active formats remain downloads. Membership and profile scope are enforced for every transfer.
 
 `list_labels` and `create_label` expose the project's reusable tag catalog. Feature/bugfix defaults and existing task tags are included. Task creation/editing uses the existing `labels` array. REST equivalents are `/api/projects/{id}/labels` and `/api/threads/{id}/mentionables`.
+
+
+## Informational subscription observations (schema 7)
+
+`report_usage_observation(session_id, connection_id, observed_at, snapshot)` accepts only a current, enabled registered agent with `allow_requests`. It is not an existing-execution cleanup channel. Owner/device/profile identity is derived from the authenticated session; revoked devices, paused/edited profiles and disabled policies are refused. The connection ID is `codex-connection-` plus SHA256 of canonical UTF-8 JSON with exactly `board_endpoint` (`BOARD_BASE_URL + "/mcp"`), `owner_id`, `agent_id`, `device_id`, using sorted keys, compact separators and unescaped Unicode. This matches the personal adapter's model-policy connection ID. It identifies a local board binding, **not** a verified provider account.
+
+The strict snapshot contains `schema_version: 1`, `provider: "codex_chatgpt"`, `source: "codex_app_server_account_rate_limits"`, bounded `cli_version`, `data_status: "observed"|"unavailable"`, a nullable fixed `unavailable_reason`, nullable strict boolean `ordinary_usage_allowed`, and at most 32 `buckets`. Each bucket has `limit_id`, `source_view` (`multi_bucket|legacy`), nullable `primary`/`secondary`, nullable known `reached_reason`, nullable boolean `spend_control_reached`, and nullable `normal_model_slug`. A window contains integer `used_percent` in 0–100 and independently nullable positive integer `window_minutes` and `resets_at` (Unix seconds). Unknown/private fields are rejected. Unavailable snapshots have no buckets and no usage-allowed boolean. Missing windows never mean zero usage or full allowance.
+
+`observed_at` is a finite positive Unix timestamp at local read completion. Values more than five seconds in the future are rejected. Schema 7 stores one latest snapshot per connection. Older or conflicting equal timestamps return 409; an identical retry returns the existing observation without refreshing `received_at`. The server computes `expires_at = min(observed_at + 120, received_at + 120)`. Measurements become `stale` after that instant. An unsuccessful newer read records `unavailable`, rather than refreshing a previous successful value. The protocol does not establish provider-side cache age or an authoritative measurement timestamp.
+
+Human-only `GET /api/runtime` adds `usage_observations`, containing only the owner's connection metadata, `agent_name`/`device_label`, profile version, timestamps, derived data status and sanitized snapshot. The top-level quota status preserves `blocked_observed` as the highest priority; otherwise it is `observed` if at least one connection is fresh, `stale` if only expired measurements remain, or `unavailable`. This status describes observation availability, not execution permission or a common owner account. Percentages are never added across buckets, profiles or devices. Two bindings may share an allowance; two devices of one owner may use different subscriptions.
+
+Observations are client-reported metadata, not a cryptographic provider attestation. They cannot unpause an owner, release capacity, grant model/project/device rights, change routing, or prove recovery after a reset timestamp. A successful read does not clear a prior quota/authentication block. Existing execution admission remains independent.
+
+The optional personal adapter reads the subscription through a bounded local Codex app-server stdio child: initialization, `account/read` with `refreshToken=false`, then `account/rateLimits/read` with `excludeResetCreditDetails=true` and `supportsLunaReserve=false`. It starts no thread/turn, login, reset, model fallback or daemon. Sparse notifications are not treated as complete measurements. Account IDs, emails, plan/credit/reset details, tokens, raw provider responses and diagnostics are discarded. `usage read` defaults to metadata-only stdout, `--show` explicitly displays normalized measurements, and `--output-private` writes mode 0600. `usage report` requires an explicit connection, session, owner, profile and private observation file. It verifies the registered identity before publication. The board itself holds no provider authentication.

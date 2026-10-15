@@ -6,6 +6,8 @@ Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connex
 
 L’adaptateur 0.10 ajoute un [routage explicite des modèles](MODELS.md) et le [contrôle central de capacité](RUNTIME.md), tous deux sur option. Les préférences, observations et décisions de modèle restent liées au propriétaire et au binding. Le panneau **Agents → Runtime** montre les exécutions participantes, leur arrêt et leur capacité partagée ; il ne mesure pas les usages manuels de l’abonnement.
 
+L’adaptateur 0.11 ajoute la commande [`usage`](USAGE.md). Elle lit les limites rapportées par le client Codex local sans appeler de modèle, puis peut transmettre une observation filtrée au panneau privé Runtime du propriétaire. Ces mesures datées restent distinctes des réservations d’exécution et expirent après deux minutes ; elles ne changent ni les droits, ni une pause, ni le modèle.
+
 ## Utilisation
 
 Python **3.10 ou supérieur**, sur macOS ou Linux/POSIX ; aucune bibliothèque Python externe n’est nécessaire à l’exécution. Codex doit être installé et connecté par son propriétaire au moyen de son interface ou de sa CLI officielle. L’authentification reste gérée par Codex. [Documentation officielle de connexion](https://learn.chatgpt.com/docs/auth)
@@ -46,7 +48,7 @@ L’[interface du module et la répartition proposée](INTEGRATION.md) permetten
 python3 -m unittest discover -s tests -v
 ```
 
-Les **537 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
+Les **557 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
 
 - [Reçu du diagnostic local](docs/local-doctor-2026-10-15.json)
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
@@ -56,10 +58,13 @@ Les **537 tests** utilisent des exécutables factices, des transports simulés e
 - [Reçu du ticket réel traité puis rejoué sans second tour](docs/local-worker-2026-10-15.json)
 - [Reçu de lecture réelle des événements sans modèle](docs/local-event-drain-2026-10-15.json)
 - [Revue du parcours question/réponse et limites de validation](docs/review-human-2026-10-15.md)
+- [Reçu du pilote réel de routage et capacité partagée](docs/local-managed-routing-2026-10-15.json)
 
 Le contrôle MCP a vérifié la lecture réelle, la conservation locale et la relecture stable d’un contexte de 9 400 octets. Après autorisation explicite du propriétaire, un contrôle distinct a transmis l’extrait inspecté de 10 686 octets à un unique tour Codex via son abonnement ChatGPT : le titre du ticket a été restitué exactement, sans outil ni modification du dossier de travail. Ce second contrôle utilise la photographie approuvée ; la fraîcheur MCP est vérifiée par le premier contrôle. Il ne démontre pas une mémoire sémantique ni un travail autonome.
 
 Le pilote `worker` sur le MCP 2.0.1 a réservé un ticket choisi, transmis son contexte de 8 905 octets, reçu le titre exact via la connexion ChatGPT et publié une seule réponse en revue. Une invocation identique a retrouvé le résultat sans nouveau tour ni changement de version du ticket. Le dossier est resté vide et le nettoyage a été confirmé.
+
+Le pilote géré #19 sur le board 2.4 a choisi le modèle par la politique du propriétaire, terminé un unique tour avec réservation centrale et publié une seule réponse. Le rejeu a conservé la décision initiale et retrouvé le résultat sans nouvelle réservation ni inférence. Le nettoyage du processus et le dossier vide ont été vérifiés.
 
 Ces reçus ne contiennent ni jeton de connexion, ni transcription, ni sortie brute du client.
 

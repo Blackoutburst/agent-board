@@ -484,6 +484,63 @@ const Workspace = (() => {
     }
     return card;
   }
+  function runtimeUsageWindow(window, label) {
+    const valid = Number.isInteger(window?.used_percent) && window.used_percent >= 0 && window.used_percent <= 100;
+    const duration = Number.isInteger(window?.window_minutes) && window.window_minutes > 0
+      ? window.window_minutes % 1440 === 0 ? `${window.window_minutes / 1440} days`
+        : window.window_minutes % 60 === 0 ? `${window.window_minutes / 60} hours` : `${window.window_minutes} minutes` : null;
+    const reset = Number.isSafeInteger(window?.resets_at) && window.resets_at > 0 ? window.resets_at : null;
+    return el("div", { class: "runtime-usage-window" }, el("h5", {}, `${label}${duration ? ` · ${duration}` : ""}`),
+      el("p", { class: "runtime-remaining" }, valid ? `${100 - window.used_percent}% remaining` : "Remaining usage unavailable"),
+      el("p", { class: "small muted" }, reset ? `Reported reset: ${date(reset)}${reset <= Date.now() / 1000 ? " (past)" : ""}` : "Reset not reported"));
+  }
+  function runtimeUsageCard(observation, agentNames) {
+    const snapshot = observation.snapshot || {}, windows = Array.isArray(snapshot.buckets) ? snapshot.buckets : [];
+    const observed = Number.isFinite(observation.observed_at) && observation.observed_at > 0 ? observation.observed_at : null;
+    const expires = Number.isFinite(observation.expires_at) && observation.expires_at > 0 ? observation.expires_at : null;
+    const unavailable = !["observed", "stale"].includes(observation.data_status) || snapshot.data_status !== "observed" || !observed || !expires;
+    const stale = !unavailable && (observation.data_status === "stale" || expires <= Date.now() / 1000);
+    const identity = observation.agent_name || agentNames.get(observation.agent_id) || `Agent ${observation.agent_id}`;
+    const device = observation.device_label || `Device ${String(observation.device_id).slice(0, 12)}`;
+    const status = badge(unavailable ? "Unavailable" : stale ? "Stale" : "Observed", stale ? "status-blocked" : "");
+    const notice = el("p", { class: "small runtime-usage-notice" }, unavailable
+      ? "No usage reading is available for this connection. Missing values are unknown."
+      : stale ? "This observation has expired. The values below describe its last reading."
+        : "This is a dated local observation, not a guarantee of availability for the next turn.");
+    const card = el("article", { class: `runtime-usage${stale ? " usage-stale" : ""}`, "data-connection-id": observation.connection_id },
+      el("div", { class: "runtime-execution-heading" }, el("div", {}, el("h3", {}, identity), el("p", { class: "small muted" }, device)), status),
+      el("p", { class: "small muted runtime-usage-source" }, "Codex · local client observation"),
+      el("p", { class: "small runtime-usage-date" }, observed ? `Observed ${date(observed)}` : "Observation time unavailable"),
+      !unavailable && expires ? el("p", { class: "small muted" }, `Expires ${date(expires)}`) : null, notice);
+    if (unavailable) {
+      const unavailableReasons = { auth_unavailable: "Personal connection unavailable", unsupported_auth: "This connection type has no usage reading",
+        transport_error: "Local observation failed", invalid_response: "Local reading could not be interpreted",
+        cleanup_unconfirmed: "Local observation cleanup is unconfirmed", process_exited: "Local client stopped before returning a reading",
+        unsupported_cli: "Local client does not support this reading", timeout: "Local observation timed out" };
+      card.append(el("p", { class: "small muted" }, unavailableReasons[snapshot.unavailable_reason] || "The local client did not provide a usable reading."));
+    } else {
+      if (typeof snapshot.ordinary_usage_allowed === "boolean") card.append(el("p", { class: "small muted" },
+        `At observation, the provider reported ordinary usage ${snapshot.ordinary_usage_allowed ? "allowed" : "unavailable"}.`));
+      card.append(windows.length ? el("div", { class: "runtime-usage-buckets" }, windows.map(bucket => {
+        const item = el("section", { class: "runtime-usage-bucket" }, el("h4", {}, bucket.limit_id || "Default limit"),
+          el("p", { class: "small muted" }, bucket.source_view === "legacy" ? "Legacy provider snapshot" : "Provider bucket"),
+          el("div", { class: "runtime-usage-windows" }, runtimeUsageWindow(bucket.primary, "Primary"), runtimeUsageWindow(bucket.secondary, "Secondary")));
+        if (bucket.normal_model_slug) item.append(el("p", { class: "small muted" }, `Model reported: ${bucket.normal_model_slug}`));
+        if (bucket.reached_reason) item.append(el("p", { class: "small runtime-presence" }, bucket.reached_reason === "rate_limit_reached"
+          ? "Provider reported a usage limit." : "Provider reported a workspace usage limit."));
+        if (bucket.spend_control_reached === true) item.append(el("p", { class: "small runtime-presence" }, "Provider reported spending control reached."));
+        return item;
+      })) : el("p", { class: "small muted" }, "No usage windows were supplied."));
+      // Expiry changes only this local label. It does not fetch, change limits,
+      // or wake an executor; refresh remains an explicit user action.
+      if (!stale) setTimeout(() => {
+        if (!card.isConnected) return;
+        status.textContent = "Stale"; status.classList.add("status-blocked"); card.classList.add("usage-stale");
+        notice.textContent = "This observation has expired. The values below describe its last reading.";
+      }, Math.min(2147483647, Math.max(0, expires * 1000 - Date.now()) + 10));
+    }
+    return card;
+  }
   async function renderRuntime(body, request) {
     const loading = empty("Loading your runtime…"); body.append(loading);
     try {
@@ -497,7 +554,9 @@ const Workspace = (() => {
       const names = new Map(entries.filter(item => item.owner_id === owner).map(item => [item.id, item.name]));
       const active = executions.filter(item => item.state !== "finished"), recent = executions.filter(item => item.state === "finished");
       const providerBlock = data.quota?.status === "blocked_observed";
-      const quotaLabel = providerBlock ? data.quota.reason === "authentication_failed" ? "Authentication failed" : "Quota or rate limit reported" : "Unavailable";
+      const observations = Array.isArray(data.usage_observations) ? data.usage_observations.filter(item => item?.owner_id === owner) : [];
+      const quotaLabel = providerBlock ? data.quota.reason === "authentication_failed" ? "Authentication failed" : "Quota or rate limit reported"
+        : observations.some(item => item.snapshot?.data_status === "observed") ? "See connection observations" : "Unavailable";
       const maximum = field("Maximum concurrent executions", "max_concurrent", { type: "number", value: limits.max_concurrent, required: true });
       Object.assign(maximum.querySelector("input"), { min: "1", max: "8", step: "1" });
       const paused = check("Pause participating executors", "paused", limits.paused);
@@ -524,10 +583,15 @@ const Workspace = (() => {
         el("div", { class: "runtime-summary" },
           panel("Shared capacity", el("div", { class: "panel-body" }, el("p", { class: "runtime-capacity" }, el("strong", {}, data.active_count), ` / ${limits.max_concurrent} occupied`),
             badge(limits.paused ? "Paused" : "Accepting executions", limits.paused ? "status-blocked" : "status-ready"), el("p", { class: "small muted" }, "Reservations awaiting cleanup still occupy capacity."))),
-          panel("Subscription quota", el("div", { class: "panel-body" }, el("p", { class: "runtime-quota" }, quotaLabel),
-            el("p", { class: "small muted" }, providerBlock ? "An executor reported this block. It is not a quota measurement; remaining usage and reset time are unknown." : "The connected provider has not supplied a quota reading. Remaining usage and reset time are unknown."),
+          panel("Provider usage", el("div", { class: "panel-body" }, el("p", { class: "runtime-quota" }, quotaLabel),
+            el("p", { class: "small muted" }, providerBlock ? "An executor reported this block. It is not a quota measurement and takes priority over any usage observation."
+              : observations.length ? "Each connection has its own dated observation. Connections may use different subscriptions; their percentages are never added together."
+                : "No connection has supplied a usage observation. Remaining usage and reset time are unknown."),
             providerBlock ? el("p", { class: "small runtime-presence" }, "New executions are paused. Check provider access before resuming in your runtime limits.") : null))),
         panel("Your runtime limits", el("div", { class: "panel-body" }, form)),
+        observations.length ? el("section", { class: "runtime-section", "aria-label": "Usage by connection" }, el("h2", {}, "Usage by connection"),
+          el("p", { class: "small muted runtime-usage-intro" }, "These readings belong to agent/device connections, not a confirmed shared subscription. They do not grant permission to run, change runtime limits, or resume paused executions."),
+          el("div", { class: "runtime-usages" }, observations.map(item => runtimeUsageCard(item, names)))) : null,
         el("section", { class: "runtime-section", "aria-label": "Active executions" }, el("h2", {}, `Active executions (${active.length})`),
           active.length ? el("div", { class: "runtime-executions" }, active.map(item => runtimeCard(item, names))) : box("No active executions", "A participating executor will appear after it reserves work. This page does not launch an agent.")),
         el("section", { class: "runtime-section", "aria-label": "Recent executions" }, el("h2", {}, "Recent executions"),

@@ -10,6 +10,7 @@ os.environ['BOARD_BASE_URL'] = 'http://127.0.0.1:18767'
 
 from app import create_app
 from fastapi import HTTPException, Request
+from usage_observations import connection_identifier
 import uvicorn
 
 app = create_app(os.environ['BOARD_DATA_DIR'], base_url=os.environ['BOARD_BASE_URL'],
@@ -87,7 +88,58 @@ async def fixture_auth_block(execution_id: str, request: Request):
     fixture_request(request)
     actor = executors[execution_id]
     execution = board.get_execution_control(actor, execution_id)
-    return board.finish_execution(actor, execution_id, execution['revision'], 'blocked', True, 'authentication_failed')
+    # Confirming old cleanup is not another provider observation. Simulate a
+    # genuinely new failed turn, after releasing this old uncertain process.
+    board.finish_execution(actor, execution_id, execution['revision'], 'blocked', True, execution['reason'])
+    human = humans[actor['owner_id']]
+    ticket = board.create_ticket(human, project['id'], 'Synthetic new authentication failure', idempotency_key='auth-failure')
+    board.claim_ticket(actor, ticket['id'], ticket['version'])
+    fresh = board.reserve_execution(actor, 'auth-failure', project['id'], ticket['id'],
+        'work-auth-failure', 'turn-auth-failure', 'codex_chatgpt', 'fixture-model')['execution']
+    started = board.start_execution(actor, fresh['id'], fresh['revision'])
+    return board.finish_execution(actor, started['id'], started['revision'], 'blocked', True, 'authentication_failed')
+
+
+@app.post('/__fixture__/usage')
+async def fixture_usage(request: Request):
+    fixture_request(request)
+    now = time.time()
+    connections = {}
+    specs = [
+        ('fresh', 'blackoutburst', 'Usage desktop <img src=x onerror=alert(3)>', now),
+        ('second', 'blackoutburst', 'Usage laptop', now),
+        ('stale', 'blackoutburst', 'Usage old host', now - 180),
+        ('unavailable', 'blackoutburst', 'Usage offline host', now),
+        ('other', 'thescreamer', 'PRIVATE OTHER OWNER USAGE', now),
+    ]
+    for variant, owner, label, observed in specs:
+        human = humans[owner]
+        device = board.create_device(human, label, [])
+        raw = board.authenticate(device['token'])
+        registered = board.register_agent(raw, owner + '-usage-' + variant, 'Synthetic usage', [], 'codex', False, 'usage', 'Usage agent ' + variant)
+        actor = board.actor_session(raw, owner + '-usage-' + variant)
+        connection = connection_identifier(board.base_url + '/mcp', owner, registered['identity']['id'], device['id'])
+        def bucket(limit_id, used, minutes=None, resets=None):
+            return {'limit_id': limit_id, 'source_view': 'multi_bucket',
+                'primary': {'used_percent': used, 'window_minutes': minutes, 'resets_at': resets},
+                'secondary': None, 'reached_reason': None, 'spend_control_reached': None, 'normal_model_slug': 'fixture-model'}
+        buckets = [bucket('fixture-standard', 28, 300, int(now + 3600))]
+        if variant == 'fresh':
+            buckets.append(bucket('fixture-review', 65, 10080, int(now + 604800)))
+            buckets[1]['secondary'] = {'used_percent': 0, 'window_minutes': None, 'resets_at': None}
+        elif variant == 'second':
+            buckets = [bucket('fixture-standard', 90, 300, int(now + 3600))]
+        elif variant == 'stale':
+            buckets = [bucket(None, 55, None, int(now - 60))]
+            buckets[0]['source_view'] = 'legacy'
+        unavailable = variant == 'unavailable'
+        snapshot = {'schema_version': 1, 'provider': 'codex_chatgpt', 'source': 'codex_app_server_account_rate_limits',
+            'cli_version': 'fixture-1.0', 'data_status': 'unavailable' if unavailable else 'observed',
+            'unavailable_reason': 'auth_unavailable' if unavailable else None,
+            'ordinary_usage_allowed': None if unavailable else True, 'buckets': [] if unavailable else buckets}
+        board.report_usage_observation(actor, connection, observed, snapshot)
+        connections[variant] = connection
+    return connections
 
 
 # Put fixture-only controls before the application's static catch-all route.
