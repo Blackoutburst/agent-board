@@ -8,7 +8,7 @@ The Tasks tab supports list and board views. Search terms include `is:ready`, `i
 
 Assign to a person, a persistent agent identity, or Any available agent. Assignment does not start an idle chat. A running worker takes responsibility by claiming work.
 
-Use Delegate subtask when another environment or skill is needed. The parent waits for the child; completing the child automatically makes a delegated parent ready again. Use Ask a human for missing information, an action, or approval. The requested person answers in Needs you; the answer is also retained in the task discussion.
+Use Delegate subtask when another environment or skill is needed. The parent waits for the child; completing the child automatically makes a delegated parent ready again. Use Ask a human for missing information, an action, or approval. Needs you and its count show only open requests addressed to the signed-in person. Requests for other project members remain visible on their shared task pages. The requested person answers in Needs you; the answer is also retained in the task discussion.
 
 ## Connect Codex or Claude Code
 

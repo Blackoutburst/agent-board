@@ -324,9 +324,8 @@ const Workspace = (() => {
     const body = frame("Needs you", "Questions, approvals, and actions that keep your projects moving.", [btn("Refresh", guard(requests))]);
     const data = await api("/human-requests");
     if (request !== state.request) return;
-    const mine = data.filter(r => r.owner_id === state.actor.owner_id), others = data.filter(r => r.owner_id !== state.actor.owner_id);
+    const mine = data.filter(r => r.owner_id === state.actor.owner_id);
     body.append(...(mine.length ? mine.map(r => requestCard(r)) : [box("You're all caught up", "Your agents have no open requests for you.")]));
-    if (others.length) body.append(panel("Waiting on other people", ...others.map(r => requestCard(r))));
     await refreshRequestCount();
   }
   function activityList(events) {
