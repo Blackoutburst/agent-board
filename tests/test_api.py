@@ -155,7 +155,7 @@ def test_mcp_same_records_both_owners_revocation_and_human_task_guard(applicatio
             initialized = rpc(client, device["token"], "initialize", {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "board-test", "version": "1"}})
             assert initialized.status_code == 200, initialized.text
             names = {tool["name"] for tool in rpc(client, device["token"], "tools/list").json()["result"]["tools"]}
-            assert {"read_inbox", "get_thread", "post_message", "create_task", "claim_task", "update_task", "register_agent", "get_work", "claim_next_ticket", "request_human_input"} <= names
+            assert {"read_inbox", "get_thread", "post_message", "create_task", "claim_task", "update_task", "register_agent", "get_work", "claim_next_ticket", "lookup_ticket_selection", "request_human_input"} <= names
             inbox = tool_data(call_tool(client, device["token"], "read_inbox", {"session_id": owner + "-chat", "label": "DNS setup", "capabilities": ["dns"]}))
             assert inbox["cursor"]
             message = tool_data(call_tool(client, device["token"], "post_message", {"session_id": owner + "-chat", "thread_id": thread, "body": "MCP reply " + owner, "idempotency_key": "agent-" + owner}))

@@ -1,6 +1,6 @@
-# Board interface contract — 2.2.1
+# Board interface contract — 2.3
 
-The browser REST API and MCP act on one database. Application version is `2.2.1`; schema version is `5`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.3.0`; schema version is `5`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,14 +8,14 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (32)
+## MCP tools (33)
 
 | Purpose | Tools |
 | --- | --- |
 | Identity and discovery | `register_agent`, `list_agents`, `get_work`, `read_inbox` |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
-| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `renew_ticket`, `delegate_task` |
+| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `delegate_task` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Discussion and history | `get_thread`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
@@ -51,10 +51,20 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 - Creation, queue claims, delegation and human requests use stable idempotency keys. Reusing a key with different content fails.
 - Claims and dependency edits are serialized by `BEGIN IMMEDIATE`. Exactly one concurrent caller wins a claim.
 - Dependency edges are project-local and acyclic. An unfinished prerequisite or open human request prevents claim/completion.
-- A queue session takes one task at a time. Required skills, explicit assignment, project queue state and exclusive resources gate dispatch.
+- New queue selections take one task at a time per persistent agent profile across its sessions/devices. Any unfinished claim (including an expired claim or a legacy action-task claim) or open human request from that profile blocks another selection. Required skills, explicit assignment, project queue state and exclusive resources also gate dispatch. Manual `claim_ticket` retains its existing semantics.
 - `renew_ticket` renews the active claim and returns a new version. It cannot revive an expired or replaced claim.
 - Expired work needs explicit recovery evidence after external effects are checked. Expired work keeps its exclusive resource until reconciled.
 - Completion requires both outcome and verification evidence. Reopening clears old results unless explicitly replaced.
+
+## Durable queue selection (2.3)
+
+`claim_next_ticket(session_id, idempotency_key, project_id="")` checks current work permission, profile queue autonomy and the session's `autonomous=true` declaration. The key is bound to the exact authenticated owner/device/session and project filter. A successful first call returns `{"claimed": true, "ticket": <current ticket>, "retried": false}`. No selection returns `{"claimed": false, "reason": <code>, "retried": false}`, where the fixed code is `no_ready_ticket`, `unfinished_work` or `waiting_on_human`. Both kinds of result are recorded atomically. Repeating a key returns that same selected ticket or negative result with `retried: true`; it never chooses a newly available or higher-priority ticket. A new intentional selection requires a new key. Successful historical keys remain valid without migration; schema version stays 5.
+
+`lookup_ticket_selection(session_id, idempotency_key, project_id="")` is a separate read-only tool. An absent key returns `{"found": false}`. A known key returns `{"found": true, ...}` plus the selection response above with `retried: true`. It checks current read permission, active/current profile, project scope and membership, including for stored negative results. It requires neither queue autonomy, work-request permission nor an autonomous session, so clients can reconcile authorized reads after disabling work. It creates no claim, event, message, notification, session or idempotency record. Reusing a known key with a different project filter conflicts. Another session cannot read or adopt the key, even if it belongs to the same profile.
+
+The selected ticket is returned in its **current** state. Callers must verify its owner/agent/device/session, live lease, assignment and version before continuing work; lookup does not renew or recover it. Other sessions or bindings of the same profile cannot bypass unfinished work by making a new selection. Such refusals expose only an opaque reason, never another project's ticket IDs or titles. Resolved human requests no longer block new selection, but clients must resume their existing durable operation before starting another. The board does not infer local operation state or launch clients.
+
+A missing lookup result cannot prove that a timed-out request is no longer in flight. Clients must durably record their selection intent before sending, retain the same key after uncertainty and avoid interpreting absence as permission to abandon or pick replacement work. The tool never falls back to creation on an older server; an unsupported tool call fails without claiming anything.
 
 ## Delegation and human handoffs
 
