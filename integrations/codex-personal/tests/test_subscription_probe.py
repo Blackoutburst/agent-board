@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -68,6 +69,35 @@ class SubscriptionProbeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["authentication"], "chatgpt")
         self.assertEqual(result["version"], "0.162.0-alpha.17.2")
+
+    def test_selector_allocation_failure_stops_metadata_child_and_closes_pipes(self):
+        executable = self.fake_cli(version_body="time.sleep(60)\n")
+        original_popen = subprocess.Popen
+        children = []
+
+        def launch(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        try:
+            with patch("blackoutburst_agents.subscription_probe.subprocess.Popen", side_effect=launch), \
+                 patch("blackoutburst_agents.subscription_probe.selectors.DefaultSelector",
+                       side_effect=OSError("private allocation diagnostic")):
+                result = inspect_cli(self.settings(executable))
+            self.assertEqual(result["reason"], "process_io_failed")
+            self.assertEqual(len(children), 1)
+            self.assertIsNotNone(children[0].poll())
+            self.assertTrue(children[0].stdout.closed)
+            self.assertTrue(children[0].stderr.closed)
+            self.assertNotIn("private allocation diagnostic", json.dumps(result))
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+                for stream in (child.stdout, child.stderr):
+                    stream.close()
 
     def test_success_receipt_is_bounded_and_does_not_include_transcript(self) -> None:
         result = run_subscription_probe(self.settings(self.fake_cli()))

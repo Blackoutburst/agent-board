@@ -155,8 +155,9 @@ def _run_bounded(
     failure = None
     deadline = time.monotonic() + timeout
     total = 0
-    selector = selectors.DefaultSelector()
+    selector = None
     try:
+        selector = selectors.DefaultSelector()
         for name in buffers:
             stream = getattr(process, name)
             assert stream is not None
@@ -193,11 +194,14 @@ def _run_bounded(
             if not _stop_process_group(process):
                 failure = "cleanup_failed"
         finally:
-            selector.close()
-            if process.stdout is not None:
-                process.stdout.close()
-            if process.stderr is not None:
-                process.stderr.close()
+            try:
+                if selector is not None:
+                    selector.close()
+            finally:
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
     return _ProcessResult(
         process.returncode, bytes(buffers["stdout"]),
         bytes(buffers["stderr"]), failure,

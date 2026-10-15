@@ -44,7 +44,7 @@ L’[interface du module et la répartition proposée](INTEGRATION.md) permetten
 python3 -m unittest discover -s tests -v
 ```
 
-Les **145 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
+Les **146 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
 
 - [Reçu du diagnostic local](docs/local-doctor-2026-10-15.json)
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
