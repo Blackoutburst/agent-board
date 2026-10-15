@@ -113,14 +113,14 @@ class ProjectsMixin:
     def _project_member(self, db, actor, project_id):
         row = db.execute("""SELECT p.* FROM projects p JOIN project_members m ON m.project_id=p.id
             WHERE p.id=? AND m.owner_id=?""", (project_id, actor["owner_id"])).fetchone()
-        if row is None:
+        if row is None or not self._profile_project_allowed(db, actor, project_id):
             _fail("Project not found", 404)
         return row
 
     def _ticket_member(self, db, actor, ticket_id):
         row = db.execute("""SELECT t.* FROM tickets t JOIN project_members m ON m.project_id=t.project_id
             WHERE t.id=? AND m.owner_id=?""", (ticket_id, actor["owner_id"])).fetchone()
-        if row is None:
+        if row is None or not self._profile_project_allowed(db, actor, row["project_id"]):
             _fail("Ticket not found", 404)
         return row
 
@@ -165,7 +165,7 @@ class ProjectsMixin:
                 WHERE m.owner_id=? AND (?=1 OR p.archived=0)
                 AND (?='' OR instr(lower(p.name),lower(?))>0 OR instr(lower(p.description),lower(?))>0)
                 ORDER BY p.updated_at DESC,p.id""", (actor["owner_id"], int(include_archived), query, query, query))
-            return [self._project(db, row) for row in rows]
+            return [self._project(db, row) for row in rows if self._profile_project_allowed(db, actor, row["id"])]
 
     def create_project(self, actor, name, participants, description="", context="", repository_url="", environment="", idempotency_key=""):
         values = {"name": name, "description": description, "context": context, "repository_url": repository_url,
@@ -319,7 +319,13 @@ class ProjectsMixin:
                     values["lease_expires_at"] = None
                 values["assignee_owner_id"] = assigned
             if "assignee_agent_id" in changes:
-                assigned_agent = self._project_agent(db, row["project_id"], changes["assignee_agent_id"])
+                # Editing a task must preserve an existing assignment even if
+                # its profile was paused, archived or lost this project scope.
+                # New assignments still require an active, eligible profile;
+                # normal claim checks independently prevent resumed execution.
+                assigned_agent = changes["assignee_agent_id"]
+                if assigned_agent != row["assignee_agent_id"]:
+                    assigned_agent = self._project_agent(db, row["project_id"], assigned_agent)
                 if assigned_agent != row["assignee_agent_id"]:
                     if actor["kind"] != "human":
                         _fail("Only a human can assign a specific agent identity", 403)

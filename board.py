@@ -13,6 +13,7 @@ from contextlib import contextmanager
 
 from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
+from profiles import ProfilesMixin, migrate_profiles
 
 
 class BoardError(Exception):
@@ -43,7 +44,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(CoordinationMixin):
+class Board(ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -58,7 +59,7 @@ class Board(CoordinationMixin):
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 3:
+            if version > 4:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -119,6 +120,9 @@ class Board(CoordinationMixin):
             if version < 3:
                 migrate_coordination(db)
                 db.execute("PRAGMA user_version=3")
+            if version < 4:
+                migrate_profiles(db)
+                db.execute("PRAGMA user_version=4")
 
     @contextmanager
     def _connection(self):
@@ -197,6 +201,7 @@ class Board(CoordinationMixin):
             if not registered:
                 raise BoardError("Unknown session for this device", 403)
             validated["session_id"] = registered["id"]
+            self._profile_authorize(db, validated, permission)
         elif session:
             raise BoardError("Register a separate session for this chat first", 403)
         return validated
@@ -210,7 +215,7 @@ class Board(CoordinationMixin):
     def _member(self, db, actor, thread_id):
         row = db.execute("SELECT t.* FROM threads t JOIN thread_members m ON m.thread_id=t.id WHERE t.id=? AND m.owner_id=?",
                          (thread_id, actor["owner_id"])).fetchone()
-        if not row:
+        if not row or not self._profile_thread_allowed(db, actor, thread_id):
             raise BoardError("Conversation not found", 404)
         return row
 
@@ -220,9 +225,9 @@ class Board(CoordinationMixin):
         if actor["kind"] == "agent":
             result["device_label"] = db.execute("SELECT label FROM devices WHERE id=?", (actor["device_id"],)).fetchone()[0]
             result["session_label"] = db.execute("SELECT label FROM sessions WHERE id=?", (actor["session_id"],)).fetchone()[0]
-            identity = db.execute("SELECT a.id,a.name,a.agent_kind FROM agent_identities a JOIN sessions s ON s.agent_id=a.id WHERE s.id=?", (actor["session_id"],)).fetchone()
+            identity = db.execute("SELECT p.id,p.fields,s.agent_kind,p.version FROM agent_profiles p JOIN sessions s ON s.agent_id=p.id WHERE s.id=?", (actor["session_id"],)).fetchone()
             if identity:
-                result.update(agent_id=identity["id"], agent_name=identity["name"], agent_kind=identity["agent_kind"])
+                result.update(agent_id=identity["id"], agent_name=_decode(identity["fields"])["name"], agent_kind=identity["agent_kind"], profile_version=identity["version"])
         return result
 
     def _actor_key(self, actor):
@@ -335,7 +340,7 @@ class Board(CoordinationMixin):
         return {"id": row["id"], "owner_id": row["owner_id"], "device_id": row["device_id"], "label": row["label"],
                 "capabilities": _decode(row["capabilities"]), "last_seen_at": row["last_seen_at"],
                 "online": row["last_seen_at"] is not None and row["last_seen_at"] > time.time() - 900,
-                "skills": _decode(row["skills"]), "agent_kind": row["agent_kind"], "autonomous": bool(row["autonomous"]), "agent_id": row["agent_id"]}
+                "skills": _decode(row["skills"]), "agent_kind": row["agent_kind"], "autonomous": bool(row["autonomous"]), "agent_id": row["agent_id"], "profile_version": row["profile_version"]}
 
     def create_device(self, actor, label, capabilities):
         if not isinstance(label, str) or not label.strip() or len(label) > 200:
@@ -344,7 +349,7 @@ class Board(CoordinationMixin):
         token, device_id, now = secrets.token_urlsafe(32), _id(), time.time()
         with self._tx() as db:
             actor = self._human(db, actor)
-            db.execute("INSERT INTO devices VALUES(?,?,?,?,?,?,NULL)",
+            db.execute("INSERT INTO devices(id,owner_id,label,capabilities,token_hash,created_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)",
                        (device_id, actor["owner_id"], label.strip(), _json(capabilities), _hash(token), now))
             self._audit(db, actor, "device_created", {"device_id": device_id, "capabilities": capabilities})
             result = self._device(db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone())
@@ -361,27 +366,30 @@ class Board(CoordinationMixin):
         return {"ok": True, "id": device_id}
 
     def register_session(self, actor, session_id, label, capabilities):
-        if not isinstance(session_id, str) or not session_id.strip() or len(session_id) > 200:
-            raise BoardError("A unique chat session ID is required")
-        if not isinstance(label, str) or not label.strip() or len(label) > 200:
-            raise BoardError("Session label required (maximum 200 characters)")
         capabilities = _strings(capabilities, "capabilities")
         with self._tx() as db:
-            actor = self._actor(db, actor, "allow_read", session=False)
+            raw = {key: actor.get(key) for key in ('kind', 'owner_id', 'device_id')} if isinstance(actor, dict) else actor
+            actor = self._actor(db, raw, "allow_read", session=False)
             if actor["kind"] != "agent":
                 raise BoardError("Device credentials required", 403)
-            granted = _decode(db.execute("SELECT capabilities FROM devices WHERE id=?", (actor["device_id"],)).fetchone()[0])
-            if not set(capabilities).issubset(granted):
-                raise BoardError("Session capabilities exceed device grant", 403)
-            row = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
-            if row and (row["device_id"] != actor["device_id"] or row["owner_id"] != actor["owner_id"]):
-                raise BoardError("Session ID belongs to another device", 409)
-            if row:
-                db.execute("UPDATE sessions SET label=?,capabilities=? WHERE id=?", (label.strip(), _json(capabilities), session_id))
+            existing = db.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
+            if existing and (existing['device_id'] != actor['device_id'] or existing['owner_id'] != actor['owner_id']):
+                raise BoardError('Session ID belongs to another device', 409)
+            if existing and existing['agent_id']:
+                profile = self._profile_owned(db, actor, existing['agent_id'])
+                # read_inbox calls this compatibility registration on every
+                # poll. Only register_agent returns the updated configuration,
+                # so a poll must never silently lift the profile version fence.
+                if existing['profile_version'] != profile['version']:
+                    raise BoardError('Agent profile changed; explicitly call register_agent to read its new configuration', 409)
+                kind = existing['agent_kind']
+                skills = _decode(existing['skills'])
+                autonomous = bool(existing['autonomous'])
             else:
-                db.execute("INSERT INTO sessions(id,owner_id,device_id,label,capabilities,created_at,last_seen_at) VALUES(?,?,?,?,?,?,NULL)",
-                           (session_id, actor["owner_id"], actor["device_id"], label.strip(), _json(capabilities), time.time()))
-            return {**actor, "session_id": session_id}
+                profile = self._binding_profile(db, actor, 'default', 'agent')
+                kind, skills, autonomous = 'agent', [], False
+            self._register_profile_session(db, actor, profile, session_id, label, capabilities, skills, kind, autonomous, seen=False)
+            return {**actor, 'session_id': session_id}
 
     def actor_session(self, actor, session_id):
         with self._connection() as db:
@@ -419,7 +427,7 @@ class Board(CoordinationMixin):
                 AND (?='' OR instr(lower(t.title),lower(?))>0 OR EXISTS
                 (SELECT 1 FROM messages x WHERE x.thread_id=t.id AND instr(lower(x.body),lower(?))>0))
                 ORDER BY t.updated_at DESC""", (actor["owner_id"], query, query, query))
-            return [self._thread(db, row, actor["owner_id"]) for row in rows]
+            return [self._thread(db, row, actor["owner_id"]) for row in rows if self._profile_thread_allowed(db, actor, row["id"])]
 
     def create_thread(self, actor, title, participants, idempotency_key):
         if not isinstance(title, str) or not title.strip() or len(title) > 300:
@@ -427,6 +435,9 @@ class Board(CoordinationMixin):
         participants = sorted(_strings(participants, "participants"))
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_reply")
+            profile = self._profile_for_actor(db, actor)
+            if profile and _decode(profile["project_ids"]) is not None:
+                raise BoardError("Scoped profiles can reply only within their selected project conversations", 403)
             participants = sorted(set(participants + [actor["owner_id"]]))
             for owner_id in participants:
                 self._owner(db, owner_id)
@@ -618,8 +629,9 @@ class Board(CoordinationMixin):
     def _task_authorized(self, db, actor, row):
         if actor["kind"] == "human":
             return True
-        policy = _decode(self._owner(db, actor["owner_id"])["policy"])
-        return policy["allow_requests"] and bool(row["action"]) and row["action"] in policy["actions"] and bool(row["resource"]) and row["resource"] in policy["resources"]
+        profile = self._profile_for_actor(db, actor)
+        policy = self._effective_profile_policy(db, actor, profile) if profile else {}
+        return policy.get("allow_requests", False) and bool(row["action"]) and row["action"] in policy["actions"] and bool(row["resource"]) and row["resource"] in policy["resources"]
 
     def claim_task(self, actor, task_id, recovery_evidence=""):
         if not isinstance(recovery_evidence, str) or len(recovery_evidence) > 100000:
@@ -722,8 +734,12 @@ class Board(CoordinationMixin):
                     raise BoardError("Cursor was not issued for this session", 400)
                 boundary = issued[0]
             # Deliver conversation messages, including untargeted announcements. Mentions remain explicit metadata.
-            rows = list(db.execute("""SELECT x.* FROM messages x JOIN thread_members m ON m.thread_id=x.thread_id
-                WHERE m.owner_id=? AND x.seq>? ORDER BY x.seq LIMIT ?""", (actor["owner_id"], boundary, limit)))
+            allowed_threads = [row['thread_id'] for row in db.execute('SELECT thread_id FROM thread_members WHERE owner_id=?', (actor['owner_id'],))
+                               if self._profile_thread_allowed(db, actor, row['thread_id'])]
+            placeholders = ','.join('?' for _ in allowed_threads) or 'NULL'
+            rows = list(db.execute(f"""SELECT x.* FROM messages x JOIN thread_members m ON m.thread_id=x.thread_id
+                WHERE m.owner_id=? AND x.seq>? AND x.thread_id IN ({placeholders}) ORDER BY x.seq LIMIT ?""",
+                (actor['owner_id'], boundary, *allowed_threads, limit)))
             next_seq = rows[-1]["seq"] if rows else boundary
             token = secrets.token_urlsafe(32)
             db.execute("INSERT INTO cursors VALUES(?,?,?)", (_hash(token), reader, next_seq))
@@ -735,7 +751,7 @@ class Board(CoordinationMixin):
             self._expire(db)
             tasks = []
             for row in db.execute("SELECT t.* FROM tasks t JOIN thread_members m ON m.thread_id=t.thread_id WHERE m.owner_id=? AND t.status!='complete' ORDER BY t.created_at", (actor["owner_id"],)):
-                if self._eligible(db, actor, row):
+                if self._profile_thread_allowed(db, actor, row["thread_id"]) and self._eligible(db, actor, row):
                     task = self._task(db, row)
                     task["authorized"] = self._task_authorized(db, actor, row)
                     tasks.append(task)

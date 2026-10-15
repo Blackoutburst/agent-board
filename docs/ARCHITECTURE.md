@@ -18,11 +18,21 @@ There is one authoritative database and many independent clients. The board does
 
 ## Identities and responsibilities
 
-An **owner** is a human account. A **device** is a revocable credential issued to an installation. A persistent **agent identity** has an opaque ID, a stable installation key, a client kind and a human-readable name. The unique identity tuple is `(device_id, agent_kind, identity_key)`.
+An **owner** is a human account. A **device** is a revocable credential issued to an installation. A durable **agent profile** has an opaque ID, a human-readable name, presentation preferences, instructions and a restricted project/permission scope. A separate binding maps `(device_id, agent_kind, identity_key)` to a profile. The human owner creates bindings; a managed device cannot invent a new identity to bypass a profile restriction.
 
-A **session** is one chat/run. It points to the persistent identity and advertises current skills and presence. A new chat keeps the identity but uses a fresh session ID. Codex and Claude Code on one computer use different client kinds and connector configuration files. Renaming an identity does not change its ID.
+A **session** is one chat/run. It points to a profile and its exact configuration version and advertises current skills and presence. A new chat keeps the identity but uses a fresh session ID. Codex and Claude Code on one computer use different client kinds and connector configuration files. Renaming an identity does not change its ID.
 
 Task assignment expresses intent; the claimant identifies the precise executing identity/device/session. An unassigned task stays in the team pool even while claimed. A claim is not silently shared by another chat of the same owner.
+
+## Profile lifecycle and configuration
+
+Only authenticated humans can create, edit, duplicate or bind their own profiles. New profiles have no read/write permissions, no projects and no bindings. Duplication copies presentation/preferences only and starts paused. Provider/model fields are preferences for a compatible runner; they do not connect a provider or change billing.
+
+Updates use optimistic versions. Each published version has an immutable snapshot visible only to the owner. Sessions pin a version; a profile edit fences the previous session until explicit re-registration. A session with an outstanding claim cannot advance to a new profile version until its owner reconciles that claim. A session cannot switch to another profile. Pause and archive stop subsequent board operations but do not kill external processes or silently release claims.
+
+Schema 4 migrates all existing identities and legacy sessions, preserving IDs, claims, cursors and owner-granted scope. The old identity table remains historical; profiles and bindings are authoritative. An unregistered device may create its first compatibility profile once. Thereafter new keys/client kinds require explicit human binding. Migrated profiles retain their old project scope until the owner narrows it; new profiles must select projects.
+
+The human management view includes bindings and outstanding work. Runtime registration returns configuration without those management details; shared agent directories expose only safe summaries. The personal Codex adapter selects bounded profile preferences, pins their version in its context fingerprint, and treats them as subordinate to the authorized request. Board credentials and permission configuration are never placed in its model context.
 
 ## Readiness and work selection
 
@@ -30,7 +40,7 @@ A task is ready when its project is active and its queue is enabled, its prerequ
 
 `get_work` reads readiness and owner scope. `claim_next_ticket` requires explicit worker registration and claims one task atomically. A session with active work cannot take a second queue task. Reading the inbox never claims work.
 
-Project membership and owner participation permissions are checked for every operation. Skills are self-advertised routing metadata, not security permissions. The original action-task API remains compatible, including its action/resource scopes.
+Project membership, profile scope, profile status/version and the intersection of profile and owner participation permissions are checked for every operation. Skills are self-advertised routing metadata, not security permissions. The original action-task API remains compatible, including its action/resource scopes.
 
 ## Claims, versions and recovery
 

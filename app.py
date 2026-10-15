@@ -226,6 +226,65 @@ class AgentName(ProjectBody):
     name: str = Field(min_length=1, max_length=200)
 
 
+class ProfilePolicy(ProjectBody):
+    allow_read: bool = False
+    allow_messages: bool = False
+    allow_requests: bool = False
+    actions: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(default_factory=list, max_length=100)
+    resources: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(default_factory=list, max_length=100)
+    autonomy: Literal['responses', 'requested', 'queue'] = 'responses'
+
+
+class ProfileChanges(ProjectBody):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    avatar: str | None = Field(default=None, max_length=32)
+    description: str | None = Field(default=None, max_length=4000)
+    role: str | None = Field(default=None, max_length=200)
+    instructions: str | None = Field(default=None, max_length=12000)
+    language: Literal['auto', 'fr', 'en', 'de', 'nl'] | None = None
+    response_style: str | None = Field(default=None, max_length=2000)
+    preferred_provider: str | None = Field(default=None, max_length=100)
+    preferred_model: str | None = Field(default=None, max_length=200)
+    project_ids: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(default=None, max_length=100)
+    policy: ProfilePolicy | None = None
+    status: Literal['active', 'paused', 'archived'] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def reject_explicit_null(cls, values):
+        if isinstance(values, dict) and any(value is None for value in values.values()):
+            raise ValueError('Omit unchanged fields; profile fields cannot be null')
+        return values
+
+    def supplied_fields(self):
+        values = self.model_dump(exclude_unset=True)
+        if self.policy is not None:
+            values['policy'] = self.policy.model_dump()
+        return values
+
+
+class NewProfile(ProfileChanges):
+    name: str = Field(min_length=1, max_length=200)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ProfilePatch(ProfileChanges):
+    expected_version: Version
+
+
+class ProfileDuplicate(ProjectBody):
+    expected_version: Version
+    name: str = Field(default='', max_length=200)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ProfileBinding(ProjectBody):
+    expected_version: Version
+    device_id: str = Field(min_length=1, max_length=200)
+    identity_key: str = Field(min_length=1, max_length=200)
+    agent_kind: str = Field(default='agent', min_length=1, max_length=100)
+
+
 def csrf_for(token: str) -> str:
     return hashlib.sha256(("board-csrf:" + token).encode()).hexdigest()
 
@@ -467,7 +526,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def list_agents(session_id: str, project_id: str = "") -> list[dict]:
-        """List persistent agent identities, their devices, chat sessions, presence and active tasks visible through shared project membership. An offline agent is not proof its external process stopped."""
+        """List safe agent summaries visible through shared project membership: id, owner_id, name, avatar and status. Private profile configuration, devices, sessions and tasks are omitted for agent callers."""
         return board.list_agents(session_actor(session_id), project_id)
 
     @mcp.tool()
@@ -555,7 +614,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.0.3", "schema_version": 3, "features": ["projects", "tickets", "dependencies", "agent_identities", "work_queue", "leases", "human_requests", "pairing", "activity"]}
+        return {"status": "ok", "version": "2.1.0", "schema_version": 4, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -717,6 +776,34 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.patch("/api/agents/{agent_id}")
     async def rename_agent(agent_id: str, values: AgentName, actor=Depends(human)):
         return board.rename_agent(actor, agent_id, values.name)
+
+    @app.get('/api/agent-profiles')
+    async def agent_profiles(include_archived: bool = False, actor=Depends(human)):
+        return board.list_agent_profiles(actor, include_archived=include_archived)
+
+    @app.post('/api/agent-profiles')
+    async def create_agent_profile(values: NewProfile, actor=Depends(human)):
+        return board.create_agent_profile(actor, **values.supplied_fields())
+
+    @app.get('/api/agent-profiles/{profile_id}')
+    async def agent_profile(profile_id: str, actor=Depends(human)):
+        return board.get_agent_profile(actor, profile_id)
+
+    @app.patch('/api/agent-profiles/{profile_id}')
+    async def update_agent_profile(profile_id: str, values: ProfilePatch, actor=Depends(human)):
+        return board.update_agent_profile(actor, profile_id, **values.supplied_fields())
+
+    @app.get('/api/agent-profiles/{profile_id}/versions/{version}')
+    async def agent_profile_version(profile_id: str, version: int, actor=Depends(human)):
+        return board.get_agent_profile_version(actor, profile_id, version)
+
+    @app.post('/api/agent-profiles/{profile_id}/duplicate')
+    async def duplicate_agent_profile(profile_id: str, values: ProfileDuplicate, actor=Depends(human)):
+        return board.duplicate_agent_profile(actor, profile_id, **values.model_dump())
+
+    @app.post('/api/agent-profiles/{profile_id}/bindings')
+    async def bind_agent_profile(profile_id: str, values: ProfileBinding, actor=Depends(human)):
+        return board.bind_agent_profile(actor, profile_id, **values.model_dump())
 
     @app.get("/api/work")
     async def work(project_id: str = "", actor=Depends(human)):

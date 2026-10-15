@@ -49,6 +49,9 @@ def test_identity_persists_across_chats_restart_and_distinguishes_clients_and_de
     assert identity['name']=='Codex · Work Mac'
     assert len(identity['sessions'])==2
     raw=board.authenticate(device['token'])
+    profile=board.create_agent_profile(human,'Claude Code · Work Mac',project_ids=[project['id']],
+        policy={'allow_read':True,'allow_messages':True,'allow_requests':True,'actions':[],'resources':[],'autonomy':'queue'})
+    board.bind_agent_profile(human,profile['id'],profile['version'],device['id'],'installation','claude-code')
     claude=board.register_agent(raw,'claude-chat','Claude chat',[],'claude-code',False,'installation')
     assert claude['identity']['id']!=identity['id']
     assert claude['identity']['name']=='Claude Code · Work Mac'
@@ -111,6 +114,9 @@ def test_skill_resource_assignment_and_worker_opt_in(space):
     raw=board.authenticate(device['token'])
     observer=board.register_agent(raw,'observer','Read only',[], 'codex',False,'installation')
     reject(board.claim_next_ticket,board.actor_session(raw,'observer'),'not-authorized',expected_status=403)
+    profile=board.create_agent_profile(human,'Claude Code · Work Mac',project_ids=[project['id']],
+        policy={'allow_read':True,'allow_messages':True,'allow_requests':True,'actions':[],'resources':[],'autonomy':'queue'})
+    board.bind_agent_profile(human,profile['id'],profile['version'],device['id'],'claude','claude-code')
     claude=board.register_agent(raw,'claude','Claude',[], 'claude-code',True,'claude')
     targeted=new(space,'Codex only',assignee_agent_id=observer['identity']['id'])
     reject(board.claim_ticket,board.actor_session(raw,'claude'),targeted['id'],targeted['version'],expected_status=403)
@@ -512,7 +518,7 @@ def test_schema_v2_upgrade_preserves_data_and_active_claims(tmp_path):
         db.execute("INSERT INTO messages(id,thread_id,body,author,created_at,mentions,attachments) VALUES(?,?,?,?,?,'[]','[]')",('old-message','old-thread','Keep discussion',json.dumps({'kind':'human','owner_id':'blackoutburst'}),1))
     upgraded=Board(path)
     with sqlite3.connect(upgraded.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==3
+        assert db.execute('PRAGMA user_version').fetchone()[0]==4
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert db.execute('SELECT body FROM messages').fetchone()[0]=='Keep discussion'
         assert db.execute('SELECT title,lease_expires_at FROM tickets').fetchone()[0]=='Existing task'

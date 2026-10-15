@@ -163,6 +163,20 @@ def _profile(registration, scope):
     _required(profile, ('id', 'owner_id', 'name', 'agent_kind'))
     profile['session_id'] = session_id
     profile['skills'] = _select(session.get('skills', []), ['str'])
+    if 'profile' in registration:
+        configured = _select(registration['profile'], {'id': 'id', 'owner_id': 'id',
+            'version': 'version', 'status': 'str', 'avatar': 'str', 'description': 'str',
+            'role': 'str', 'instructions': 'str', 'language': 'str', 'response_style': 'str',
+            'preferred_provider': 'str', 'preferred_model': 'str'})
+        _required(configured, ('id', 'owner_id', 'version', 'status'))
+        if (configured['id'] != scope.agent_id or configured['owner_id'] != scope.owner_id
+                or configured['status'] != 'active'
+                or type(registration.get('profile_version')) is not int
+                or registration['profile_version'] != configured['version']
+                or type(session.get('profile_version')) is not int
+                or session['profile_version'] != configured['version']):
+            raise ContextError('context_profile_mismatch')
+        profile['preferences'] = configured
     return profile
 
 
