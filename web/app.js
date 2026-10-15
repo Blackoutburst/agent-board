@@ -139,7 +139,7 @@ function renderThreadList() {
   $("thread-list").replaceChildren(...state.threads.map((thread) => btn("", () => openThread(thread.id).catch((error) => notify(error.message, true)), `thread-item${state.view === "thread" && String(thread.id) === String(state.threadId) ? " active" : ""}`)));
   [...$("thread-list").children].forEach((button, index) => {
     const thread = state.threads[index];
-    button.append(el("div", { class: "thread-name" }, el("span", {}, threadSubject(thread)), thread.unread_count ? el("span", { class: "unread", "aria-label": `${thread.unread_count} unread messages` }, thread.unread_count) : null), thread.ticket ? el("div", { class: "thread-context", lang: "fr" }, `${thread.ticket.project_name} · Ticket #${thread.ticket.number}`) : null, el("div", { class: "thread-time" }, date(thread.updated_at)));
+    button.append(el("div", { class: "thread-name" }, el("span", {}, threadSubject(thread)), thread.unread_count ? el("span", { class: "unread", "aria-label": `${thread.unread_count} unread messages` }, thread.unread_count) : null), ...(thread.ticket ? [el("div", { class: "thread-context", lang: "fr" }, `${thread.ticket.project_name} · Ticket #${thread.ticket.number}`)] : []), el("div", { class: "thread-time" }, date(thread.updated_at)));
   });
   if (!state.threads.length) $("thread-list").append(empty($("search").value ? "No matching conversations." : "Ask a question, request a resource, or discuss a decision."));
 }
@@ -238,9 +238,15 @@ function composer() {
   const draft = getDraft();
   const body = el("textarea", { id: "message-body", name: "body", placeholder: "Ask a question, request a resource or validation, or reply…", "aria-label": "Message", onInput: (event) => { draft.body = event.target.value; } });
   body.value = draft.body;
-  const file = el("input", { class: "file-input", type: "file", name: "files", multiple: "", "aria-label": "Attach files", onChange: (event) => { draft.files = [...event.target.files]; draft.attachments = []; } });
+  const previews = el("div", { class: "compose-files", "aria-live": "polite" });
+  const renderPreviews = () => previews.replaceChildren(...draft.files.map((item, index) => filePreview(item, () => { draft.files.splice(index, 1); draft.attachments = []; renderPreviews(); })));
+  const file = el("input", { class: "file-input", type: "file", name: "files", multiple: "", hidden: true, tabindex: "-1", onChange: (event) => { draft.files = [...draft.files, ...event.target.files]; draft.attachments = []; event.target.value = ""; renderPreviews(); } });
+  const clip = el("button", { type: "button", class: "attach-button", title: "Attach files", "aria-label": "Attach files", onClick: () => file.click() }, paperclipIcon());
+  const editor = Conversations.mentionEditor(body, draft, state.threadId);
+  editor.append(clip, file);
+  renderPreviews();
   const form = el("form", { id: "compose", class: "composer" }, draft.reply ? el("div", { class: "reply-banner" }, `Replying to ${authorLabel(draft.reply.author)}`, btn("Cancel reply", () => { draft.reply = null; renderComposer(); }, "quiet")) : null,
-    Conversations.mentionEditor(body, draft, state.threadId), el("div", { class: "compose-tools" }, el("div", {}, file, draft.files.length ? el("div", { class: "small muted" }, draft.files.map((item) => item.name).join(", ")) : el("div", { class: "small muted" }, "Any file · Up to 10 MB each · Type @ to mention a person or agent")), el("button", { type: "submit", class: "primary" }, "Send message")));
+    editor, previews, el("div", { class: "compose-tools" }, el("div", { class: "small muted" }, "Any file · Up to 10 MB each · Type @ to mention a person or agent"), el("button", { type: "submit", class: "primary" }, "Send message")));
   submit(form, async () => {
     if (!draft.body.trim() && !draft.files.length) throw new Error("Write a message or attach a file first.");
     if (draft.files.some((item) => item.size > 10 * 1024 * 1024)) throw new Error("Each attachment must be 10 MB or smaller.");
@@ -260,6 +266,26 @@ function composer() {
     else await openThread(threadId, false);
   });
   return form;
+}
+
+function paperclipIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16"); svg.setAttribute("width", "16"); svg.setAttribute("height", "16"); svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M10.5 4.5 5.4 9.6a1.5 1.5 0 0 0 2.1 2.1l5.3-5.3a3 3 0 0 0-4.2-4.2L3.2 7.6a4.5 4.5 0 0 0 6.4 6.4l4.4-4.4");
+  path.setAttribute("fill", "none"); path.setAttribute("stroke", "currentColor"); path.setAttribute("stroke-width", "1.5"); path.setAttribute("stroke-linecap", "round"); path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+function filePreview(item, remove) {
+  let thumb;
+  if (item.type.startsWith("image/")) {
+    thumb = el("img", { class: "compose-file-thumb", alt: "", src: URL.createObjectURL(item) });
+    thumb.addEventListener("load", () => URL.revokeObjectURL(thumb.src), { once: true });
+  } else thumb = el("span", { class: "compose-file-thumb compose-file-ext", "aria-hidden": "true" }, (item.name.split(".").pop() || "file").slice(0, 4).toUpperCase());
+  return el("div", { class: `compose-file${item.size > 10 * 1024 * 1024 ? " too-large" : ""}` }, thumb,
+    el("div", { class: "compose-file-info" }, el("span", { class: "compose-file-name", title: item.name }, item.name), el("span", { class: "small muted" }, item.size > 10 * 1024 * 1024 ? `${bytes(item.size)} · over 10 MB` : bytes(item.size))),
+    btn("×", remove, "quiet compose-file-remove", { "aria-label": `Remove ${item.name}`, title: "Remove" }));
 }
 
 function destinationLabel(task) {

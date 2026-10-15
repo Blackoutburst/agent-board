@@ -114,10 +114,10 @@
     "tests/test_notifications_board.py": "cd6c50b1689df86a1e57d6f92387abe4e3b344fe284ce3ac5a4976a73aa7da9e",
     "tests/test_sdk_transport.py": "60016a8c6a1a1350aec80449c750ea44abc146549d7004363080fad55554149a",
     "tests/test_ticket_message_activity.py": "1e8b3301b09d94f8e1f05ad3641d1a46e712970b6639e9f01701d853169bc80b",
-    "web/app.js": "c4a05bfbd930f14a56698e88a4fdd62f5076dd83f1ab68ebaafb4fde7809a5c1",
+    "web/app.js": "cfab1bd68a6e985ed4c4e69938dd30653bd7012484820e67e96dc08a2cd24784",
     "web/index.html": "14ed5829e22617b2d2dca5cb82d1508e570baf418e952ea79f26f13e32872769",
     "web/interaction.js": "2e1225d8602513c5c5d77317fd20765941c2dc936c654ed22977161f55cbeb2d",
-    "web/style.css": "91dd188279a4f507a6b0a6c3e430488bc6d0345163bdc6e91e583abfddd2fc38",
+    "web/style.css": "a9a28b8ffdb4a46ff79cb9d4bcef6556549e7af54cebe2ceb1ea9ca000694b15",
     "web/workspace.js": "897aeededfe36cfd4e9417f1948239f48561eb9542dc4c2c9f82c2e0dba1c845"
   }
 }
