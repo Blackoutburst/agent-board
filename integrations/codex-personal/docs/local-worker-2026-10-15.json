@@ -1,0 +1,25 @@
+{
+  "format": "blackoutburst-explicit-worker-proof-v1",
+  "passed": true,
+  "exact_title": true,
+  "published_review": true,
+  "claim_released": true,
+  "duplicate_preserved_version": true,
+  "one_turn": true,
+  "workspace_empty": true,
+  "cleanup_confirmed": true,
+  "tool_free": true,
+  "chatgpt_authentication": true,
+  "remote_exact_title_once": true,
+  "remote_evidence_once": true,
+  "context_bytes": 8905,
+  "limitations": [
+    "One owner on the local Mac.",
+    "Text-only response; no development tools or listener."
+  ],
+  "date": "2026-10-15",
+  "adapter_version": "0.4.0",
+  "board_version": "2.0.1",
+  "input": "Live selected ticket context; no conversation messages in the pilot ticket.",
+  "second_invocation_cached": true
+}

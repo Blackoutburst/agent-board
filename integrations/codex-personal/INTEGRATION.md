@@ -1,14 +1,14 @@
 # Connexion du fournisseur Codex personnel
 
-La version 0.3 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable et un lecteur de contexte compatible avec le **MCP 2.0 du board, commit `0a601f2`**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
+La version 0.4 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
 
 ## Responsabilités actuelles
 
-| Board 2.0 publié | Adaptateur personnel 0.3 |
+| Board 2.0 publié | Adaptateur personnel 0.4 |
 |---|---|
 | Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
 | Projets, tickets, conversations et permissions du propriétaire/appareil | Lit un ticket explicitement choisi et compose ses sources bornées |
-| Réservations, baux, `get_work`, `claim_next_ticket` | Aucun appel automatique de ces outils |
+| Réservations, baux, `get_work`, `claim_next_ticket` | `worker` réserve seulement un ticket explicitement choisi ; aucune sélection automatique |
 | Délégation et demandes humaines | Inclut leurs données pertinentes ; ne crée pas de demande |
 | Activité et inbox | Ne les interroge pas ; le listener reste distinct |
 | Identité affichée et compétences | Conserve seulement les champs publics utiles à l’analyse |
@@ -49,9 +49,13 @@ Un contexte MCP inspecté peut accompagner `runner turn`. Le contrôle porte sur
 
 La sonde `run_subscription_probe(settings)` reste disponible pour un test explicite minimal. Diagnostic et sonde refusent le mode clé API ; aucun repli payant ou autre fournisseur n’est choisi automatiquement. Les états de quota, connexion, timeout, protocole ou nettoyage incertain sont rapportés par des codes bornés. Une preuve locale ne valide pas l’accès d’un second propriétaire ni un service mutualisé hébergeant ses connexions.
 
+## Ticket explicitement choisi
+
+`BoardWorker(journal, run_store, client).run(...)` utilise les identifiants réels du board, un journal privé à six champs de portée et la connexion personnelle épinglée. `WorkerBoardClient` limite ses mutations à la réservation et au résultat du ticket ; `BoardReader` reste en lecture seule. Le coordinateur ajoute le résultat et sa preuve, publie `review` ou `blocked`, puis libère sa réservation. Il ne choisit ni ticket, ni nouveau modèle, ni outil. Le [guide worker](WORKER.md) décrit les tentatives identiques, les interruptions et les limites de ce premier parcours.
+
 ## Raccordements restant à réaliser
 
-- Utiliser les réservations et baux du board pendant le traitement autorisé d’un vrai ticket, avec réconciliation des effets après coupure.
+- Étendre le traitement textuel explicite aux outils de développement autorisés et aux baux longs, sans affaiblir la réconciliation des effets après coupure.
 - Relier durablement les événements et réponses humaines à une entrée unique. `read_inbox` avance son curseur à la lecture ; ce n’est pas un accusé de traitement réussi.
 - Relier personnalisation, modèles accessibles et éventuels replis aux profils du board, sans copier de cache d’authentification entre propriétaires.
 - Ajouter la sélection de tâches, les outils de développement et la publication uniquement dans le périmètre explicitement autorisé, avec contrôle avant chaque effet.
