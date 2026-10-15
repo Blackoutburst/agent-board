@@ -1,6 +1,6 @@
-# Board interface contract — 2.3
+# Board interface contract — 2.4
 
-The browser REST API and MCP act on one database. Application version is `2.3.0`; schema version is `5`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.4.0`; schema version is `6`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (33)
+## MCP tools (39)
 
 | Purpose | Tools |
 | --- | --- |
@@ -16,6 +16,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `delegate_task` |
+| Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Discussion and history | `get_thread`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
@@ -58,13 +59,39 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 
 ## Durable queue selection (2.3)
 
-`claim_next_ticket(session_id, idempotency_key, project_id="")` checks current work permission, profile queue autonomy and the session's `autonomous=true` declaration. The key is bound to the exact authenticated owner/device/session and project filter. A successful first call returns `{"claimed": true, "ticket": <current ticket>, "retried": false}`. No selection returns `{"claimed": false, "reason": <code>, "retried": false}`, where the fixed code is `no_ready_ticket`, `unfinished_work` or `waiting_on_human`. Both kinds of result are recorded atomically. Repeating a key returns that same selected ticket or negative result with `retried: true`; it never chooses a newly available or higher-priority ticket. A new intentional selection requires a new key. Successful historical keys remain valid without migration; schema version stays 5.
+`claim_next_ticket(session_id, idempotency_key, project_id="")` checks current work permission, profile queue autonomy and the session's `autonomous=true` declaration. The key is bound to the exact authenticated owner/device/session and project filter. A successful first call returns `{"claimed": true, "ticket": <current ticket>, "retried": false}`. No selection returns `{"claimed": false, "reason": <code>, "retried": false}`, where the fixed code is `no_ready_ticket`, `unfinished_work` or `waiting_on_human`. Both kinds of result are recorded atomically. Repeating a key returns that same selected ticket or negative result with `retried: true`; it never chooses a newly available or higher-priority ticket. A new intentional selection requires a new key. Successful historical keys remain valid; queue selection itself required no schema change in 2.3.
 
 `lookup_ticket_selection(session_id, idempotency_key, project_id="")` is a separate read-only tool. An absent key returns `{"found": false}`. A known key returns `{"found": true, ...}` plus the selection response above with `retried: true`. It checks current read permission, active/current profile, project scope and membership, including for stored negative results. It requires neither queue autonomy, work-request permission nor an autonomous session, so clients can reconcile authorized reads after disabling work. It creates no claim, event, message, notification, session or idempotency record. Reusing a known key with a different project filter conflicts. Another session cannot read or adopt the key, even if it belongs to the same profile.
 
 The selected ticket is returned in its **current** state. Callers must verify its owner/agent/device/session, live lease, assignment and version before continuing work; lookup does not renew or recover it. Other sessions or bindings of the same profile cannot bypass unfinished work by making a new selection. Such refusals expose only an opaque reason, never another project's ticket IDs or titles. Resolved human requests no longer block new selection, but clients must resume their existing durable operation before starting another. The board does not infer local operation state or launch clients.
 
 A missing lookup result cannot prove that a timed-out request is no longer in flight. Clients must durably record their selection intent before sending, retain the same key after uncertainty and avoid interpreting absence as permission to abandon or pick replacement work. The tool never falls back to creation on an older server; an unsupported tool call fails without claiming anything.
+
+## Owner-wide execution registry (2.4)
+
+Schema 6 adds `owner_execution_limits` and `runtime_executions` without changing accounts, claims, messages or credentials. The default is one concurrent execution across **all** profiles, sessions and devices belonging to the owner. Reservations, active processes and uncertain cleanup all consume capacity. Admission and limit changes are serialized in the central SQLite transaction; this is not a per-host semaphore. It covers participating executors, not unrelated personal CLI/app sessions or historical adapters that never reserve capacity.
+
+`reserve_execution(session_id, idempotency_key, project_id, ticket_id, work_id, turn_id, provider, model)` requires current effective read/work-request permission, the current active profile version, project membership and an exact live `in_progress` ticket claim. Opaque work/turn IDs must not contain paths, prompts or provider session IDs. The accepted key is bound to owner, profile/version, device/session, project/ticket and immutable provider/model. It returns `{reserved: true, execution: <metadata>, retried: false}`; an exact accepted retry returns that reservation with `retried: true`, never another slot. Changed payload conflicts. A second key cannot reserve the same owner/work/turn. Admission denied by `owner_paused` or `capacity_exhausted` returns a conflict without creating a reservation. No model is launched by the board.
+
+`lookup_execution(session_id, idempotency_key)` is a separate read-only tool. It returns `{found: false}` or `{found: true, execution: <metadata>}` only for the authenticated original device/session/profile. Absence cannot establish that an in-flight admission was cancelled. Clients must persist their intent before sending and reconcile the same key after a lost response; unsupported older servers must fail closed without fallback to unregistered execution.
+
+`start_execution(session_id, execution_id, expected_revision)` activates a `reserved` execution before the model is spawned, rechecking current authority, owner pause and capacity. `heartbeat_execution(session_id, execution_id, expected_revision)` updates only a running execution's presence. `finish_execution(session_id, execution_id, expected_revision, status, cleanup_confirmed, reason="")` records a strict `completed|blocked|cancelled` outcome and a bounded reason enum, never output or diagnostics. `cleanup_confirmed=true` makes it `finished` and releases capacity; false makes it `needs_review` and retains capacity. Matching activation/heartbeat/finish retries return their existing effects. Conflicts require reading the latest control before an explicit decision. A cleanup confirmation is an authenticated executor attestation after inspecting its own process group, not a server observation of that process.
+
+`get_execution_control(session_id, execution_id)` reads state and `should_stop` without mutation. States are `reserved`, `running`, `needs_review`, `finished`; `stop_requested` is independent. All execution mutations require positive strict integer revisions. A heartbeat older than 60 seconds is exposed as `stale`, but **no expiry releases a reservation or proves a process stopped**. An uncertain reservation may require manual operational recovery; this version does not offer a human force-release API. Clients must not replay a model merely because activation was acknowledged again. Finishing the local model and freeing its slot is distinct from publishing a ticket result or waiting for a human answer.
+
+Existing-execution lookup/control/heartbeat/finish use a restricted exact identity check: they remain available after owner permission disablement or profile pause/change so the original executor can learn `should_stop` and report cleanup. They grant no new model execution, project read or publication permission. A revoked device is refused even on this channel; its unresolved execution continues consuming capacity. Start/reserve always use current full authorization. Owner pause, profile/policy changes, lost claim and archived/inaccessible project produce a stop instruction. A pause or stop request alone never claims that the process actually stopped.
+
+Metadata contains only `id`, `owner_id`, `agent_id`, `profile_version`, `device_id`, `session_id`, `project_id`, `ticket_id`, opaque `work_id`/`turn_id`, `provider`, `model`, `state`, `revision`, `outcome`, categorized `reason`, timestamps, `stop_requested`, `should_stop`, `control_reason`, `cleanup_confirmed` and `stale`. It excludes the idempotency key, prompt, response, executable/workspace path, PID, provider session and credentials. Owner views include all active reservations and at most 50 recently finished executions, and never another owner's registry.
+
+A reported `quota_or_rate_limit` or `authentication_failed` outcome atomically pauses the owner and increments the limits version. The runtime view then reports `quota: {status: "blocked_observed", reason: <category>}`. This is a bounded observation from the executor, not a precise measurement of the subscription. Otherwise quota is `{status: "unavailable"}`; no percentage or reset time is invented. Explicit human `PATCH` with `paused=false` clears the observation. There is no automatic retry, provider/account/model fallback, listener or daemon.
+
+Owner-only REST routes:
+
+- `GET /api/runtime` returns `{limits: {owner_id, max_concurrent, paused, version}, active_count, quota, executions}`.
+- `PATCH /api/runtime/limits` accepts exactly `{expected_version, max_concurrent, paused}`; the strict integer limit is 1–8. Lowering it preserves existing reservations and blocks new starts beyond the limit.
+- `POST /api/runtime/executions/{id}/stop` accepts exactly `{expected_revision}` and requests cooperative cancellation. It does not release capacity. Reading control then finishing after confirmed cleanup completes the cancellation.
+
+Browser writes keep the existing human authentication and CSRF requirements. The owner must refresh after a stale version; agents cannot change owner limits or stop another execution.
 
 ## Delegation and human handoffs
 

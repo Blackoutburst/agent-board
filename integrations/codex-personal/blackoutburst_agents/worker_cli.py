@@ -1,6 +1,7 @@
 """One explicit ticket command; no background listener or queue selection."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import hashlib
 import math
@@ -20,6 +21,10 @@ from .runner_cli import _write_private
 from .subscription_probe import ProbeSettings, validate_executable
 from .work_journal import JournalError, WorkJournal, STAGES
 from .worker_client import WorkerBoardClient
+from .model_policy import PolicyError, TASK_CLASSES, load_policy
+from .runtime_journal import RuntimeJournal
+from .runtime_client import RuntimeBoardClient
+from .runtime_guard import RuntimeGuard
 
 
 def configure_parser(parser):
@@ -36,6 +41,8 @@ def configure_parser(parser):
     run.add_argument('--workspace', required=True, type=Path)
     run.add_argument('--codex', required=True, help='Chemin absolu du client Codex personnel.')
     run.add_argument('--model')
+    configure_routing(run)
+    configure_runtime(run)
     run.add_argument('--human-owner', help='Destinataire fixe d’une éventuelle question ; reprise explicite après sa réponse.')
     run.add_argument('--timeout', type=float, default=120)
     status = commands.add_parser('status', help='Lire uniquement les métadonnées locales, sans connexion.')
@@ -49,6 +56,40 @@ def configure_parser(parser):
     abandon.add_argument('--reason', required=True, help='Constat privé, sans secret, conservé dans le journal.')
     abandon.add_argument('--acknowledge-board-reconciled', required=True, action='store_true',
                          help='Confirmer avoir vérifié/réconcilié la réservation et la publication éventuelle sur le board.')
+
+
+def configure_routing(parser):
+    parser.add_argument('--model-policy', type=Path,
+                        help='Politique privée de modèles ; --model devient un override autorisé.')
+    parser.add_argument('--task-class', choices=TASK_CLASSES,
+                        help='Classe explicite du travail, requise avec --model-policy.')
+
+
+def routing_options(args):
+    path, task_class = getattr(args, 'model_policy', None), getattr(args, 'task_class', None)
+    if path is None and task_class is None:
+        return {}
+    if path is None or task_class is None:
+        raise PolicyError('routing_options_incomplete')
+    return {'model_policy': load_policy(path, owner_id=args.owner).to_dict(), 'task_class': task_class}
+
+
+def configure_runtime(parser):
+    parser.add_argument('--runtime-journal', type=Path,
+                        help='Activer le contrôle partagé des départs et garder ses reçus privés.')
+
+
+def runtime_worker_options(args, client, resources):
+    path = getattr(args, 'runtime_journal', None)
+    if path is None:
+        return {}
+    journal = resources.enter_context(RuntimeJournal(path))
+    runtime_client = RuntimeBoardClient.from_worker(client)
+    return {'runtime_guard_factory': lambda scope: RuntimeGuard(journal, runtime_client, scope)}
+
+
+def runtime_run_options(args):
+    return {'runtime_managed': True} if getattr(args, 'runtime_journal', None) is not None else {}
 
 
 def _instruction(path):
@@ -106,7 +147,8 @@ def _close_work(store, operation):
         agent = 'board-agent-' + hashlib.sha256(identity.encode('utf-8')).hexdigest()
         if (any(work[key] != scope[key] for key in ('owner_id', 'project_id', 'ticket_id'))
                 or work['agent_id'] != agent
-                or any(work[key] != configuration.get(key) for key in ('workspace', 'executable', 'model'))):
+                or any(work[key] != configuration.get(key) for key in ('workspace', 'executable'))
+                or work['model'] != operation['payload'].get('selected_model', configuration.get('model'))):
             raise JournalError('linked_work_scope_mismatch')
         if work['status'] != 'closed':
             store.resolve_interruption(work_id, decision='abandon',
@@ -173,6 +215,7 @@ def run(args):
                     raise ValueError
                 args.human_owner.encode('utf-8', 'strict')
             instruction = _instruction(args.instruction_file)
+            routing = routing_options(args)
             executable = validate_executable(args.codex)
             ProbeSettings(executable=executable, model=args.model, timeout_seconds=args.timeout)
             workspace = args.workspace.expanduser().resolve(strict=True)
@@ -182,17 +225,19 @@ def run(args):
             client = client_class.from_connection_file(args.connection_file, session_id=args.session)
             scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
                      'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
-            with WorkJournal(args.journal) as journal:
+            with WorkJournal(args.journal) as journal, ExitStack() as resources:
                 store = RunStore(args.state)
                 previous = {}
                 cancelled = threading.Event()
                 try:
                     for signum in (signal.SIGINT, signal.SIGTERM):
                         previous[signum] = signal.signal(signum, lambda *_: cancelled.set())
-                    result = BoardWorker(journal, store, client).run(scope=scope,
+                    options = runtime_worker_options(args, client, resources)
+                    result = BoardWorker(journal, store, client, **options).run(scope=scope,
                         request_id=args.request, instruction=instruction, workspace=workspace,
                         executable=executable, model=args.model, timeout=args.timeout,
-                        should_cancel=cancelled.is_set, human_owner_id=args.human_owner)
+                        should_cancel=cancelled.is_set, human_owner_id=args.human_owner,
+                        **routing, **runtime_run_options(args))
                     output = _public_result(result)
                 finally:
                     for signum, handler in previous.items():
@@ -201,7 +246,7 @@ def run(args):
             exit_code = 0 if output['status'] == 'complete' else 2
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return exit_code
-    except (JournalError, StoreError, BoardReadError) as error:
+    except (JournalError, StoreError, BoardReadError, PolicyError) as error:
         print(json.dumps({'status': 'blocked', 'reason': error.code}))
         return 2
     except (OSError, ValueError, TypeError):

@@ -16,7 +16,9 @@ from .run_store import RunStore
 from .runner_cli import _write_private
 from .subscription_probe import ProbeSettings, validate_executable
 from .work_journal import WorkJournal, JournalError
-from .worker_cli import _instruction
+from .worker_cli import (_instruction, configure_routing, routing_options,
+    configure_runtime, runtime_worker_options, runtime_run_options)
+from .model_policy import PolicyError, routing_configuration, check_routing_connection
 
 
 def configure_parser(parser):
@@ -32,7 +34,9 @@ def configure_parser(parser):
     run.add_argument('--instruction-file', required=True, type=Path)
     run.add_argument('--workspace', required=True, type=Path)
     run.add_argument('--codex', required=True)
-    run.add_argument('--model', required=True)
+    run.add_argument('--model')
+    configure_routing(run)
+    configure_runtime(run)
     run.add_argument('--timeout', type=float, default=120)
     run.add_argument('--human-owner')
     run.add_argument('--execute', action='store_true')
@@ -153,9 +157,10 @@ def run(args):
                 if (not math.isfinite(args.timeout) or not 1<=args.timeout<=300
                         or (args.execute and (args.state is None or args.work_journal is None))):raise ValueError
                 instruction=_instruction(args.instruction_file)
+                routing=routing_options(args)
                 executable=validate_executable(args.codex)
                 ProbeSettings(executable=executable,model=args.model,timeout_seconds=args.timeout)
-                if not isinstance(args.model,str) or not args.model.strip():raise ValueError
+                if not routing and (not isinstance(args.model,str) or not args.model.strip()):raise ValueError
                 if args.human_owner is not None and (not isinstance(args.human_owner,str) or not args.human_owner.strip()
                         or len(args.human_owner)>256 or any(ord(c)<32 or ord(c)==127 for c in args.human_owner)):raise ValueError
                 if args.human_owner is not None:args.human_owner.encode('utf-8','strict')
@@ -167,6 +172,9 @@ def run(args):
                 if not args.execute:
                     registration=client.register()
                     _profile(registration,ContextScope(args.owner,args.agent,args.project,'queue-preview'))
+                    if routing:
+                        configured=routing_configuration(**routing,owner_id=args.owner)
+                        check_routing_connection(configured,scope,registration)
                     project=client.call('get_project',{'project_id':args.project})
                     if (project.get('id')!=args.project or args.owner not in project.get('participants',[])
                             or project.get('archived') is not False):raise ValueError
@@ -177,21 +185,22 @@ def run(args):
                     journal=stack.enter_context(QueueJournal(args.journal))
                     work=stack.enter_context(WorkJournal(args.work_journal))
                     store=RunStore(args.state);stack.callback(store.close)
-                    worker=BoardWorker(work,store,client)
+                    worker=BoardWorker(work,store,client,**runtime_worker_options(args,client,stack))
                     cancelled,previous=threading.Event(),{}
                     try:
                         for signum in (signal.SIGINT,signal.SIGTERM):
                             previous[signum]=signal.signal(signum,lambda *_:cancelled.set())
                         output=_public(QueueWorker(journal,worker,client).run(scope=scope,request_id=args.request,
                             project_id=args.project,instruction=instruction,workspace=workspace,executable=executable,
-                            model=args.model,timeout=args.timeout,human_owner_id=args.human_owner,should_cancel=cancelled.is_set))
+                            model=args.model,timeout=args.timeout,human_owner_id=args.human_owner,
+                            should_cancel=cancelled.is_set,**routing,**runtime_run_options(args)))
                     finally:
                         for signum,handler in previous.items():signal.signal(signum,handler)
         print(json.dumps(output,ensure_ascii=False,indent=2))
         return 2 if output.get('status') in ('needs_review','pending') else 0
     except KeyboardInterrupt:
         print(json.dumps({'status':'needs_review','reason':'queue_interrupted'}));return 130
-    except JournalError as error:
+    except (JournalError, PolicyError) as error:
         code=error.code if re.fullmatch('[a-z][a-z0-9_]{0,100}',error.code) else 'queue_state_unavailable'
         print(json.dumps({'status':'needs_review','reason':code}));return 2
     except Exception:

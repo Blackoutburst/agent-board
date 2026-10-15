@@ -10,9 +10,10 @@ from .subscription_probe import ProbeSettings
 
 
 class PersonalRunner:
-    def __init__(self, store: RunStore, transport: Callable = execute_turn):
+    def __init__(self, store: RunStore, transport: Callable = execute_turn, *, runtime_guard=None):
         self.store = store
         self.transport = transport
+        self.runtime_guard = runtime_guard
 
     def run(self, work_id: str, request_id: str, prompt: str, *,
             timeout: float = 120, should_cancel: Callable[[], bool] | None = None) -> dict:
@@ -28,11 +29,22 @@ class PersonalRunner:
             entry = self.store.begin_turn(work_id, request_id, prompt)
             turn_id = entry['turn']['id']
             if entry['cached']:
+                if self.runtime_guard is not None:
+                    self.runtime_guard.confirm_cached(work, turn_id, self.store.turn_result(turn_id))
                 return {'work_id': work_id, 'turn_id': turn_id, 'cached': True,
                         'result': self.store.turn_result(turn_id)}
 
+            if self.runtime_guard is not None:
+                try:
+                    self.runtime_guard.before(work, turn_id)
+                except Exception:
+                    self.store.finish_turn(turn_id, {'status': 'blocked', 'reason': 'runtime_start_requires_review',
+                        'text': '', 'uncertain': True, 'verification': {'cleanup_confirmed': True}})
+                    raise
+
             def cancelled():
-                return bool((should_cancel and should_cancel()) or self.store.is_cancelled(turn_id))
+                return bool((should_cancel and should_cancel()) or self.store.is_cancelled(turn_id)
+                    or (self.runtime_guard is not None and self.runtime_guard.should_cancel()))
 
             try:
                 result = self.transport(
@@ -48,6 +60,8 @@ class PersonalRunner:
                 result = {'status': 'blocked', 'reason': 'runner_error',
                           'session_id': None, 'text': ''}
             self.store.finish_turn(turn_id, result)
+            if self.runtime_guard is not None:
+                self.runtime_guard.finish(work, turn_id, self.store.turn_result(turn_id))
             return {'work_id': work_id, 'turn_id': turn_id, 'cached': False,
                     'result': self.store.turn_result(turn_id)}
 

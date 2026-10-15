@@ -16,6 +16,7 @@ from pathlib import Path
 import time
 
 from .event_journal import EventJournalError
+from .model_policy import PolicyError, routing_configuration, check_routing_connection
 
 
 class _Abort(Exception):
@@ -133,7 +134,8 @@ class EventDrainer:
         return None
 
     def drain(self, *, scope, instruction, workspace, executable, model=None, timeout=120,
-              max_pages=4, limit=50, execute=False, after=0, should_cancel=None, human_owner_id=None):
+              max_pages=4, limit=50, execute=False, after=0, should_cancel=None, human_owner_id=None,
+              model_policy=None, task_class=None, runtime_managed=False):
         subscription = batch = None
         pages = ingested = 0
         buffer_full = False
@@ -165,6 +167,13 @@ class EventDrainer:
                                  'model': model, 'timeout': timeout}
                 if human_owner_id is not None:
                     configuration['human_owner_id'] = human_owner_id
+                routing = routing_configuration(model_policy, task_class, owner_id=scope['owner_id'])
+                if routing is not None:
+                    configuration['routing'] = routing
+                if type(runtime_managed) is not bool or (runtime_managed and model is None and routing is None):
+                    raise _Abort('invalid_drain_request')
+                if runtime_managed:
+                    configuration['runtime_managed'] = True
                 if not Path(configuration['workspace']).is_dir() or not Path(configuration['executable']).is_file():
                     raise _Abort('invalid_drain_request')
                 if execute and self.worker is None:
@@ -173,7 +182,9 @@ class EventDrainer:
                 raise _Abort('invalid_drain_request') from None
             with self.journal.lock(scope):
                 self._cancel(should_cancel)
-                self._register(scope, execute=execute)
+                registration = self._register(scope, execute=execute)
+                if routing is not None:
+                    check_routing_connection(routing, scope, registration)
                 self._ticket(scope)  # Current project membership precedes ingestion.
                 subscription = self.journal.open_subscription(scope, configuration, after=after)
                 for _ in range(max_pages):
@@ -223,6 +234,10 @@ class EventDrainer:
                 # the first call already changed the ticket to review.
                 batch = self.journal.start_batch(batch['id'])
                 human_options = {'human_owner_id': human_owner_id} if human_owner_id is not None else {}
+                if routing is not None:
+                    human_options.update(model_policy=routing['policy'], task_class=routing['task_class'])
+                if runtime_managed:
+                    human_options['runtime_managed'] = True
                 result = self.worker.run(scope=scope, request_id=batch['request_id'],
                     instruction=configuration['instruction'], workspace=configuration['workspace'],
                     executable=configuration['executable'], model=model, timeout=timeout,
@@ -238,6 +253,8 @@ class EventDrainer:
                     batch = self.journal.finish_batch(batch['id'], result)
                 status = {'complete': 'complete', 'pending': 'pending'}.get(result.get('status'), 'needs_review')
                 return receipt(status, 'worker_' + status, worker_operation_id=result.get('operation_id'))
+        except PolicyError as error:
+            return receipt('blocked', error.code)
         except _Abort as error:
             return receipt(error.status, error.reason)
         except EventJournalError as error:

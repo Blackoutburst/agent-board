@@ -410,9 +410,13 @@ const Workspace = (() => {
     const request = ++state.request; navigate("agents"); workRoute({ page: "agents" });
     const body = frame("Agents", "Give each agent a purpose, then connect it to an executor on your own device.", [btn("Refresh", guard(agents)), btn("New profile", guard(() => profileEditor()), "primary")]);
     const change = guard(async tab => { agentTab = tab; await agents(); });
-    const navigation = tabs([["profiles", "Profiles"], ["connections", "Connections"]], agentTab, change);
+    const navigation = tabs([["profiles", "Profiles"], ["connections", "Connections"], ["runtime", "Runtime"]], agentTab, change);
     navigation.setAttribute("aria-label", "Agent sections");
     body.append(navigation);
+    if (agentTab === "runtime") {
+      await renderRuntime(body, request);
+      return;
+    }
     if (agentTab === "connections") {
       body.append(el("div", { class: "profile-intro" }, el("p", { class: "muted" }, "These are registered installations and their live sessions. A profile holds preferences; its executor uses the device’s existing connection."), btn("Connect a device", guard(setup))));
       const entries = await api("/agents");
@@ -430,6 +434,109 @@ const Workspace = (() => {
     body.append(mine.length ? el("div", { class: "profile-grid" }, mine.map(profileCard)) : box("Create your first profile", "Start with a developer, reviewer, or researcher, then adjust its instructions and project scope.", btn("New profile", guard(() => profileEditor()), "primary")));
     if (shared.length) body.append(el("section", { class: "shared-profiles" }, el("h2", {}, "From your collaborators"), el("div", { class: "profile-grid" }, shared.map(profileCard))));
     body.append(el("p", { class: "small muted profile-permission-note" }, "Profile permissions can only narrow the access allowed in your account settings. Pausing blocks subsequent board calls; existing work or leases may still need reconciliation."));
+  }
+  const runtimeReasons = {
+    quota_or_rate_limit: "Quota or rate limit reached", authentication_failed: "Authentication failed",
+    execution_failed: "Execution failed", unavailable: "Provider unavailable", timeout: "Time limit reached",
+    cleanup_unconfirmed: "Cleanup has not been confirmed", cleanup_failed: "Cleanup failed",
+    runner_error: "Executor error", protocol_error: "Unexpected executor response", policy_changed: "Permissions changed",
+    claim_lost: "Ticket claim lost", stop_requested: "Stop requested", owner_paused: "Owner paused execution"
+  };
+  function runtimeState(execution) {
+    if (execution.state === "finished") {
+      if (execution.cleanup_confirmed !== true) return ["Cleanup unconfirmed", "status-blocked"];
+      return execution.outcome === "cancelled" ? ["Stop confirmed", "status-done"]
+        : execution.outcome === "blocked" ? ["Blocked", "status-blocked"]
+          : execution.outcome === "completed" ? ["Completed", "status-done"] : ["Finished", ""];
+    }
+    return { reserved: ["Reserved", ""], running: ["Running", "status-running"], needs_review: ["Needs review", "status-blocked"] }[execution.state] || ["Unknown state", ""];
+  }
+  function runtimeCard(execution, agentNames) {
+    const [label, color] = runtimeState(execution), active = execution.state !== "finished";
+    const stopping = active && (execution.stop_requested === true || execution.should_stop === true);
+    const stopLabel = execution.stop_requested === true || execution.control_reason === "owner_paused" ? "Stop requested" : "Stop required";
+    const identity = agentNames.get(execution.agent_id) || `Agent ${execution.agent_id}`;
+    const heading = el("div", { class: "runtime-execution-heading" }, el("div", {}, el("h3", {}, identity),
+      el("p", { class: "small muted" }, `${execution.provider} · ${execution.model}`)), badge(label, color));
+    const facts = el("dl", { class: "runtime-facts" },
+      el("dt", {}, "Ticket"), el("dd", {}, workLink(`Ticket ${String(execution.ticket_id).slice(0, 12)}`, { ticket: execution.ticket_id })),
+      el("dt", {}, "Last heartbeat"), el("dd", {}, execution.last_heartbeat_at ? date(execution.last_heartbeat_at) : "Not reported"),
+      el("dt", {}, execution.finished_at ? "Finished" : "Reserved"), el("dd", {}, date(execution.finished_at || execution.created_at) || "Not reported"));
+    const card = el("article", { class: "runtime-execution", "data-execution-id": execution.id }, heading, facts);
+    if (stopping && execution.state !== "needs_review") card.append(el("p", { class: "runtime-control callout" }, el("strong", {}, stopLabel), " · Waiting for the executor to confirm cleanup. Capacity is still reserved."));
+    if (active && execution.stale === true) card.append(el("p", { class: "runtime-presence small" }, "Presence stale — no recent heartbeat. This does not confirm that the process has stopped."));
+    if (execution.state === "needs_review") card.append(el("p", { class: "small runtime-presence" }, "Cleanup is unconfirmed. Inspect the executor before recovering this work; its capacity remains reserved."));
+    if (execution.state === "finished" && execution.cleanup_confirmed === true) card.append(el("p", { class: "small muted" }, "Executor cleanup confirmed. Capacity released."));
+    const reason = runtimeReasons[execution.reason];
+    if (reason && !["cleanup_unconfirmed", "stop_requested"].includes(execution.reason)) card.append(el("p", { class: "small muted" }, reason));
+    const error = el("p", { class: "form-error", role: "alert", hidden: true });
+    if (active) {
+      const stop = btn(stopping ? stopLabel : "Request stop", async () => {
+        stop.disabled = true; error.hidden = true;
+        try {
+          await api(`/runtime/executions/${workPath(execution.id)}/stop`, { method: "POST", data: { expected_revision: execution.revision } });
+          if (state.view === "agents" && agentTab === "runtime" && card.isConnected) await agents();
+        } catch (failure) {
+          error.textContent = failure.status === 409 ? "This execution changed. Refresh Runtime before requesting a stop again." : failure.message;
+          error.hidden = false;
+        } finally { stop.disabled = stopping; }
+      }, "quiet", { disabled: stopping });
+      card.append(el("div", { class: "runtime-execution-actions" }, stop), error);
+    }
+    return card;
+  }
+  async function renderRuntime(body, request) {
+    const loading = empty("Loading your runtime…"); body.append(loading);
+    try {
+      const [data, entries] = await Promise.all([api("/runtime"), api("/agents")]);
+      if (request !== state.request) return;
+      const limits = data?.limits, owner = state.actor.owner_id;
+      if (limits?.owner_id !== owner || !Number.isSafeInteger(limits.version) || !Number.isSafeInteger(limits.max_concurrent)
+          || limits.max_concurrent < 1 || limits.max_concurrent > 8 || typeof limits.paused !== "boolean"
+          || !Number.isSafeInteger(data.active_count) || data.active_count < 0 || !Array.isArray(data.executions)) throw new Error("Runtime data is unavailable. Refresh to try again.");
+      const executions = data.executions.filter(item => item.owner_id === owner);
+      const names = new Map(entries.filter(item => item.owner_id === owner).map(item => [item.id, item.name]));
+      const active = executions.filter(item => item.state !== "finished"), recent = executions.filter(item => item.state === "finished");
+      const providerBlock = data.quota?.status === "blocked_observed";
+      const quotaLabel = providerBlock ? data.quota.reason === "authentication_failed" ? "Authentication failed" : "Quota or rate limit reported" : "Unavailable";
+      const maximum = field("Maximum concurrent executions", "max_concurrent", { type: "number", value: limits.max_concurrent, required: true });
+      Object.assign(maximum.querySelector("input"), { min: "1", max: "8", step: "1" });
+      const paused = check("Pause participating executors", "paused", limits.paused);
+      const form = el("form", { class: "runtime-limits" }, maximum, paused,
+        el("p", { class: "field-hint" }, "Pause blocks new starts and asks active executors to stop. It takes effect when they check the board; cleanup must still be confirmed. Resuming allows new starts and keeps existing stop requests in effect."),
+        el("button", { type: "submit", class: "primary" }, "Save runtime limits"));
+      const error = el("p", { class: "form-error", role: "alert", hidden: true }); form.prepend(error);
+      submit(form, async values => {
+        error.hidden = true;
+        const maximum = Number(values.get("max_concurrent"));
+        if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 8) { error.textContent = "Choose a limit from 1 to 8."; error.hidden = false; return; }
+        try {
+          await api("/runtime/limits", { method: "PATCH", data: { expected_version: limits.version, max_concurrent: maximum, paused: values.has("paused") } });
+          if (request === state.request) await agents();
+        } catch (failure) {
+          error.textContent = failure.status === 409 ? "Your runtime limits changed. Refresh Runtime to load the current settings before saving again." : failure.message;
+          error.hidden = false;
+        }
+      });
+      loading.remove();
+      body.append(el("div", { class: "runtime-intro" }, el("p", {}, `Runtime for ${ownerName(owner)}`),
+          el("p", { class: "small muted" }, "Only executors using the runtime protocol appear here. These controls share your account’s capacity across its profiles and devices; they do not control other processes."),
+          el("p", { class: "small muted runtime-snapshot" }, `Snapshot loaded ${date(Date.now() / 1000)}. Use Refresh for current state.`)),
+        el("div", { class: "runtime-summary" },
+          panel("Shared capacity", el("div", { class: "panel-body" }, el("p", { class: "runtime-capacity" }, el("strong", {}, data.active_count), ` / ${limits.max_concurrent} occupied`),
+            badge(limits.paused ? "Paused" : "Accepting executions", limits.paused ? "status-blocked" : "status-ready"), el("p", { class: "small muted" }, "Reservations awaiting cleanup still occupy capacity."))),
+          panel("Subscription quota", el("div", { class: "panel-body" }, el("p", { class: "runtime-quota" }, quotaLabel),
+            el("p", { class: "small muted" }, providerBlock ? "An executor reported this block. It is not a quota measurement; remaining usage and reset time are unknown." : "The connected provider has not supplied a quota reading. Remaining usage and reset time are unknown."),
+            providerBlock ? el("p", { class: "small runtime-presence" }, "New executions are paused. Check provider access before resuming in your runtime limits.") : null))),
+        panel("Your runtime limits", el("div", { class: "panel-body" }, form)),
+        el("section", { class: "runtime-section", "aria-label": "Active executions" }, el("h2", {}, `Active executions (${active.length})`),
+          active.length ? el("div", { class: "runtime-executions" }, active.map(item => runtimeCard(item, names))) : box("No active executions", "A participating executor will appear after it reserves work. This page does not launch an agent.")),
+        el("section", { class: "runtime-section", "aria-label": "Recent executions" }, el("h2", {}, "Recent executions"),
+          recent.length ? el("div", { class: "runtime-executions" }, recent.map(item => runtimeCard(item, names))) : empty("No recently finished executions.")));
+    } catch (failure) {
+      if (request !== state.request) return;
+      loading.replaceWith(el("div", { class: "callout", role: "alert" }, el("strong", {}, "Runtime unavailable"), el("p", {}, failure.message || "Could not load runtime data. Use Refresh to try again.")));
+    }
   }
   async function profileEditor(id = null) {
     const [p, projects] = await Promise.all([id ? api(`/agent-profiles/${workPath(id)}`) : Promise.resolve(null), api("/projects?include_archived=true")]);

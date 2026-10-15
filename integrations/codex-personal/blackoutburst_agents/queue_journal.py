@@ -52,7 +52,8 @@ def _configuration(value):
     if not isinstance(value, dict) or 'project_id' not in value:
         raise JournalError('invalid_configuration')
     _identifier(value['project_id'], 'invalid_configuration')
-    _identifier(value.get('model'), 'invalid_configuration')
+    if 'routing' not in value or value.get('model') is not None:
+        _identifier(value.get('model'), 'invalid_configuration')
     _work_configuration({key: item for key, item in value.items() if key != 'project_id'})
     return _encode(value, MAX_CONFIGURATION_BYTES, 'invalid_configuration')
 

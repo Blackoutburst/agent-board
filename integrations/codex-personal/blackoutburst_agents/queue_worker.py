@@ -13,6 +13,7 @@ from .board_reader import BoardReadError, _text
 from .board_worker import BoardWorker
 from .context import ContextScope, _profile, _hash
 from .queue_journal import JournalError, _configuration
+from .model_policy import PolicyError, routing_configuration, check_routing_connection
 
 
 class _Stop(Exception):
@@ -166,6 +167,8 @@ class QueueWorker:
     def _advance(self, op, should_cancel):
         self._cancel(should_cancel)
         registration, profile_hash = self._registration(op)
+        if op['configuration'].get('routing'):
+            check_routing_connection(op['configuration']['routing'], op['scope'], registration)
         project = self._project(op)
         if op['stage'] == 'new':
             # Establish read-only lookup support before allowing a new effect.
@@ -218,6 +221,10 @@ class QueueWorker:
         config = op['configuration']
         scope = {**op['scope'], 'project_id': config['project_id'], 'ticket_id': op['payload']['ticket_id']}
         kwargs = {'human_owner_id': config['human_owner_id']} if config.get('human_owner_id') else {}
+        if config.get('routing'):
+            kwargs.update(model_policy=config['routing']['policy'], task_class=config['routing']['task_class'])
+        if config.get('runtime_managed'):
+            kwargs['runtime_managed'] = True
         result = self.worker.run(scope=scope, request_id=op['payload']['worker_request_id'],
             instruction=config['instruction'], workspace=config['workspace'], executable=config['executable'],
             model=config['model'], timeout=config['timeout'], should_cancel=should_cancel, **kwargs)
@@ -280,7 +287,8 @@ class QueueWorker:
             return self._receipt(op, reason='queue_state_unavailable', pending=op is not None)
 
     def run(self, *, scope, request_id, project_id, instruction, workspace, executable,
-            model, timeout=120, human_owner_id=None, should_cancel=None):
+            model=None, timeout=120, human_owner_id=None, should_cancel=None, model_policy=None, task_class=None,
+            runtime_managed=False):
         op = None
         try:
             config = {'project_id': project_id, 'instruction': instruction,
@@ -289,6 +297,13 @@ class QueueWorker:
                       'model': model, 'timeout': timeout}
             if human_owner_id is not None:
                 config['human_owner_id'] = human_owner_id
+            routing = routing_configuration(model_policy, task_class, owner_id=scope['owner_id'])
+            if routing is not None:
+                config['routing'] = routing
+            if type(runtime_managed) is not bool:
+                raise _Stop('invalid_queue_request')
+            if runtime_managed:
+                config['runtime_managed'] = True
             _configuration(config)
             if not Path(config['workspace']).is_dir() or not Path(config['executable']).is_file():
                 raise _Stop('invalid_queue_request')
@@ -298,12 +313,14 @@ class QueueWorker:
                     return self._receipt(op, cached=True)
                 try:
                     return self._advance(op, should_cancel)
-                except _Stop as error:
+                except (_Stop, PolicyError) as error:
                     op = self.journal.get(op['id'])
                     op = self._save(op, 'needs_review', reason=str(error))
                     return self._receipt(op)
                 except _Unavailable:
                     return self._receipt(self.journal.get(op['id']), reason='board_unavailable', pending=True)
+        except PolicyError as error:
+            return self._receipt(op, reason=error.code)
         except JournalError as error:
             if op is None:
                 return self._receipt(reason=error.code)
