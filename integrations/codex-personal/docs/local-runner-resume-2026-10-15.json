@@ -1,0 +1,22 @@
+{
+  "schema": "blackoutburst.personal-runner-proof/1",
+  "verified_at": "2026-10-15T09:30:32.603050+00:00",
+  "status": "passed",
+  "scope": "local_personal_codex_read_only_text",
+  "checks": {
+    "first_turn_completed": true,
+    "new_process_recalled_previous_marker": true,
+    "same_session_persisted": true,
+    "duplicate_request_cached": true,
+    "workspace_remained_empty": true,
+    "status_excludes_text": true
+  },
+  "distinct_cli_invocations": 5,
+  "model_turns_requested": 2,
+  "limitations": [
+    "No second owner validated.",
+    "No hosted service eligibility established.",
+    "No live board listener or task execution activated.",
+    "Abrupt interruption and cancellation tested with fake executables."
+  ]
+}

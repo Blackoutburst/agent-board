@@ -1,0 +1,24 @@
+{
+  "format": "blackoutburst-context-live-read-proof-v1",
+  "created_at": "2026-10-15T09:54:44.784278+00:00",
+  "board_baseline": "0a601f2e2db103f1aa61cfc434bdcc8945fbbc8b",
+  "status": "passed",
+  "listener_started": false,
+  "board_messages_posted": 0,
+  "board_tasks_automatically_claimed": 0,
+  "real_codex_turns": 0,
+  "mcp_context_read_verified": true,
+  "source_snapshot_roundtrip_verified": true,
+  "freshness_recheck_verified": true,
+  "canonical_bytes": 9400,
+  "omissions": 0,
+  "read_operations": [
+    "get_ticket",
+    "get_thread",
+    "get_ticket",
+    "get_ticket",
+    "get_thread",
+    "get_ticket"
+  ],
+  "credential_storage": "existing_header_helper_in_memory_only"
+}

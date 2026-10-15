@@ -1,0 +1,20 @@
+{
+  "format": "blackoutburst-personal-subscription-proof-v1",
+  "tool_version": "0.1.0",
+  "command": "doctor",
+  "scope": "personal_codex_cli",
+  "result": {
+    "schema_version": 1,
+    "check": "codex_subscription_doctor",
+    "ok": true,
+    "status": "ready",
+    "version": "0.162.0-alpha.17.2",
+    "authentication": "chatgpt",
+    "reason": "ready"
+  },
+  "limitations": [
+    "Does not establish hosted-service eligibility.",
+    "Does not establish a second owner's account access.",
+    "Does not activate a board listener or execute a ticket."
+  ]
+}
