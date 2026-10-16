@@ -43,7 +43,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.7.4` and schema 9. Through the public MCP URL with an existing device credential, discover 46 tools including `release_ticket` and `reconcile_profile_claim`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.8.0` and schema 10. Through the public MCP URL with an existing device credential, discover 47 tools including `release_ticket`, `reconcile_profile_claim` and `reserve_message_execution`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -55,7 +55,7 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.7 code against a schema-9 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
+Do not start any pre-2.8 code against a schema-10 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
 
 Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
 
@@ -92,3 +92,9 @@ Version 2.7 adds `message_feeds` as schema 9 without changing legacy cursors or 
 ### Desktop sidebar viewport (2.6.3)
 
 The desktop header and sidebar stay within the viewport; long conversation lists scroll independently so Settings, Connect agent and Documentation remain reachable on long pages. Window scrolling remains the content-scrolling model. The mobile navigation layout is unchanged. Verify `tests/browser_sidebar.cjs` against the synthetic follow-ups fixture, including long-page start/middle/end, expanded conversations and short desktop viewports.
+
+### Message Runtime migration (2.8)
+
+Schema 10 transactionally rebuilds `runtime_executions` for exact addressed-message scope while retaining existing ticket rows, indexes, foreign keys and capacity. General conversations have nullable project/ticket references; no visible ticket or claim is fabricated. Preserve a matching schema-9 backup and source before release. Validate migration/rollback, both scope kinds and backup restoration with synthetic fixtures. The Runtime view links message executions to their source conversation.
+
+The adapter 0.17 [message host](../integrations/codex-personal/MESSAGE_HOST.md) uses confirmed deliveries, exact context checks and idempotent publication. Creation remains disabled; finite activation and foreground execution are separate explicit commands. This release does not install or start a listener, model, feed or cloud agent.

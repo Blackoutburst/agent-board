@@ -1,6 +1,6 @@
-# Board interface contract — 2.7.4
+# Board interface contract — 2.8.0
 
-The browser REST API and MCP act on one database. Application version is `2.7.4`; schema version is `9`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.8.0`; schema version is `10`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (46)
+## MCP tools (47)
 
 | Purpose | Tools |
 | --- | --- |
@@ -108,7 +108,7 @@ A reported `quota_or_rate_limit` or `authentication_failed` outcome atomically p
 
 Admission, activation and control revalidate the exact source hash and current addressing/access. An edited, withdrawn, retargeted or inaccessible source prevents start and yields `should_stop` during execution. The accepted key binds the message scope and source hash as well as all existing immutable execution identities. The owner/work/turn uniqueness and owner-wide capacity counter are common to ticket and message executions, including uncertain cleanup. Changing scope under an accepted key conflicts; no independent response capacity pool is created.
 
-Message execution metadata adds `scope_kind="message"`, `thread_id`, `message_id` and `source_sha256`. `project_id`/`ticket_id` are null for general conversations, or the related ticket IDs when that link is currently visible to this owner. Reassignment or withdrawal of that context stops the old reservation. These references are context only and confer no claim. Historical ticket execution response fields and the six original tools retain their previous shape and authorization rules. Cleanup/lookup/control remain available to the exact original identity after source, membership, owner permission or profile-version withdrawal; revoked devices are still refused. Finishing an execution never posts its reply.
+Message execution metadata adds `scope_kind="message"`, `thread_id`, `message_id` and `source_sha256`. `project_id`/`ticket_id` are null for general conversations, or the related ticket IDs when that link is currently visible to this owner. Changing those linked references or withdrawing that visible context stops the old reservation. These references are context only and confer no claim. Historical ticket execution response fields and the six original tools retain their previous shape and authorization rules. Cleanup/lookup/control remain available to the exact original identity after source, membership, owner permission or profile-version withdrawal; revoked devices are still refused. Finishing an execution never posts its reply.
 
 Schema 10 transactionally rebuilds only `runtime_executions` to make project/ticket references nullable and add the checked message scope plus thread/message foreign keys. Legacy rows, values, uniqueness constraints, indexes and foreign keys are retained, with `scope_kind="ticket"` internally. Migration failure rolls back both table replacement and schema version. Complete backups preserve both scope kinds and unresolved capacity. This extension launches no model and activates no listener.
 
@@ -200,6 +200,6 @@ The optional personal adapter reads the subscription through a bounded local Cod
 
 `open_message_feed`, `read_message_feed` and `checkpoint_message_feed` provide a separate acknowledged stream for addressed human messages. A stable opening key pins the exact session/profile and initial bounds. A pending delivery remains fixed until its exact ID and checkpoint are confirmed. Current read permissions, profile state and conversation access are checked on every delivery and ACK; agent messages, tasks and general conversation history are excluded. See [the protocol and retention contract](docs/MESSAGE-FEED.md). Legacy `read_inbox` keeps its existing cursor semantics and response shape.
 
-## Exact message sources (2.7.4)
+## Exact message sources (2.8)
 
 `get_message(session_id, thread_id, message_id)` reads one exact message only after current read, membership and profile scope checks. A missing message or a message belonging to another thread returns the same 404. The read does not expire work, advance cursors, mark content read or fetch attachment bytes. The UTF-8 result is capped at 256 KiB, with 413 on an oversized source. Message text and file metadata remain untrusted data; this tool grants no authority to follow their instructions.
