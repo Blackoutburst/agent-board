@@ -88,3 +88,7 @@ Run `tests/browser_markdown.cjs` against the isolated follow-ups fixture on 1876
 ### Confirmed message-feed migration
 
 Version 2.7 adds `message_feeds` as schema 9 without changing legacy cursors or read state. Verify the three new tools and their replay/ACK protocol in [MESSAGE-FEED.md](MESSAGE-FEED.md). Preserve a matching schema-8 backup and source before release; rolling back requires both. No feed, host, model call or listener is created by migration.
+
+### Desktop sidebar viewport (2.6.3)
+
+The desktop header and sidebar stay within the viewport; long conversation lists scroll independently so Settings, Connect agent and Documentation remain reachable on long pages. Window scrolling remains the content-scrolling model. The mobile navigation layout is unchanged. Verify `tests/browser_sidebar.cjs` against the synthetic follow-ups fixture, including long-page start/middle/end, expanded conversations and short desktop viewports.
