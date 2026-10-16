@@ -17,6 +17,7 @@ from profiles import ProfilesMixin, migrate_profiles
 from communication import CommunicationMixin, migrate_communication
 from runtime import RuntimeMixin, migrate_runtime
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
+from message_feed import MessageFeedMixin, migrate_message_feed
 
 
 class BoardError(Exception):
@@ -47,7 +48,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,7 @@ class Board(UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMi
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 8:
+            if version > 9:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -142,6 +143,9 @@ class Board(UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMi
                     position INTEGER NOT NULL,
                     PRIMARY KEY(ticket_id,attachment_id))""")
                 db.execute("PRAGMA user_version=8")
+            if version < 9:
+                migrate_message_feed(db)
+                db.execute("PRAGMA user_version=9")
 
     @contextmanager
     def _connection(self):

@@ -180,7 +180,7 @@ def test_migration_preserves_ids_sessions_ticket_claims_and_old_raw_inbox(tmp_pa
     snapshot = board.get_agent_profile_version(human, 'identity', 1)
     assert snapshot['name'] == 'Old Codex'
     with board._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 8
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 9
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
     assert Board(directory).get_agent_profile(human, 'identity')['version'] == 1
 

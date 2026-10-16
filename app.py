@@ -324,6 +324,10 @@ class ProfileBinding(ProjectBody):
     agent_kind: str = Field(default='agent', min_length=1, max_length=100)
 
 
+MessageFeedLimit = Annotated[int, Field(strict=True, ge=1, le=200)]
+MessageFeedCheckpoint = Annotated[int, Field(strict=True, ge=0)]
+
+
 RuntimeOpaque = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$')]
 RuntimeModel = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:/-]*$')]
 RuntimeOutcome = Literal['completed', 'blocked', 'cancelled']
@@ -444,6 +448,21 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         """Poll addressed messages and announce presence. Defaults to messages, cursor and session only. Workers use get_work separately or opt into tasks/work with include_work=true. Keep the returned cursor for incremental delivery; polling does not wake an idle chat or claim work."""
         actor = board.register_session(device_actor(), session_id, label, capabilities or [])
         return board.read_inbox(actor, cursor, limit, include_work=include_work)
+
+    @mcp.tool()
+    async def open_message_feed(session_id: str, idempotency_key: str, start_at: Literal['beginning', 'now'] = 'beginning', limit: MessageFeedLimit = 50) -> dict:
+        """Open a durable human-message-only feed with a stable retry key. Bounds are immutable; this does not register, claim work, run models or activate a listener."""
+        return board.open_message_feed(session_actor(session_id), idempotency_key, start_at, limit)
+
+    @mcp.tool()
+    async def read_message_feed(session_id: str, feed_id: str) -> dict:
+        """Read/replay the same pending human-message delivery until explicitly checkpointed. Persist and handle it before checkpointing; permissions are checked on every replay."""
+        return board.read_message_feed(session_actor(session_id), feed_id)
+
+    @mcp.tool()
+    async def checkpoint_message_feed(session_id: str, feed_id: str, delivery_id: str, expected_checkpoint: MessageFeedCheckpoint) -> dict:
+        """Confirm an exact processed delivery. Retry the last acknowledgement safely; never skip a pending batch. No work is claimed and no message is marked read for humans."""
+        return board.checkpoint_message_feed(session_actor(session_id), feed_id, delivery_id, expected_checkpoint)
 
     @mcp.tool()
     async def get_thread(session_id: str, thread_id: str, before: str | None = None, limit: int = 50) -> dict:
@@ -788,7 +807,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.6.3", "schema_version": 8, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering"]}
+        return {"status": "ok", "version": "2.7.0", "schema_version": 9, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

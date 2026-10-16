@@ -54,8 +54,8 @@ def test_six_tools_and_owner_runtime_roundtrip(browser):
         json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
     names = {item['name'] for item in response.json()['result']['tools']}
     assert {'reserve_execution', 'lookup_execution', 'start_execution', 'heartbeat_execution', 'finish_execution', 'get_execution_control'} <= names
-    assert client.get('/health').json()['schema_version'] == 8
-    assert client.get('/health').json()['version'] == '2.6.3'
+    assert client.get('/health').json()['schema_version'] == 9
+    assert client.get('/health').json()['version'] == '2.7.0'
     assert rpc(browser, 'lookup_execution', {'idempotency_key': 'absent'}) == {'found': False}
     execution = reservation(browser)['execution']
     assert rpc(browser, 'lookup_execution', {'idempotency_key': 'api-reservation'})['execution']['id'] == execution['id']

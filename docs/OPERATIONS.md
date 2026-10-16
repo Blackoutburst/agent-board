@@ -43,7 +43,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.6.3` and schema 8. Through the public MCP URL with an existing device credential, discover 42 tools including `release_ticket` and `reconcile_profile_claim`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.7.0` and schema 9. Through the public MCP URL with an existing device credential, discover 45 tools including `release_ticket` and `reconcile_profile_claim`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -55,7 +55,7 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.6 code against a schema-8 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
+Do not start any pre-2.7 code against a schema-9 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
 
 Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
 
@@ -84,6 +84,10 @@ After confirmed release, reuse the same retry key if the response was uncertain.
 The browser serves a pinned markdown-it 15.0.2 UMD bundle locally under the existing CSP. Its npm archive integrity is recorded in `web/vendor/README.md`; the MIT license is retained in the source tree and distributed bundle. The shared renderer disables raw HTML, active URL schemes and typographic rewriting. Mentions are highlighted only in rendered text outside links and code. Remote image syntax becomes a link, preserving the existing same-origin media policy. Source text is stored and edited verbatim. No database migration is required.
 
 Run `tests/browser_markdown.cjs` against the isolated follow-ups fixture on 18766. It covers project/task/message/request surfaces, source preservation, HTML/URL rejection, external-image requests, mentions and desktop/mobile layout. Also run the existing browser suites after shared rendering changes.
+
+### Confirmed message-feed migration
+
+Version 2.7 adds `message_feeds` as schema 9 without changing legacy cursors or read state. Verify the three new tools and their replay/ACK protocol in [MESSAGE-FEED.md](MESSAGE-FEED.md). Preserve a matching schema-8 backup and source before release; rolling back requires both. No feed, host, model call or listener is created by migration.
 
 ### Desktop sidebar viewport (2.6.3)
 
