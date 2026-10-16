@@ -55,6 +55,8 @@ def main(argv=None) -> int:
     configure_usage(subs.add_parser('usage', help='Lire les limites locales et transmettre une observation datée.'))
     from .host_cli import configure_parser as configure_host, run as run_host
     configure_host(subs.add_parser('host', help='Hôte local explicite pour des tickets choisis.'))
+    from .family_cli import configure_parser as configure_family, run as run_family
+    configure_family(subs.add_parser('family',help='Famille locale bornée : deux enfants et une intégration en revue.'))
     from .development_cli import configure_parser as configure_development, run as run_development
     configure_development(subs.add_parser('development',help='Développement borné d’un ticket explicitement choisi.'))
     for command, help_text in (
@@ -68,6 +70,8 @@ def main(argv=None) -> int:
             p.add_argument("--model", help="Modèle choisi explicitement ; sinon défaut du client Codex.")
             p.add_argument("--timeout", type=float, default=120, help="Délai maximum en secondes (1–300).")
     args = parser.parse_args(argv)
+    if args.command == 'family':
+        return run_family(args)
     if args.command == 'development':
         return run_development(args)
     if args.command == 'host':

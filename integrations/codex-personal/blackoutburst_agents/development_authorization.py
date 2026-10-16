@@ -8,10 +8,13 @@ from .dev_manifest import DevelopmentError, canonical, digest
 
 
 class DevelopmentAuthorization:
-    def __init__(self, client, *, scope, manifest, registration, clock=time.time, stop_requested=None):
+    def __init__(self, client, *, scope, manifest, registration, clock=time.time, stop_requested=None, delegation_guard=None):
         self.client, self.scope, self.manifest = client, dict(scope), deepcopy(manifest)
         self.registration, self.clock = deepcopy(registration), clock
         self.stop_requested = stop_requested or (lambda: False)
+        if delegation_guard is not None and not callable(delegation_guard):
+            raise DevelopmentError('invalid_development_controller')
+        self.delegation_guard = delegation_guard
         self.expected_context = None
         self.claim_id = None
         self.claim_version = None
@@ -56,6 +59,9 @@ class DevelopmentAuthorization:
         try:
             response = self.client.call('get_ticket', {'ticket_id': self.scope['ticket_id']})
             project, ticket = response['project'], response['ticket']
+            if ticket.get('delegation') is not None or self.delegation_guard is not None:
+                if self.delegation_guard is None or self.delegation_guard(response) is not True:
+                    raise ValueError
             if (project['id'] != self.scope['project_id'] or ticket['id'] != self.scope['ticket_id']
                     or ticket['project_id'] != self.scope['project_id']
                     or self.scope['owner_id'] not in project['participants'] or project['archived'] is True

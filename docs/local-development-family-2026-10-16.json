@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "scope": "explicit local two-worker development family, opt-in controller and CLI",
+  "date": "2026-10-16",
+  "target_adapter": "0.19.0",
+  "recipe_adapter": "0.18.0",
+  "base_commit": "671e7cc947dfb5e149918b45af5ba187a8779c4a",
+  "server_contract_commit": "bd389496e7160f1658597a952e696a0a43850cae",
+  "fence_contract_commit": "3c300a7c744a0a9936a5a89e2bec346f2ea7c952",
+  "validation": {
+    "full_adapter": {
+      "passed": 961,
+      "seconds": 189.34,
+      "warning": "Existing TestRequest dataclass is not a pytest test class."
+    },
+    "independent_targeted": {
+      "passed": 105,
+      "seconds": 160.94,
+      "independent_regressions": 16,
+      "findings_open": 0
+    },
+    "current_collection": 964,
+    "collection_note": "Three final independent regressions were added after the full run collected tests; all three passed in the independent final 105-test run. No implementation source changed between the final two runs.",
+    "late_regressions": [
+      "test_accept_retry_reaudits_changed_candidate_before_remote_effect",
+      "test_finalize_retry_reaudits_changed_parent_before_remote_effect",
+      "test_stop_and_status_remain_available_after_source_compatibility_changes"
+    ],
+    "diff_check": "passed",
+    "compileall": "passed in independent review"
+  },
+  "recipe": {
+    "real": [
+      "temporary Board and SQLite",
+      "three DevelopmentBoardWorker controllers",
+      "exclusive synthetic file checkouts",
+      "RunStore, RuntimeJournal and WorkJournal",
+      "family/controller audit and source hashes"
+    ],
+    "simulated": [
+      "model text transport and ChatGPT verification receipts",
+      "named test backend and native planner policy"
+    ],
+    "chain": [
+      "parent claim retained",
+      "two disjoint children prepared just before their execution",
+      "child tests and dated file/cleanup audits",
+      "released child review publications",
+      "exact child acceptance",
+      "parent candidate integration and its own tests",
+      "parent current-hash audit",
+      "family review_ready",
+      "separate explicit parent review publication"
+    ],
+    "interruptions": [
+      "lost open/accept/finalize replies use the same identities",
+      "reconcile never opens/claims/renews/infers/patches/tests",
+      "crash after child publication does not reclaim it",
+      "accept/finalize retries inspect current files",
+      "stop during uncertain opening remains pending until exact receipt and explicit stop",
+      "identity-only cleanup after source grants withdrawn",
+      "private directory replacement refuses before store construction",
+      "extra or inconsistent Runtime receipts refuse acceptance"
+    ]
+  },
+  "bounds": {
+    "children": 2,
+    "concurrent_workers": 1,
+    "candidate_json_bytes": 8192,
+    "audit_bytes_reserved_before_each_inspection": 8388608,
+    "total_audit_bytes": 33554432,
+    "local_source_compatibility_modules": 12
+  },
+  "limitations": [
+    "No actual model, subscription-account call, MCP server, production service or native qualification was used by this driver recipe.",
+    "Native policies/backend remain explicit prerequisites; this receipt does not qualify an operating system or another host.",
+    "The local source pin is compatibility checking of twelve listed modules, not every import or process.",
+    "The canonical fence coordinates one OS user on one machine; it does not resist an administrator, all-state rollback or noncooperative writers.",
+    "Exclusive disposable roots are required; the controller audit is dated and bounded to allowlisted files/tests, not all repository dependencies.",
+    "Repeated interrupted inspections consume their durable worst-case allowance and may require review.",
+    "There is no automatic fence expiry, release, rekey, adoption, queue, listener, API fallback, repository publication, merge or parent done transition.",
+    "Owner/profile action and resource grants must already exist; no real development pilot was authorized or enabled by this recipe."
+  ],
+  "files_sha256": {
+    "integrations/codex-personal/blackoutburst_agents/cli.py": "94af98d574d7a70ee037c4fe1914f654bccdeb2a3a6259d64c85368a7f448235",
+    "integrations/codex-personal/blackoutburst_agents/dev_planner.py": "246883ed2ffd7eb29ea6df06f3c040713a6fbeaff2e0f27f022112aa837694cf",
+    "integrations/codex-personal/blackoutburst_agents/development_authorization.py": "a7a80dca4e7166d85910706824fac15d292284d22a61d6c94d4da09bafd2a3bc",
+    "integrations/codex-personal/blackoutburst_agents/development_worker.py": "93b56304b6f0867ef32658f08da3177bf9a3795549b96c60c2336c1868eaa48d",
+    "integrations/codex-personal/blackoutburst_agents/development_cleanup.py": "b5009173a50db60e28a77591603e61b8ad22904d17fa5845ce5a5b9f138f9dc0",
+    "integrations/codex-personal/blackoutburst_agents/family_audit.py": "dc1d499c140c7d8117965fd9cfe17e096650133f52f6ae35e828df97ecdf73a4",
+    "integrations/codex-personal/blackoutburst_agents/family_cli.py": "24c7e35c8acb31b9d6abb2702cbdb29123fb37857697388268ef3c1a3a2c6ba9",
+    "integrations/codex-personal/blackoutburst_agents/family_client.py": "ee1ab156c97d1239f7391c66352176e7328f26270b840b463c1c6bdd06de01ad",
+    "integrations/codex-personal/blackoutburst_agents/family_journal.py": "7f28821fba204fc629b7983d5682b9d4dbf8d7557971c789df7b41332d979c87",
+    "integrations/codex-personal/blackoutburst_agents/family_plan.py": "39fe4c7bab16514c734382871c529e27065b63bbc153a520a7fa7ce0c53a6c8d",
+    "integrations/codex-personal/blackoutburst_agents/family_sources.py": "4f737cedf2b318190b47e9dec5a97870a4490f6ad501348ab16f66bb50b670fa",
+    "integrations/codex-personal/blackoutburst_agents/family_worker.py": "f516146478bcb687742986a98834bec81b47913921871db1e7791b6de489d683",
+    "integrations/codex-personal/blackoutburst_agents/dev_fence.py": "d950137527623a2ba5a3410afee9cb0cbdac9faa3c5567bd1c0335c29b63ef9e",
+    "integrations/codex-personal/tests/test_family_audit.py": "73d1b058fdef9fafbaec1b00e3a0a4b1de176c29aef6c76303c01880e69d85fd",
+    "integrations/codex-personal/tests/test_family_cli.py": "e7dc2adaee98d9ea11ced0f92399f9c492e4ccaaa2a5aa64f5d16d6a8a0c0778",
+    "integrations/codex-personal/tests/test_family_client.py": "3873c5efc91c5619a4e290d38fc6b10030a78b4d50f1fbb7e9a18dfe5122b6ac",
+    "integrations/codex-personal/tests/test_family_driver_review.py": "402797f3a228b8ccb15b92d5be0d81e672452ecffcdc4719a46d05f1e792cf26",
+    "integrations/codex-personal/tests/test_family_journal.py": "0448562f99cb1416e1ec34333511f93cf629eba117db17ae1d81871f049e2229",
+    "integrations/codex-personal/tests/test_family_worker.py": "dd2a419e60ec15232f133573cb98f23de7fb112c5bd615a409a4d42b3cac2355",
+    "integrations/codex-personal/tests/test_family_fence.py": "97ab9f6ee1f5f1c5f6caaa0e37331ac9805e32802fd511affd37519e2a3be534",
+    "integrations/codex-personal/tests/test_family_fence_review.py": "564b06a136cbfd52c00153e67566176af2848a702de60d2e63ff02a027142cc6"
+  }
+}

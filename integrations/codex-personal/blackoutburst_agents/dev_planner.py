@@ -96,12 +96,16 @@ class DevelopmentPlanner:
     def __init__(self, *, broker, store, runtime_journal, control_client, board_scope,
                  planner_policy, authorization, claim_id, instruction, model,
                  budgets=None, enabled=False, _test_anchor=None, _transport=None,
-                 _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None):
+                 _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None, fence_intent=None, fence_verify=None):
         self.broker, self.store, self.runtime_journal = broker, store, runtime_journal
         self.client, self.scope, self.policy = control_client, dict(board_scope), planner_policy
         self.authorization, self.claim_id, self.clock = authorization, opaque(claim_id), _clock
         self.enabled, self.active_guard, self.journal, self.fence = enabled, None, None, None
         self._base_authorize = broker.authorize_scope
+        if ((fence_intent is not None and (not callable(fence_intent) or not callable(fence_verify) or parent_operation is None))
+                or (fence_intent is None and fence_verify is not None)):
+            raise DevelopmentError('invalid_planner_parent')
+        self.fence_intent, self.fence_verify = fence_intent, fence_verify
         if (type(enabled) is not bool or type(_allow_fixture_backend) is not bool
                 or not callable(authorization)):
             raise DevelopmentError('invalid_planner_controller')
@@ -203,8 +207,10 @@ class DevelopmentPlanner:
             if parent_operation is None:
                 self.operation_id, created = self.fence.bind(self.binding, str(uuid.uuid4()))
             else:
+                proof=None if self.fence_intent is None else self.fence_intent(self.binding)
+                options={} if proof is None else {'family_proof':proof}
                 self.operation_id, created = self.fence.attach(self.binding,
-                    parent_operation['operation_id'], parent_operation['binding'])
+                    parent_operation['operation_id'], parent_operation['binding'],**options)
             self.journal = PlannerJournal(broker.journal.private.path, self.configuration, self.operation_id)
             if created:
                 self.journal.prepare(now=self.clock())
@@ -259,7 +265,8 @@ class DevelopmentPlanner:
     def _fresh(self, state, action=None, *, inspection=False):
         if not self.enabled:
             raise DevelopmentError('planner_disabled')
-        self.fence.verify(self.binding, self.operation_id)
+        if self.fence_verify is None:self.fence.verify(self.binding, self.operation_id)
+        else:self.fence_verify(self.binding)
         if not inspection:
             self._time(state)
         if not inspection and self.journal.stopped():
