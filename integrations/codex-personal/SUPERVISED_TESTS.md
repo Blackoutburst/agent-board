@@ -41,6 +41,13 @@ have one hard link. Multi-linked system binaries are accepted only when owned
 by root and not writable by the non-root test UID (the macOS Python launcher is
 such a system binary). Unknown boundaries are refused.
 
+Named scripts are separately pinned by the native schema/profile-2 plan and
+remain outside the manifest's model/broker patch caps. The helper revalidates
+their current nofollow pins and passes exact held source bytes to the wrapper;
+the wrapper digest-checks and compiles those bytes instead of reopening a path.
+An old unpinned native plan or a changed script refuses. This is separate from
+the six controller-module pins and from the model's data-file permissions.
+
 The controller sends only a one-byte authorization heartbeat through its owned
 pipe. The helper verifies the exact scope/action/resource and consumes that
 pipe before each effect and while observing the native test. EOF cancels
@@ -106,6 +113,9 @@ TERM-ignoring script sleeps. It verifies independent cleanup and durable
 completion, reconciles the broker, confirms that replay leaves the execution
 counter at one, and checks that both test and helper disappeared. Only synthetic
 temporary files and processes are used; no production backend is activated.
+The fixture permits patching only its two data counters; its normal, timeout and
+controller-crash scripts are separately trusted. It also verifies broker refusal
+to patch a script. No script executes source read from a model-modifiable file.
 
 Run the qualification again against the final adapter source before a pilot.
 Preparation pins all six controller files, including `__init__.py`: even a
@@ -116,6 +126,8 @@ receipt below remains a record of its original measurement. Also repeat the
 separate named-test and planner-policy fixtures documented in the release
 procedure. These qualification commands use no model inference, login or
 account RPC.
+The dated receipt below predates the separate script-pin plan; a new native
+qualification receipt is required for schema/profile 2 and the final package.
 
 The [16 October 2026 Mac receipt](docs/native-supervisor-2026-10-16.json) records
 the measured eleven guards, hard controller crash, durable cancelled receipt,

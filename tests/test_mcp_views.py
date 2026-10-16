@@ -271,10 +271,21 @@ def test_new_message_and_development_adapters_keep_full_source_after_validation(
         feed=channel.call('open_message_feed',{'idempotency_key':'bridge-feed','start_at':'beginning','limit':50})
         page=channel.call('read_message_feed',{'feed_id':feed['feed_id']})
         assert page['messages'][0]['body']==message['body']
+        checkpoint_args={'feed_id':feed['feed_id'],'delivery_id':page['delivery_id'],
+            'expected_checkpoint':page['checkpoint']}
+        acknowledged=channel.call('checkpoint_message_feed',checkpoint_args)
+        assert acknowledged['checkpoint']>page['checkpoint']
         development=object.__new__(DevelopmentBoardClient);development._registered=True;development.session_id='source-bridge';development._rpc=rpc;development._initialize=lambda:None
         assert development.call('get_ticket',{'ticket_id':t['id']})['ticket']['description']=='Exact development description'
         assert development.call('get_work',{'project_id':p['id'],'limit':1})['ready'][0]['description']=='Exact development description'
         before=len(calls)
         with pytest.raises(BoardReadError):channel.call('get_message',{'thread_id':t['thread_id'],'message_id':message['id'],'view':'full'})
         assert len(calls)==before
-        assert all(c['arguments']['view']=='full' for c in calls)
+        for call in calls:
+            name,args=call['name'],call['arguments']
+            if name=='open_message_feed':
+                assert args=={'session_id':'source-bridge','idempotency_key':'bridge-feed','start_at':'beginning','limit':50}
+            elif name=='checkpoint_message_feed':
+                assert args=={'session_id':'source-bridge',**checkpoint_args}
+            else:
+                assert args['view']=='full'

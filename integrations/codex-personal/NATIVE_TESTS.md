@@ -30,9 +30,23 @@ home or copying/opening their authentication files.
 `prepare_backend(...)` stores this plan outside the checkout in a private owned
 0700 directory with 0600 files. The backend ID is derived from the plan hash.
 The development manifest must authorize exactly these named tests with matching
-budgets, backend ID and allowlisted script paths. The only model-facing broker
+budgets and backend ID. Its `files` map contains only model/broker data and patch
+caps. Test scripts must be outside that map, including normalized case/Unicode
+aliases and inode aliases. Preparation separately pins each reviewed script's
+SHA-256, byte count, file identity and opened parent-directory identities. It
+uses nofollow reads and a fixed 64-KiB script ceiling. Source bytes are not stored
+in the public plan or qualification receipt. The only model-facing broker
 argument remains the test name; no model-supplied argv, executable, environment,
 working directory or shell command exists.
+
+The native plan now uses schema/profile 2. Old unpinned plans refuse; prepare and
+explicitly qualify new private plans instead of migrating or editing old pins.
+Before each source execution the backend reopens and validates the script against
+its complete pin, then sends those exact held bytes to the trusted wrapper. The
+wrapper verifies the source digest and compiles those bytes; it never reopens a
+script path for execution. A script pin identifies reviewed code, not the truth
+of its assertions. The operator must also check that the trusted test does not
+execute code supplied through model-modifiable data.
 
 The sandbox command uses the official CLI's named permission profile with an
 inline filesystem policy: root denied, `:minimal` read, the exact checkout
@@ -49,8 +63,8 @@ core dumps, bounds file descriptors and CPU time, then checks the actual policy
 inside that same process. It verifies synthetic inside read/write, outside
 read/write denial, loopback denial, fork and spawn denial, inability to increase
 the hard process limit, and inability to leave its session/process group. Only
-after every guard passes does `runpy.run_path` run the reviewed named script in
-that interpreter. The wrapper also requires a one-byte controller ACK after
+after every guard passes does the wrapper compile and execute the held reviewed
+named-script bytes in that interpreter. The wrapper also requires a one-byte controller ACK after
 the controller validates that guard, identifies the process and rechecks current
 permission. EOF, missing ACK or the five-second gate deadline exits before the
 source script. The control pipe is closed before source execution. There is no second interpreter launch after the process limit
@@ -124,6 +138,7 @@ Unit tests use fake executables and mocked execution, without subprocesses:
 ```sh
 cd integrations/codex-personal
 python3 -m unittest discover -s tests -p 'test_dev_test_backend*.py'
+python3 -m unittest discover -s tests -p 'test_qualification_fixtures.py'
 ```
 
 The native qualification is a separate explicit command. It creates only a
@@ -132,6 +147,11 @@ success, failure, timeout with TERM ignored, excess output, cancellation and
 cached replay. It removes its fixture and writes an expurgated receipt. On Mac,
 the session's outer sandbox may prevent nesting Seatbelt; run only through an
 authorized native-test escalation, never by changing the production policy.
+Its patch manifest contains only the data counter; all six trusted scripts,
+including the pre-pinned no-ACK gate, remain outside patch caps. Qualification
+also verifies that a broker patch of a test script is refused and reports only
+its pinned digest/size. The existing dated receipt above predates this separate
+script-pin contract; it does not qualify new plans or a new package.
 
 ```sh
 PYTHONPATH=integrations/codex-personal python3 \

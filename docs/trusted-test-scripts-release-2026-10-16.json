@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "observed_on": "2026-10-16",
+  "board_version": "2.10.0",
+  "schema_version": 12,
+  "adapter_version": "0.21.0",
+  "qualified_revision": "bd848bd3ae1d5d19aa17d82c3cb3b57f8562541c",
+  "integrated_upstream": "822833044c6013e861860c5a95c5cf509b702d88",
+  "validation": {
+    "mac_adapter": {
+      "passed": 980,
+      "warnings": 1,
+      "seconds": 245.74
+    },
+    "mac_measured_revision": "79842382d60bd32834ed01cc736702be2ed30d3a",
+    "mac_adapter_sources_identical_to_qualified_revision": true,
+    "linux_adapter": {
+      "passed": 979,
+      "seconds": 336.54,
+      "skipped": 1,
+      "warning": 1
+    },
+    "linux_server": {
+      "passed": 707,
+      "seconds": 192.63,
+      "warnings": 291
+    },
+    "linux_archive_sha256": "eef04472ddb48e045cc141d6fea8bb9dcb4ff6d5870d9c1eb5fe061d83643526",
+    "linux_runner_sha256": "31b0a4efb0965b6aeddc017b7e6f666271d0d154772bec41b9be5159a6add1e6",
+    "temporary_sources_removed": true,
+    "independent_review": {
+      "exact_revision": "bd848bd3ae1d5d19aa17d82c3cb3b57f8562541c",
+      "adapter_targeted_tests": 101,
+      "real_mcp_transport_scenarios": 3,
+      "script_adversarial_regressions": 12,
+      "findings_remaining": 0
+    },
+    "linux_skip_reason": "Directory alias identity scenario requires a case-insensitive filesystem."
+  },
+  "native_qualification_receipts": [
+    "trusted-native-named-tests-20261016.json",
+    "trusted-native-supervisor-20261016.json",
+    "trusted-native-planner-policy-20261016.json"
+  ],
+  "limitations": [
+    "Native execution qualified only for the measured Darwin CLI/toolchain.",
+    "Synthetic fixtures and transport tests do not prove an actual subscription development run or a remote two-owner deployment.",
+    "No provider credentials, account changes, permanent listeners or workers are enabled by this release."
+  ],
+  "model_calls": 0,
+  "auth_rpc_calls_requested": 0
+}

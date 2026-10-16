@@ -1,0 +1,115 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "backend_source_sha256": "ecb57e882ac7340cf03ffd2872c45a8977bda9ce8d93193772a98d2d915406a1",
+  "checks": {
+    "ack_required_before_source": true,
+    "cached_replay": true,
+    "cancelled": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "cancelled",
+      "status": "complete"
+    },
+    "failed": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "failed",
+      "status": "complete"
+    },
+    "output": {
+      "cleanup_confirmed": true,
+      "output_bytes": 16,
+      "result": "failed",
+      "status": "complete"
+    },
+    "passed": {
+      "cleanup_confirmed": true,
+      "output_bytes": 16,
+      "result": "passed",
+      "status": "complete"
+    },
+    "scripts_outside_patch_caps": true,
+    "timeout": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "failed",
+      "status": "complete"
+    },
+    "trusted_script_patch_refused": true
+  },
+  "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
+  "cli_version": "codex-cli 0.162.0-alpha.17.2",
+  "controller_authentication_files_read": false,
+  "executable_sha256": "179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818",
+  "host": {
+    "machine": "arm64",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "model_calls": 0,
+  "observed_on": "2026-10-16",
+  "policy": {
+    "filesystem": {
+      ":minimal": "read",
+      ":root": "deny",
+      ":slash_tmp": "deny",
+      ":tmpdir": "deny",
+      "<synthetic-workspace>": "write"
+    },
+    "network": {
+      "enabled": false
+    }
+  },
+  "production_enabled": false,
+  "profile_version": 2,
+  "qualification": {
+    "checks": {
+      "fork": true,
+      "inside_read": true,
+      "inside_write": true,
+      "network_loopback": true,
+      "nproc_raise": true,
+      "outside_read": true,
+      "outside_write": true,
+      "process_group": true,
+      "session": true,
+      "spawn": true
+    },
+    "cleanup_confirmed": true,
+    "plan_hash": "0abc6696d87ce4ff2d1bae78b55316285c998e057f4b20124302d0def316413f",
+    "result": "qualified_single_process_fixture",
+    "schema": 1
+  },
+  "real_repository_tests": false,
+  "result": "passed_fixture_qualification",
+  "schema": 1,
+  "synthetic_files_removed": true,
+  "test_plan_schema": 2,
+  "trusted_script_pins": {
+    "cancelled": {
+      "bytes": 103,
+      "sha256": "2db30239a5de4303f0253c3b827d38c72d17bf2ac564a24c777bd2353018b67b"
+    },
+    "failed": {
+      "bytes": 20,
+      "sha256": "dc7ed2616288abfb26827b2f0311f7cd9524af44646b4e600b204f80d5e9e845"
+    },
+    "gate": {
+      "bytes": 75,
+      "sha256": "cd2d815a4e18f5a24bf89e1d3f0594818965e46059c08f88ce7d45f5f38481e9"
+    },
+    "output": {
+      "bytes": 17,
+      "sha256": "65803d11b5dbc2213fb70ec900c8714c2454daa2459ae988bbd5232dae1ed480"
+    },
+    "passed": {
+      "bytes": 110,
+      "sha256": "f6454a39c128e7133b87a692eb396cdffe6ebde058d7ba6f1e8723ceb6b201aa"
+    },
+    "timeout": {
+      "bytes": 79,
+      "sha256": "ff61bfd488de5907a53c7fdf6281c0ed88351409def653871cdbc96b9777e53f"
+    }
+  },
+  "wrapper_sha256": "2b91f173d74b2dc63693d6b4405b757f43fd6f86b684f2f02d1703f2f30e20a9"
+}
