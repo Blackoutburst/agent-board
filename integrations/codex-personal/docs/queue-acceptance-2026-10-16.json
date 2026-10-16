@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "observed_on": "2026-10-16",
+  "kind": "synthetic_multi_owner_queue_acceptance",
+  "repository_base": "2e6eb4e3171501bb9e10dc60fd92d2e70a7e1540",
+  "server_version": "2.6.2",
+  "schema_version": 8,
+  "adapter_version": "0.13.0",
+  "scope": {
+    "owners": 2,
+    "distinct_profiles": 4,
+    "distinct_sessions": 4,
+    "distinct_devices": 4,
+    "private_workspaces": 4,
+    "board": "real Board with temporary SQLite",
+    "model_transport": "simulated",
+    "provider_authentication_used": false,
+    "model_calls": 0,
+    "production_queue_selection": false,
+    "listener_activated": false
+  },
+  "test_source_sha256": "1f33f780668b204f361d164975da854b7a44e9de82c51ef205d2fc0bcf544be6",
+  "scenarios": {
+    "one_ticket_four_contenders": {
+      "lost_selection_replies": true,
+      "lost_publication_reply": true,
+      "fake_model_turns": 1,
+      "successful_runtime_executions": 1,
+      "ticket_publications": 1,
+      "selection_attempts": 4,
+      "exact_claim_visible_before_fake_model": true,
+      "cached_replays_add_no_effect": true
+    },
+    "two_owner_serial_chains": {
+      "fake_model_turns": 4,
+      "successful_runtime_executions": 4,
+      "ticket_publications": 4,
+      "distinct_tickets": 4,
+      "observed_concurrent_owners": 2,
+      "max_active_executions_per_owner": 1,
+      "serial_order_per_owner": "explicit test controller",
+      "blocked_dependency_skill_and_scope_tickets_unclaimed": true,
+      "denied_project_causes_no_fallback": true
+    },
+    "owner_capacity_saturation": {
+      "fake_model_turns": 2,
+      "successful_runtime_executions": 2,
+      "runtime_reservation_attempts": 4,
+      "ticket_publications": 2,
+      "denied_profiles_before_model": 2,
+      "denied_attempts_remain_in_review": true,
+      "new_keys_do_not_bypass_review": true,
+      "other_owner_can_run_concurrently": true
+    }
+  },
+  "limits": [
+    "No real subscription model is called by these queue scenarios.",
+    "Serial completion per owner is scheduled explicitly in the test, not by a production listener.",
+    "Runtime capacity saturation stops the local queue operation for review and retains its ticket claim; it does not automatically wait and resume.",
+    "These fixtures do not qualify unattended remote queue execution or long-running process cleanup."
+  ],
+  "verification": {
+    "passed": 87,
+    "duration_seconds": 3.0,
+    "command": "PYTHONPATH=integrations/codex-personal python -m pytest -q integrations/codex-personal/tests/test_queue_multi_owner_acceptance.py integrations/codex-personal/tests/test_queue_worker.py integrations/codex-personal/tests/test_runtime_integration.py tests/test_queue_selection.py tests/test_runtime.py"
+  }
+}
