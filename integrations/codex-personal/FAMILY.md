@@ -54,7 +54,7 @@ explicit requalification with new private plans, never editing old pins.
 Requalification does not replace the plans or controller source already sealed
 by an existing family; that family requires review after a software change.
 
-From adapter 0.20, native test plans use schema/profile 2 and pin each reviewed
+From adapter 0.21, native test plans use schema/profile 2 and pin each reviewed
 script separately from the manifest's model file allowlist. A trusted script
 must not be included in a child's or parent's patch capabilities, including
 case/Unicode aliases or the same physical file. Qualification and each new
