@@ -22,19 +22,11 @@
   "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
   "cli_version": "codex-cli 0.162.0-alpha.17.2",
   "controller_authentication_files_read": false,
-  "hardkill_target": "exact owned synthetic controller only",
   "host": {
     "machine": "arm64",
     "release": "25.5.0",
     "system": "Darwin"
   },
-  "limitations": [
-    "Darwin only; Linux and Windows unqualified",
-    "Trusted supervisor and host required; supervisor or OS failure remains uncertain",
-    "Exclusive disposable checkout without secrets and outside controller/toolchain/state required",
-    "Crash before helper acceptance can leave an uncertain intent; no automatic replay",
-    "No model transport, listener or production activation"
-  ],
   "model_calls": 0,
   "observed_on": "2026-10-16",
   "production_enabled": false,
@@ -54,10 +46,10 @@
       "spawn": true
     },
     "cleanup_confirmed": true,
-    "plan_hash": "72f425768f2101d4673b9cd99d39e5f82dd0e1e3bd075d71c570c1972cfb6ab8",
+    "plan_hash": "f20da5bc391e085b00c696957b8bcc58ab70e036e13ea11bd477641fd9efa57b",
     "result": "qualified_supervised_fixture",
     "schema": 1,
-    "supervision_hash": "012ebe1f59ada5f2b0c9cfdd12ffd1ffed7ae1d6d3d2fa0fa945094f8b79f481"
+    "supervision_hash": "a03dbb8830cf00e0c62a69f43f8071d98b7f8e297779f7b6fdf9c503857c65e0"
   },
   "result": "passed_supervisor_fixture",
   "schema": 1,

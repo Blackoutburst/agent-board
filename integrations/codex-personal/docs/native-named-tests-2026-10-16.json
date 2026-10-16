@@ -1,6 +1,6 @@
 {
   "auth_rpc_calls_requested": 0,
-  "backend_source_sha256": "6f0e1860a27e27050b1341f52e095456356762786401d0a0abe7fd3cf21c3f7c",
+  "backend_source_sha256": "8ee24c1c523e947b706d92a6b12a81524794578664a247a67dfdf6baed5a1874",
   "checks": {
     "ack_required_before_source": true,
     "cached_replay": true,
@@ -44,13 +44,6 @@
     "release": "25.5.0",
     "system": "Darwin"
   },
-  "limitations": [
-    "Darwin only; Linux and Windows unqualified",
-    "Standalone Python tests only; subprocesses denied",
-    "Exclusive disposable checkout without secrets required",
-    "Controller crash can leave a sleeping test alive; independent durable supervision still required",
-    "No model transport or production activation"
-  ],
   "model_calls": 0,
   "observed_on": "2026-10-16",
   "policy": {
@@ -81,7 +74,7 @@
       "spawn": true
     },
     "cleanup_confirmed": true,
-    "plan_hash": "8f705113bfee6d0cd4006d381a4a08831d6a81aef26695f6dfb668db404c97f1",
+    "plan_hash": "8603ab34cb2842e113fa8bcab12267a021b2a1e2f1e4aa540cb8c7b7ed64d91a",
     "result": "qualified_single_process_fixture",
     "schema": 1
   },
@@ -89,5 +82,5 @@
   "result": "passed_fixture_qualification",
   "schema": 1,
   "synthetic_files_removed": true,
-  "wrapper_sha256": "c6fecb68e103e2e2d850d0fe23146f5a4bb36de221d489e443a99c0b504052b2"
+  "wrapper_sha256": "7f935355437161b386bafb7343c0d4b64bcadce1bbc647e33a372e2f991fba65"
 }
