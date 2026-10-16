@@ -1,6 +1,6 @@
-# Board interface contract — 2.6
+# Board interface contract — 2.6.1
 
-The browser REST API and MCP act on one database. Application version is `2.6.0`; schema version is `8`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.6.1`; schema version is `8`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,14 +8,14 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (40)
+## MCP tools (42)
 
 | Purpose | Tools |
 | --- | --- |
 | Identity and discovery | `register_agent`, `list_agents`, `get_work`, `read_inbox` |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
-| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `delegate_task` |
+| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
@@ -32,7 +32,7 @@ Use project tickets for normal collaborative work. The legacy action-task API re
 
 New profiles default to no projects, no permissions and no bindings. A migrated profile retains its old scope (`project_ids: null`) and owner grants. Human updates cannot set scope to null; omitting it preserves existing scope. Profiles have `active`, `paused` or `archived` status and a strictly increasing version with immutable configuration snapshots. Update/binding calls require `expected_version`; creation/duplication use stable idempotency keys. Duplication copies presentation/preferences only and starts paused without access.
 
-Sessions cannot change their profile. An edited profile rejects old-version session operations with 409 until explicit registration; a session with an outstanding claim must first have that claim reconciled by its owner. Pause/archive reject operations with 403 while preserving claims. The board does not terminate external processes.
+Sessions cannot change their profile. An edited profile rejects old-version session operations with 409 until explicit registration; a session with an outstanding claim must first have that claim reconciled by its owner, or through the bounded release-only `reconcile_profile_claim` path below. Re-registration does not bypass this guard. Pause/archive reject operations with 403 while preserving claims. The board does not terminate external processes.
 
 The profile policy contains `allow_read`, `allow_messages`, `allow_requests`, exact `actions`/`resources`, and `autonomy` (`responses`, `requested`, `queue`). Owner grants remain the upper bound. Explicit work requires work permission and autonomy beyond responses; automatic queue claims additionally require both queue autonomy and the session's `autonomous=true` registration. Registration never starts a listener.
 
@@ -57,6 +57,18 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 - `renew_ticket` renews the active claim and returns a new version. It cannot revive an expired or replaced claim.
 - Expired work needs explicit recovery evidence after external effects are checked. Expired work keeps its exclusive resource until reconciled.
 - Completion requires both outcome and verification evidence. Reopening clears old results unless explicitly replaced.
+
+## Releasing work after a profile change (2.6.1)
+
+`release_ticket(session_id, ticket_id, expected_version, idempotency_key, reason, status="", unassign_self=false)` releases the calling session's live claim, or maintains an unclaimed ticket assigned to that persistent profile. Its default preserves the agent assignment, setting it to the calling profile if previously absent; `unassign_self=true` clears only that assignment. A supplied status is limited to `todo`, `blocked` or `review`; review still requires resolved dependencies and human requests. With no explicit status, `in_progress` becomes `todo` and other statuses remain. It cannot clear another session's claim, recover an expired claim or reopen completed work.
+
+`reconcile_profile_claim(session_id, ticket_id, expected_version, idempotency_key, recovery_evidence)` is a separate release-only tool for a claim left behind by an older profile version. After inspecting prior effects, register a **new session** on the same bound profile and device. The new session must have current work-request permission, an active current profile, project scope and membership. The claim must belong to another persisted session of the same owner/profile/device, pinned to a strictly older profile version, with a finite expired lease. Current-version claims, live claims, claims from another device/profile, reassigned tickets and completed tickets are refused. Legacy claim JSON can omit profile metadata only when its persisted source session proves the identity; contradictory metadata is refused.
+
+Every existing Runtime execution for this owner/profile/ticket, including executions from another device, must be `finished` with `cleanup_confirmed=true`. No Runtime history is required for older unmanaged work, but **missing history or an expired lease is not proof that an external process stopped**. Nonempty recovery evidence is mandatory: it records the operator's inspection of processes, local journals and external effects. It is a declaration, not an OS or provider attestation. This tool never changes Runtime records, capacity, provider sessions or model state.
+
+An accepted reconciliation clears the claim and lease, changes `in_progress` to `todo`, and otherwise preserves status, progress, results, evidence, dependencies, waiting flags, requests and the human assignment. It retains the same profile assignment, or sets it to that profile if previously absent, so an unclaimed blocked task can subsequently be corrected explicitly with `release_ticket`. It does not execute, resume or complete work. The ticket version advances once and a `ticket_profile_claim_reconciled` audit event records the source/current profile versions and supplied evidence. Keep credentials, private paths and model output out of that shared evidence.
+
+The recovery key is bound to the exact authorized owner/device/session, ticket and trimmed evidence. `expected_version` is a strict positive integer CAS precondition, excluded from the key payload. Retrying the same key checks current authorization and returns the current ticket without reapplying the release, even if another claim or human edit has appeared. Changed evidence with an existing key conflicts. Unsupported older servers reject this separate tool; clients must not fall back to ordinary claim/release or reuse the old session to bypass its registration guard.
 
 ## Durable queue selection (2.3)
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import secrets
 import time
@@ -285,6 +286,80 @@ class CoordinationMixin(ProjectsMixin):
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             self._remember(db, actor, 'release_ticket', idempotency_key, payload, ticket_id)
             self._audit(db, actor, 'ticket_released', dict(payload, version=expected_version+1))
+            return self._ticket(self._ticket_member(db, actor, ticket_id), db)
+
+    def reconcile_profile_claim(self, actor, ticket_id, expected_version, idempotency_key, recovery_evidence):
+        """Release an expired old-version claim from this same device/profile.
+
+        This intentionally cannot execute, recover ownership, clear another
+        device's claim, refresh an old session, or assert external cleanup from
+        lease expiry alone. The caller must inspect effects and provide evidence.
+        """
+        _version(expected_version)
+        ticket_id = _text(ticket_id, 'ticket_id', 1, 200)
+        idempotency_key = _text(idempotency_key, 'idempotency_key', 1, 200)
+        recovery_evidence = _text(recovery_evidence, 'recovery_evidence', 1, 20000)
+        try:
+            recovery_evidence.encode('utf-8', 'strict')
+        except UnicodeError:
+            _fail('reconcile_claim_invalid_evidence')
+        payload = {'ticket_id': ticket_id, 'recovery_evidence': recovery_evidence}
+        with self._tx() as db:
+            actor = self._actor(db, actor, 'allow_requests')
+            if actor['kind'] != 'agent':
+                _fail('reconcile_claim_agent_required', 403)
+            row = self._ticket_member(db, actor, ticket_id)
+            previous = self._retry(db, actor, 'reconcile_profile_claim', idempotency_key, payload)
+            if previous:
+                # A later claim may exist now. Never reapply the original effect.
+                return self._ticket(self._ticket_member(db, actor, previous), db)
+            if row['version'] != expected_version:
+                _fail('reconcile_claim_version_conflict', 409)
+            if row['status'] == 'done':
+                _fail('reconcile_claim_completed', 409)
+            profile = self._profile_for_actor(db, actor)
+            if (row['assignee_owner_id'] not in (None, actor['owner_id'])
+                    or row['assignee_agent_id'] not in (None, profile['id'])):
+                _fail('reconcile_claim_assigned_elsewhere', 403)
+            try:
+                claimant = json.loads(row['claimant']) if row['claimant'] else None
+            except (ValueError, TypeError):
+                claimant = None
+            if (type(claimant) is not dict or claimant.get('kind') != 'agent'
+                    or claimant.get('owner_id') != actor['owner_id']
+                    or claimant.get('device_id') != actor['device_id']
+                    or type(claimant.get('session_id')) is not str or not claimant['session_id']
+                    or claimant['session_id'] == actor['session_id']):
+                _fail('reconcile_claim_source_mismatch', 403)
+            # Legacy claimant JSON can omit profile metadata. The registered
+            # source session is authoritative, never an asserted agent_id.
+            source = db.execute('''SELECT * FROM sessions WHERE id=? AND owner_id=?
+                AND device_id=? AND agent_id=?''', (claimant['session_id'], actor['owner_id'],
+                actor['device_id'], profile['id'])).fetchone()
+            if (source is None or type(source['profile_version']) is not int
+                    or not 0 < source['profile_version'] < profile['version']
+                    or ('agent_id' in claimant and claimant['agent_id'] != source['agent_id'])
+                    or ('profile_version' in claimant and (type(claimant['profile_version']) is not int
+                        or claimant['profile_version'] != source['profile_version']))):
+                _fail('reconcile_claim_profile_version_mismatch', 409)
+            expiry = row['lease_expires_at']
+            if type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry > time.time():
+                _fail('reconcile_claim_lease_not_expired', 409)
+            if db.execute('''SELECT 1 FROM runtime_executions WHERE owner_id=? AND agent_id=?
+                AND ticket_id=? AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1''',
+                (actor['owner_id'], profile['id'], ticket_id)).fetchone():
+                _fail('reconcile_claim_runtime_unresolved', 409)
+            now = time.time()
+            next_status = 'todo' if row['status'] == 'in_progress' else row['status']
+            db.execute('''UPDATE tickets SET status=?,claimant=NULL,claim_started_version=NULL,
+                lease_expires_at=NULL,assignee_agent_id=?,version=version+1,updated_at=?
+                WHERE id=? AND version=?''',
+                (next_status, profile['id'], now, ticket_id, expected_version))
+            db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
+            self._remember(db, actor, 'reconcile_profile_claim', idempotency_key, payload, ticket_id)
+            self._audit(db, actor, 'ticket_profile_claim_reconciled', {
+                **payload, 'source_session_id': source['id'], 'source_profile_version': source['profile_version'],
+                'profile_version': profile['version'], 'version': expected_version + 1})
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)
 
     def renew_ticket(self, actor, ticket_id, expected_version, progress=''):

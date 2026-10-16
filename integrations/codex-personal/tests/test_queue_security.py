@@ -215,10 +215,11 @@ class QueueSecurityTests(unittest.TestCase):
         self.assertEqual(self.read()['claimant']['session_id'], 'worker-session')
         self.assertTrue(self.read()['claim_expired'])
 
-    def test_old_human_wait_blocks_replacement_device_bound_to_same_profile(self):
+    def test_released_human_wait_preserves_question_while_other_device_handles_unrelated_ticket(self):
         self.outputs = [json.dumps({'kind': 'question', 'text': 'Which environment?'})]
         waiting = self.run_worker()
         self.assertEqual(waiting['stage'], 'waiting_human')
+        self.outputs.append('Unrelated ticket response.')
         other = self.another_ticket('Ready while another device waits', priority='urgent')
         device = self.board.create_device(self.human, 'Replacement local device', [])
         profile = self.board.get_agent_profile(self.human, self.scope['agent_id'])
@@ -230,11 +231,21 @@ class QueueSecurityTests(unittest.TestCase):
         self.queue = QueueWorker(self.queue_journal, self.worker, self.client)
         self.queue_scope['board_session_id'] = 'another-device-session'
         result = self.run_queue()
-        self.assertEqual(result['status'], 'needs_review')
-        self.assertEqual(len(self.inferences), 1)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['ticket_id'], other['id'])
+        self.assertEqual(len(self.inferences), 2)
         self.assertEqual(len(self.requests()), 1)
         self.assertEqual(len(self.selection_calls()), 1)
-        self.assertIsNone(self.board.get_ticket(self.human, other['id'])['ticket']['claimant'])
+        original = self.read()
+        self.assertTrue(original['waiting_on_human'])
+        self.assertEqual(original['status'], 'blocked')
+        self.assertIsNone(original['claimant'])
+        unrelated = self.board.get_ticket(self.human, other['id'])['ticket']
+        self.assertEqual(unrelated['status'], 'review')
+        self.assertIsNone(unrelated['claimant'])
+        self.assertEqual(self.run_queue()['operation_id'], result['operation_id'])
+        self.assertEqual(len(self.inferences), 2)
+        self.assertEqual(len(self.selection_calls()), 1)
 
     def test_cancellation_after_selection_keeps_claim_and_blocks_another_request(self):
         original, cancelled = self.client.call, []
