@@ -15,7 +15,7 @@ from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
 from profiles import ProfilesMixin, migrate_profiles
 from communication import CommunicationMixin, migrate_communication
-from runtime import RuntimeMixin, migrate_runtime
+from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
 from message_feed import MessageFeedMixin, migrate_message_feed
 
@@ -63,7 +63,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 9:
+            if version > 10:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -146,6 +146,9 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             if version < 9:
                 migrate_message_feed(db)
                 db.execute("PRAGMA user_version=9")
+            if version < 10:
+                migrate_message_runtime(db)
+                db.execute("PRAGMA user_version=10")
 
     @contextmanager
     def _connection(self):
@@ -485,6 +488,18 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                 "attachments": attachments, "mention_targets": self._mention_details(db, _decode(row["mentions"])),
                 "url": self.base_url + "/?thread=" + row["thread_id"] + "&message=" + row["id"]}
 
+    @staticmethod
+    def _message_source_hash(row):
+        """Hash immutable/raw source fields, excluding dynamic display metadata."""
+        source = {key:row[key] for key in ('id','thread_id','body','created_at','reply_to')}
+        source.update(author=_decode(row['author']),mentions=_decode(row['mentions']),
+                      attachment_ids=_decode(row['attachments']))
+        try:
+            raw = json.dumps(source,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode('utf-8')
+        except (TypeError,ValueError,UnicodeError):
+            raise BoardError('Message source unavailable',409) from None
+        return hashlib.sha256(raw).hexdigest()
+
     def get_message(self, actor, thread_id, message_id):
         """Read one exact permitted source without pagination or read effects."""
         if any(type(value) is not str or not value or len(value) > 200
@@ -497,7 +512,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                              (message_id, thread_id)).fetchone()
             if row is None:
                 raise BoardError("Message not found", 404)
-            result = {"message": self._message(db, row)}
+            result = {"message": self._message(db, row), "source_sha256": self._message_source_hash(row)}
             if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 256 * 1024:
                 raise BoardError("Message exceeds the exact-source byte limit", 413)
             return result

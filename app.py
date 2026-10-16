@@ -684,6 +684,16 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.reserve_execution(execution_actor(session_id), idempotency_key, project_id, ticket_id, work_id, turn_id, provider, model)
 
     @mcp.tool()
+    async def reserve_message_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque,
+                                        thread_id: RuntimeOpaque, message_id: RuntimeOpaque,
+                                        source_sha256: Annotated[str, Field(strict=True, pattern=r'^[0-9a-f]{64}$')],
+                                        work_id: RuntimeOpaque, turn_id: RuntimeOpaque,
+                                        provider: RuntimeModel, model: RuntimeModel) -> dict:
+        """Reserve shared owner capacity for one reply to an exact addressed human message, without a ticket claim. Requires current read/reply access and get_message's source_sha256. Retain the same retry key after uncertainty. This grants no ticket work, shell, publication or automatic launch permission."""
+        return board.reserve_message_execution(execution_actor(session_id),idempotency_key,thread_id,
+            message_id,source_sha256,work_id,turn_id,provider,model)
+
+    @mcp.tool()
     async def lookup_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque) -> dict:
         """Read only this exact device/session's reservation key; found=false never proves an in-flight reservation was cancelled. Available for cleanup even after profile pause/change, but not device revocation."""
         return board.lookup_execution(execution_actor(session_id), idempotency_key)
@@ -812,7 +822,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.7.2", "schema_version": 9, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source"]}
+        return {"status": "ok", "version": "2.8.0", "schema_version": 10, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
