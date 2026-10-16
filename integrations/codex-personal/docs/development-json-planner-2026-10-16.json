@@ -1,0 +1,52 @@
+{
+  "actual_model_turns": 0,
+  "checks": {
+    "canonical_os_user_fence_no_journal_rekey": true,
+    "disabled_constructor_has_no_fence_effect": true,
+    "durable_stop_and_budgets": true,
+    "fence_byte_ceiling_before_write": true,
+    "fence_outside_checkout_and_empty_planner": true,
+    "model_receipt_reconcile_without_inference": true,
+    "patch_receipt_reconcile_without_apply": true,
+    "resource_revocation_before_and_during_model": true,
+    "review_is_dated_snapshot_not_fresh_cache": true,
+    "review_requires_source_hashes_and_real_test_receipts": true,
+    "runtime_device_profile_before_model": true,
+    "sequential_runtime_model_tool_limit_one": true,
+    "strict_one_action_json": true,
+    "test_receipt_lookup_without_rerun": true
+  },
+  "date": "2026-10-16",
+  "dependencies": {
+    "native_supervisor_commit": "70d2dff9e5e377e2fbee2539ae190bf3796d78d2",
+    "planner_policy_commit": "99f67479f006aca89b359a09d5845252a312c942"
+  },
+  "kind": "simulated_development_controller_validation",
+  "limits": [
+    "Local explicit controller only; no CLI/live Board adapter in this lot.",
+    "Authorization snapshot supplied by trusted callback; no shared-context recomposition here.",
+    "Exclusive disposable checkout required; no guarantee against noncooperating external writers.",
+    "Review receipt describes inspected snapshot, not current files when cache is returned.",
+    "Canonical fence is one OS user/machine, not administrator-erasure resistance or multi-host coordination.",
+    "No automatic fence release; explicit operator resolution remains outside this API.",
+    "Actual native profile qualification is separate and Darwin-only; no Linux/model pilot qualified here.",
+    "System clock is trusted; backwards times before start refuse, smaller adjustments are not detected."
+  ],
+  "mcp_or_production_calls": 0,
+  "native_process_qualifications_in_this_lot": 0,
+  "schema": 1,
+  "source_sha256": {
+    "dev_fence.py": "341a5ff62490b0ef6731a1a7dd8129648072737987ed32d3e750bac8e0fb365a",
+    "dev_planner.py": "cea8f4ea8efa7c247f461ea552cd5fa7efccc125212ab770d38c118f84c64d10",
+    "dev_planner_journal.py": "4e93a4d6f2d3c895095f93c3788b70f29a58aeccb2790e4277ddb15539ca3fff",
+    "dev_runtime.py": "8a47c734e059925595c39ed2e577a398c81a017ad83bb20bb9e9ba702e18806c",
+    "runtime_journal.py": "5fb8841674e28ebdee51fdaea4dda8bde34062875c798b1fa0443eea7ed64253"
+  },
+  "tests": {
+    "development_methods": 123,
+    "independent_regressions": 6,
+    "passed": 179,
+    "runtime_methods": 56,
+    "temporary_board_integration_methods": 3
+  }
+}

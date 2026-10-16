@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sqlite3
 import stat
@@ -39,7 +40,7 @@ class RuntimeJournal:
             self.db = sqlite3.connect(path, isolation_level=None, timeout=5)
             self.db.row_factory = sqlite3.Row
             version = self.db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1): raise JournalError('unsupported_runtime_journal')
+            if version not in (0, 1, 2): raise JournalError('unsupported_runtime_journal')
             if version == 0:
                 if self.db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                     raise JournalError('runtime_journal_corrupt')
@@ -76,16 +77,22 @@ class RuntimeJournal:
             raise
 
     @staticmethod
-    def configuration(scope, work_id, turn_id, model):
+    def configuration(scope, work_id, turn_id, model, *, provider='codex_chatgpt'):
         _scope(scope)
-        for value in (work_id, turn_id):
-            if not isinstance(value, str) or str(uuid.UUID(value)) != value:
-                raise JournalError('invalid_runtime_identity')
+        try:
+            for value in (work_id, turn_id):
+                if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+                    raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            raise JournalError('invalid_runtime_identity') from None
         if (not isinstance(model, str) or not model.strip() or len(model) > 200
                 or any(ord(c) < 32 or ord(c) == 127 for c in model)):
             raise JournalError('runtime_model_required')
+        if (provider not in ('codex_chatgpt', 'local_broker')
+                or (provider == 'local_broker' and not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}', model))):
+            raise JournalError('invalid_runtime_provider')
         return {'scope': dict(scope), 'work_id': work_id, 'turn_id': turn_id,
-                'provider': 'codex_chatgpt', 'model': model}
+                'provider': provider, 'model': model}
 
     @staticmethod
     def key(configuration):
@@ -97,7 +104,7 @@ class RuntimeJournal:
         value = dict(row)
         try:
             config = json.loads(value['configuration'])
-            if (config != RuntimeJournal.configuration(config['scope'], config['work_id'], config['turn_id'], config['model'])
+            if (config != RuntimeJournal.configuration(config['scope'], config['work_id'], config['turn_id'], config['model'], provider=config['provider'])
                     or value['key'] != RuntimeJournal.key(config) or value['phase'] not in PHASES
                     or type(value['revision']) is not int or value['revision'] < 1
                     or value['start_confirmed'] not in (0, 1)
@@ -112,7 +119,7 @@ class RuntimeJournal:
         if not isinstance(configuration,dict) or set(configuration)!={'scope','work_id','turn_id','provider','model'}:
             raise JournalError('invalid_runtime_identity')
         encoded = _encode(configuration, 8192, 'invalid_runtime_identity')
-        if configuration!=self.configuration(configuration['scope'], configuration['work_id'], configuration['turn_id'], configuration['model']):
+        if configuration!=self.configuration(configuration['scope'], configuration['work_id'], configuration['turn_id'], configuration['model'], provider=configuration['provider']):
             raise JournalError('invalid_runtime_identity')
         key = self.key(configuration)
         with self.transaction():
@@ -121,6 +128,10 @@ class RuntimeJournal:
                 operation = self.decode(row)
                 if operation['configuration'] != configuration: raise JournalError('runtime_configuration_conflict')
                 return operation, False
+            if configuration['provider'] == 'local_broker':
+                # Old readers must refuse the provider extension explicitly,
+                # rather than mistake a local-tool record for model capacity.
+                self.db.execute('PRAGMA user_version=2')
             identifier, now = str(uuid.uuid4()), time.time()
             self.db.execute('INSERT INTO executions VALUES(?,?,?,?,?,?,?,?,?)',
                 (identifier, key, encoded, 'reserving', None, 1, 0, now, now))

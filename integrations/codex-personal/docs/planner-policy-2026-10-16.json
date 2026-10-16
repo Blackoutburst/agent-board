@@ -1,0 +1,44 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "checks": {
+    "inside_read": true,
+    "inside_write_denied": true,
+    "network_loopback_denied": true,
+    "outside_read_denied": true,
+    "outside_write_denied": true
+  },
+  "cleanup_confirmed": true,
+  "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
+  "cli_version": "codex-cli 0.162.0-alpha.17.2",
+  "fingerprint": "f29d84a7e1b80b0fc89e376e351f05e71574c5f763c737a5d22af2ad93fb66b0",
+  "host": {
+    "machine": "arm64",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "limitations": [
+    "Darwin only; other operating systems unqualified",
+    "Measures the sandbox command using default_permissions without -P",
+    "No exec model turn or client service traffic is qualified",
+    "Trusted controller/toolchain and exclusive empty workspace required"
+  ],
+  "model_calls": 0,
+  "module_sha256": "c993e3b4ff0759aa7e1bee6eac18da4a20646d163623a2d9eaa4951dc522de67",
+  "policy_template": {
+    "filesystem": {
+      ":minimal": "read",
+      ":root": "deny",
+      ":slash_tmp": "deny",
+      ":tmpdir": "deny",
+      "<synthetic planner workspace>": "read"
+    },
+    "network": {
+      "enabled": false
+    }
+  },
+  "production_enabled": false,
+  "profile_version": 1,
+  "result": "passed_synthetic_planner_policy",
+  "schema": 1,
+  "synthetic_files_removed": true
+}

@@ -1,0 +1,77 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "backend_execution_qualified": false,
+  "bwrap_sha256": "77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c",
+  "check": "linux_feasibility_canaries",
+  "checks": {
+    "fork": true,
+    "inside_read": true,
+    "inside_write": true,
+    "network_loopback": true,
+    "network_unix_abstract": true,
+    "network_unix_path": true,
+    "nproc_raise": true,
+    "outside_process_hidden": true,
+    "outside_read": true,
+    "outside_write": false,
+    "process_group": true,
+    "session": true,
+    "spawn": true
+  },
+  "cli_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "cli_version": "codex-cli 0.163.0",
+  "controller_auth_files_read": false,
+  "denial_errnos": {
+    "fork": 11,
+    "network_loopback": 1,
+    "network_unix_abstract": 1,
+    "network_unix_path": 1,
+    "outside_process_hidden": 3,
+    "outside_read": 2,
+    "outside_write": 0,
+    "process_group": 1,
+    "session": 1,
+    "spawn": 1
+  },
+  "host": {
+    "machine": "x86_64",
+    "release": "5.15.0-185-generic",
+    "system": "Linux"
+  },
+  "interpreter_sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+  "launcher_cleanup_observation": {
+    "captured_descendant_count": 0,
+    "descendants_disappeared": false,
+    "launcher_observed_before_kill": true,
+    "launcher_reaped": true,
+    "ready": true,
+    "remaining_zombies_only": false
+  },
+  "model_calls": 0,
+  "namespace_identity": {
+    "pgid": 2,
+    "pid": 2,
+    "sid": 2,
+    "uid": 1000
+  },
+  "observed_on": "2026-10-16",
+  "outside_fixture_unchanged": true,
+  "preflight": {
+    "apparmor_label": "unconfined",
+    "apparmor_userns_restrict_sysctl": "absent",
+    "bwrap_initially_available": false,
+    "codex_initially_available": false,
+    "distribution": "Ubuntu 22.04.5 LTS",
+    "max_user_namespaces": 62688,
+    "unprivileged_userns_clone": 1,
+    "unshare_version": "util-linux 2.37.2",
+    "user_mount_pid_net_namespaces": true,
+    "user_namespace": true
+  },
+  "production_enabled": false,
+  "result": "primitives_observed_backend_still_refused",
+  "schema": 1,
+  "source_sha256": "09f8d00260262d31a365088f22ca729d5e8c9b63ab66595843eb4d198c80bcdc",
+  "synthetic_fixture_removed": true,
+  "system_configuration_changed": false
+}
