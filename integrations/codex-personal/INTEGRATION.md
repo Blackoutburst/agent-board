@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.6.2**, schéma **8**, adaptateur **0.13.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.7.0**, schéma **9**, adaptateur **0.13.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
@@ -46,7 +46,7 @@ Les anciens claims après changement de profil se rapprochent via `reconcile_pro
 
 `events drain` collecte les pages ascendantes de l’activité d’un ticket. `host` réutilise ce drain pour les tickets explicitement configurés : création désactivée, activation d’un budget fini, puis démarrage séparé au premier plan. Son intention préalloue l’UUID exact du worker enfant. Il n’adopte pas un travail manuel indépendant, même après une panne d’écriture. Voir [EVENTS.md](EVENTS.md), [QUEUE.md](QUEUE.md) et [HOST.md](HOST.md).
 
-L’hôte actuel ne lit pas les conversations générales et n’installe aucun service. Son verrou protège un compte OS sur une machine ; il ne constitue pas une location distribuée. Le flux général de messages avec accusé de traitement et le pilote distant restent séparés. `read_inbox` conserve son comportement historique d’avancement à la lecture ; il n’est pas utilisé comme preuve de traitement réussi.
+L’hôte actuel ne lit pas les conversations générales et n’installe aucun service. Son verrou protège un compte OS sur une machine ; il ne constitue pas une location distribuée. Le [flux de messages confirmé](../../docs/MESSAGE-FEED.md) est disponible côté serveur ; son raccordement à l’hôte et le pilote distant restent séparés. `read_inbox` conserve son comportement historique d’avancement à la lecture ; il n’est pas utilisé comme preuve de traitement réussi.
 
 ## Développement et fonctions restantes
 
