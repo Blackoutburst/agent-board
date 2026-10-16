@@ -277,7 +277,7 @@
     "tests/test_exact_message.py": "2b5df2ea787a511c56b88c81ee01f982c3df29cf03d92462ca784c17ce854514",
     "tests/test_family_ui_metadata.py": "5457ca12810889143cd2f180bf1e0d94137831d73e43c2f0250e82d06ae9b404",
     "tests/test_mcp_review_regressions.py": "7d54bb4757c53c2313f9a07142e8c25fd83d0c5cf3214744786b123f45dc61ae",
-    "tests/test_mcp_views.py": "cec8571d75210aee58621034be24761a81b865daddcdb7b9df9f9b86f01948ce",
+    "tests/test_mcp_views.py": "bc4c2ff7cef917beccf55bc9af2eb62d59ecb5f164db2d9d276aa6dd145b4e0b",
     "tests/test_message_feed.py": "12e2bc8f85b7eba8b1ccd79b8e1b723aeda127d45d873ced32715fbe04f4cd8d",
     "tests/test_message_feed_review.py": "419655a999c2e616fc4af3dfe862782a3c2fbfe2a28d8b7cd6f58a15c0aa53c1",
     "tests/test_message_runtime.py": "fe40fe76cfee5568794e9c5e53faac8350c59859cf17eb2281a5f86c757a6d19",
