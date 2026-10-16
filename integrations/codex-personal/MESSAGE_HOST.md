@@ -199,3 +199,11 @@ coupures aux frontières durables, les enfants étrangers, le budget partiel,
 les sources/accès retirés, les bots, les capacités et l’absence d’effets sur les
 tickets. Aucun modèle, compte, serveur de production ou listener n’a été lancé
 pour ces validations.
+
+## Rapprochement Runtime partagé
+
+`runtime reconcile` choisit le client et le guard de la portée message persistée.
+Le résultat terminal exact permet seulement de confirmer son nettoyage, sans
+nouvelle réponse modèle. L’option `--development-operation` est réservée au
+parcours développement et refuse une portée message avant toute connexion ; elle
+ne permet jamais de remplacer le message source ou son empreinte.

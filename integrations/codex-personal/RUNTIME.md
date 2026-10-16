@@ -46,6 +46,14 @@ python3 -m blackoutburst_agents runtime --journal /chemin/prive/runtime \
 
 Cette commande prend le verrou du travail, retrouve son tour terminal exact et son résultat privé, puis rapproche le reçu du board. Elle ne réserve, n’active ni ne relance aucun modèle. Elle ne réenregistre pas le profil. Un autre journal de sessions, une autre connexion ou une preuve de nettoyage contradictoire sont refusés.
 
+La portée persistée choisit le canal : ticket historique ou message exact. Un
+message utilise sa connexion et son guard dédiés, sans créer de ticket. Pour le
+résultat modèle exact d’une opération [développement](DEVELOPMENT_CLI.md), ajouter
+`--development-operation UUID_DU_WORKJOURNAL` ; son UUID de work et son alias privé
+doivent correspondre. Cette option est refusée pour une portée message avant
+connexion. Elle ne rapproche pas les outils `local_broker`, ne relit pas leurs
+sources et ne permet aucune nouvelle exécution après révocation.
+
 Un démarrage dont l’accusé est perdu avant confirmation locale, ou un processus dont le nettoyage reste inconnu, conserve sa place. Il n’existe pas de bouton de libération forcée dans cette version. Résoudre séparément les effets et les journaux worker/file ; rapprocher la capacité ne déclare jamais le ticket réussi.
 
 ## Données et validation

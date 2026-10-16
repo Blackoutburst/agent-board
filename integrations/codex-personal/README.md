@@ -16,6 +16,8 @@ L’adaptateur 0.14 ajoute un [backend natif de tests Python nommés](NATIVE_TES
 
 Un [mode de réponse aux messages](MESSAGE_HOST.md) est disponible sur configuration explicite `schema_version: 2`, avec le flux confirmé et une portée Runtime de conversation. Le mode activité `schema_version: 1` reste distinct. Aucun listener permanent n’est installé ou activé.
 
+L’adaptateur 0.18 ajoute le [parcours explicite de développement](DEVELOPMENT_CLI.md) : préparation en lecture seule, exécution finie avec droits et contexte frais, preuves datées, rapprochement des reçus et publication séparée en revue. Chaque opération démarre son propre dialogue fournisseur. Le nettoyage Runtime distingue les travaux historiques, les réponses aux messages et ce parcours ; aucun mode n’active les autres. Les tests de cette intégration utilisent uniquement des modèles et backends simulés.
+
 ## Utilisation
 
 Python **3.10 ou supérieur**, sur macOS ou Linux/POSIX ; aucune bibliothèque Python externe n’est nécessaire à l’exécution. Codex doit être installé et connecté par son propriétaire au moyen de son interface ou de sa CLI officielle. L’authentification reste gérée par Codex. [Documentation officielle de connexion](https://learn.chatgpt.com/docs/auth)

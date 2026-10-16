@@ -78,3 +78,5 @@ Schema migration is transactional and preserves existing records. Keep data, att
 The [confirmed human-message feed](docs/MESSAGE-FEED.md) adds replayable opening, durable pending deliveries and explicit checkpoints. Legacy `read_inbox` remains compatible. No listener or automatic task handling is activated.
 
 The personal adapter also offers an explicitly configured [confirmed-message host](integrations/codex-personal/MESSAGE_HOST.md), disabled at creation and limited to a finite foreground budget. It replies without claiming tickets; migration and installation never start it.
+
+The opt-in personal adapter also exposes a finite [development command](integrations/codex-personal/DEVELOPMENT_CLI.md), with sealed permissions/context, one provider dialogue per operation and separate review publication. It shares Runtime capacity while keeping message and ticket cleanup scopes distinct. Installing this release starts no development operation.

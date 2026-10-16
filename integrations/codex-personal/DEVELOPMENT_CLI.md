@@ -5,7 +5,9 @@ It uses the owner's paired Board connection and personal Codex CLI. No API fallb
 authentication copy, HOME/CODEX_HOME change or implicit profile re-registration is
 available. The same model is fixed for the operation. The current native policy
 and supervised named-test backend must already be qualified on this Darwin host;
-unsupported or changed plans refuse. This release has only fixture-model tests
+unsupported or changed plans refuse. Package/version/source changes invalidate
+existing native source pins, so an operator must explicitly requalify the final
+installed package before any pilot. Historical receipts remain dated evidence. This release has only fixture-model tests
 against a temporary Board. It has not run a real model, MCP endpoint or repository.
 
 ## Existing reviewed controller inputs

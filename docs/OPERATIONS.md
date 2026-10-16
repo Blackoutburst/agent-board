@@ -97,4 +97,14 @@ The desktop header and sidebar stay within the viewport; long conversation lists
 
 Schema 10 transactionally rebuilds `runtime_executions` for exact addressed-message scope while retaining existing ticket rows, indexes, foreign keys and capacity. General conversations have nullable project/ticket references; no visible ticket or claim is fabricated. Preserve a matching schema-9 backup and source before release. Validate migration/rollback, both scope kinds and backup restoration with synthetic fixtures. The Runtime view links message executions to their source conversation.
 
-The adapter 0.17 [message host](../integrations/codex-personal/MESSAGE_HOST.md) uses confirmed deliveries, exact context checks and idempotent publication. Creation remains disabled; finite activation and foreground execution are separate explicit commands. This release does not install or start a listener, model, feed or cloud agent.
+The adapter 0.18 [message host](../integrations/codex-personal/MESSAGE_HOST.md) uses confirmed deliveries, exact context checks and idempotent publication. Creation remains disabled; finite activation and foreground execution are separate explicit commands. This release does not install or start a listener, model, feed or cloud agent.
+
+### Explicit development adapter (0.18)
+
+The [development command](../integrations/codex-personal/DEVELOPMENT_CLI.md) is a
+finite explicit operation, separate from both host modes. It requires an exclusive
+isolated checkout, sealed grants/context, and already qualified native plans.
+Preparation launches no model/test and claims no ticket. Publication is a separate
+command that records a dated audit in review, never ticket done. Version changes
+invalidate native source pins and require explicit requalification of the final
+package before a pilot. Installation starts no listener or development work.

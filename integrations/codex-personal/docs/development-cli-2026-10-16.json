@@ -1,7 +1,10 @@
 {
   "actual_mcp_endpoint_calls": 0,
   "actual_model_turns": 0,
+  "adapter_version": "0.18.0",
   "base_commit": "00f95e410f347427e22c7a5c6d206c8dc2d14fb6",
+  "board_schema": 10,
+  "board_version": "2.8.0",
   "checks": {
     "conflicting_journal_refuses_locally_before_mcp": true,
     "connection_hardlink_symlink_refused": true,
@@ -16,6 +19,7 @@
     "inspection_revalidates_root_and_planner_identity": true,
     "local_stop_allows_only_receipt_cleanup": true,
     "lost_claim_reply_exact_reconciliation": true,
+    "message_scope_rejects_development_option_before_connection": true,
     "new_operation_never_adopts_prior_provider_dialogue": true,
     "no_implicit_profile_registration": true,
     "offline_status_stop_inspect": true,
@@ -33,6 +37,7 @@
     "scope": "Explicit development coordinator, receipt-only recovery, private output, operation work identity, identity-only model cleanup.",
     "status": "no_open_findings_in_measured_scope"
   },
+  "integration_base_commit": "bb6c118eccb632d90fbd29e5936c059d722e84e3",
   "kind": "explicit_development_cli_fixture_validation",
   "limits": [
     "Existing controller-prepared manifest and already qualified policy/backend required; prepare never qualifies.",
@@ -61,7 +66,7 @@
     "development_client.py": "47bdda70494b0c49cbf0900063b7d18311d4f6e98e1bfab5631e6b6bbd2296ca",
     "development_worker.py": "c8a0ff34d2378e75187f34e46f882c75847dcc959a5f9c2a012efe1b1bfe1824",
     "run_store.py": "9fab7ed3d4780e9e42dc28531a4b301508940f4b28a5c7d9177d941aee61d0a7",
-    "runtime_cli.py": "c040672138dc2e67435e224a26dc762ea7f57ce9f1291b7352b3411e8363e388"
+    "runtime_cli.py": "b05ffd8ef12a358eb402986902d1716cf21e43e5eccfd55a3f7c15c1723ee0d5"
   },
   "test_source_sha256": {
     "test_development_cli.py": "d8d7510a511e3322ae399ae3e2ac3f991a4cda3b777c878b311ccf1dea087d5b",
@@ -71,8 +76,9 @@
   },
   "tests": {
     "actual_model_native_mcp_or_production_effects": 0,
-    "adapter_full_passed": 835,
+    "adapter_full_passed": 886,
     "adapter_full_warning": "Existing TestRequest dataclass cannot be collected as test class; ordinary warning only.",
+    "cross_mode_dispatch_passed": 4,
     "independent_regression_methods": 7,
     "independent_targeted_passed": 154,
     "workflow_and_independent_review_passed": 27
