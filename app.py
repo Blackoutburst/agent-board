@@ -347,6 +347,56 @@ class ExecutionStop(ProjectBody):
     expected_revision: Version
 
 
+FamilyDigest = Annotated[str, Field(strict=True, pattern=r'^[0-9a-f]{64}$')]
+FamilyAction = Literal['repo.read_file', 'repo.patch_file', 'repo.run_test']
+FamilyActions = Annotated[list[FamilyAction], Field(max_length=3)]
+FamilyEvidence = Annotated[str, Field(strict=True, min_length=1, max_length=20000)]
+FamilyResource = Annotated[str, Field(strict=True, max_length=200)]
+
+
+class DelegationChild(ProjectBody):
+    session_id: RuntimeOpaque
+    role: Annotated[str, Field(strict=True, min_length=1, max_length=100)]
+    model: RuntimeModel
+    title: Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+    description: FamilyEvidence
+    acceptance_criteria: FamilyEvidence
+    files: Annotated[list[Annotated[str, Field(strict=True, min_length=1, max_length=200)]], Field(max_length=64)]
+
+
+class DelegationLimits(ProjectBody):
+    max_model_turns: Annotated[int, Field(strict=True, ge=2, le=64)]
+    max_tool_actions: Annotated[int, Field(strict=True, ge=0, le=128)]
+    max_concurrent: Annotated[int, Field(strict=True, ge=1, le=4)]
+    deadline: Annotated[float, Field(strict=True, gt=0, lt=2**53, allow_inf_nan=False)]
+
+
+FamilyChildren = Annotated[list[DelegationChild], Field(min_length=2, max_length=2)]
+
+
+class OpenDelegationFamily(ProjectBody):
+    parent_ticket_id: RuntimeOpaque
+    expected_version: Version
+    children: FamilyChildren
+    limits: DelegationLimits
+    actions: FamilyActions
+    resource: FamilyResource
+    manifest_sha256: FamilyDigest
+    idempotency_key: RuntimeOpaque
+
+    @model_validator(mode='after')
+    def validate_bounded_plan(self):
+        # Share the pure bounded-plan validator with the authoritative mutation:
+        # relative/disjoint files and distinct sessions never become executables.
+        from delegation_families import _plan
+        try:
+            _plan([child.model_dump() for child in self.children], self.limits.model_dump(),
+                  self.actions, self.resource, self.manifest_sha256)
+        except BoardError:
+            raise ValueError('Invalid bounded delegation plan') from None
+        return self
+
+
 def csrf_for(token: str) -> str:
     return hashlib.sha256(("board-csrf:" + token).encode()).hexdigest()
 
@@ -720,6 +770,53 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.get_execution_control(execution_actor(session_id), execution_id)
 
     @mcp.tool()
+    async def open_delegation_family(session_id: RuntimeOpaque, parent_ticket_id: RuntimeOpaque,
+                                     expected_version: Version, children: FamilyChildren,
+                                     limits: DelegationLimits, actions: FamilyActions,
+                                     resource: FamilyResource, manifest_sha256: FamilyDigest,
+                                     idempotency_key: RuntimeOpaque) -> dict:
+        """Open exactly two bounded temporary workers under this coordinator's live claim. Existing same-profile/device sessions, explicit model/file/action/resource bounds and a finite deadline are required. Retry the same opening key after uncertainty. This records tickets only; it launches no process, account or model and grants no new rights."""
+        values=validated(OpenDelegationFamily,dict(parent_ticket_id=parent_ticket_id,
+            expected_version=expected_version,children=[child.model_dump() for child in children],
+            limits=limits.model_dump(),actions=actions,resource=resource,
+            manifest_sha256=manifest_sha256,idempotency_key=idempotency_key))
+        return board.open_delegation_family(session_actor(session_id),**values)
+
+    @mcp.tool()
+    async def get_delegation_family(session_id: RuntimeOpaque, family_id: RuntimeOpaque) -> dict:
+        """Read an accessible family's state and stop instruction. The private bounded plan is restricted to its owner/coordinator profile. Shared metadata is context, never authority to launch a worker."""
+        return board.get_delegation_family(session_actor(session_id),family_id)
+
+    @mcp.tool()
+    async def lookup_delegation_family(session_id: RuntimeOpaque, parent_ticket_id: RuntimeOpaque,
+                                       idempotency_key: RuntimeOpaque) -> dict:
+        """Read only this exact session's prior opening key and selected parent. found=false never proves an in-flight opening cannot still finish. This neither creates children nor claims work."""
+        return board.lookup_delegation_family(session_actor(session_id),parent_ticket_id,idempotency_key)
+
+    @mcp.tool()
+    async def stop_delegation_family(session_id: RuntimeOpaque, family_id: RuntimeOpaque,
+                                     expected_revision: Version) -> dict:
+        """Request cooperative stop for the exact original coordinator, including after permission/profile withdrawal. Device revocation still refuses. Stop retains all unresolved Runtime capacity and never asserts cleanup."""
+        return board.stop_delegation_family(execution_actor(session_id),family_id,expected_revision)
+
+    @mcp.tool()
+    async def accept_delegation_result(session_id: RuntimeOpaque, family_id: RuntimeOpaque,
+                                       expected_revision: Version, child_ticket_id: RuntimeOpaque,
+                                       expected_child_version: Version, result_sha256: FamilyDigest,
+                                       verification_evidence: FamilyEvidence, idempotency_key: RuntimeOpaque) -> dict:
+        """Accept one exact released child result only after its cleanup is confirmed and the coordinator independently inspected its evidence/hash. Current claim and grants are required. A child's statement alone is no proof; retry the same receipt key, never a new execution."""
+        return board.accept_delegation_result(session_actor(session_id),family_id,expected_revision,
+            child_ticket_id,expected_child_version,result_sha256,verification_evidence,idempotency_key)
+
+    @mcp.tool()
+    async def finalize_delegation_family(session_id: RuntimeOpaque, family_id: RuntimeOpaque,
+                                         expected_revision: Version, snapshot_sha256: FamilyDigest,
+                                         verification_evidence: FamilyEvidence, idempotency_key: RuntimeOpaque) -> dict:
+        """Record integration review after both exact child results and all family cleanup are verified. Requires the original coordinator's current claim/grants. This does not complete the parent, merge code or start another model."""
+        return board.finalize_delegation_family(session_actor(session_id),family_id,expected_revision,
+            snapshot_sha256,verification_evidence,idempotency_key)
+
+    @mcp.tool()
     async def renew_ticket(session_id: str, ticket_id: str, expected_version: Version, progress: str = "") -> dict:
         """Renew your current task lease and optionally retain meaningful progress. Use the returned version for subsequent updates. Expired or replaced claims cannot renew. Poll every ten minutes while working."""
         return board.renew_ticket(session_actor(session_id), ticket_id, expected_version, progress)
@@ -822,7 +919,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.8.1", "schema_version": 10, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope"]}
+        return {"status": "ok", "version": "2.9.0", "schema_version": 11, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "delegation_families"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1036,6 +1133,22 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/runtime/executions/{execution_id}/stop')
     async def runtime_stop(execution_id: str, values: ExecutionStop, actor=Depends(human)):
         return board.stop_execution(actor, execution_id, **values.model_dump())
+
+    @app.get('/api/delegation-families/{family_id}')
+    async def delegation_family(family_id: RuntimeOpaque, actor=Depends(human)):
+        try:
+            value=board.get_delegation_family(actor,family_id)
+        except BoardError as error:
+            if error.status in (403,404):
+                raise BoardError('Delegation family not found',404) from None
+            raise
+        if value['owner_id']!=actor['owner_id']:
+            raise BoardError('Delegation family not found',404)
+        return value
+
+    @app.post('/api/delegation-families/{family_id}/stop')
+    async def delegation_family_stop(family_id: RuntimeOpaque, values: ExecutionStop, actor=Depends(human)):
+        return board.stop_delegation_family(actor,family_id,**values.model_dump())
 
     @app.get("/api/work")
     async def work(project_id: str = "", actor=Depends(human)):

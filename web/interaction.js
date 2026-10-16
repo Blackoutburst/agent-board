@@ -89,7 +89,8 @@ const Conversations = (() => {
         }
         if (state.view === "ticket" && !$("modal").open) {
           const info = await api(`/tickets/${encodeURIComponent(state.ticket.id)}`);
-          if (request === state.request && info.ticket.version !== state.ticket.version) Workspace.refreshTicket(info);
+          if (request === state.request && (info.ticket.version !== state.ticket.version ||
+              JSON.stringify(info.ticket.delegation) !== JSON.stringify(state.ticket.delegation))) Workspace.refreshTicket(info);
         }
       }
       await loadThreads();

@@ -11,13 +11,14 @@ import math
 import os
 from pathlib import Path
 import time
+import uuid
 
 from .context import ContextScope, _hash
 from .development_authorization import DevelopmentAuthorization
 from .dev_broker import DevelopmentBroker
 from .dev_fence import DevelopmentFence, canonical_anchor
 from .dev_journal import DevelopmentJournal
-from .dev_manifest import DevelopmentError, canonical, check_content, digest, opaque
+from .dev_manifest import DevelopmentError, canonical, check_content, digest, opaque, sha256
 from .dev_planner import DevelopmentPlanner, _agent_id, _directory_pin
 from .dev_runtime import development_work_id
 from .dev_planner_journal import PlannerBudgets
@@ -30,11 +31,92 @@ class DevelopmentBoardWorker:
     def __init__(self, journal, store, runtime_journal, client, control_client, *,
                  backend_factory=SupervisedNativeNamedPythonBackend, policy_factory=PlannerPolicy,
                  planner_factory=DevelopmentPlanner, _transport=None, _test_anchor=None,
-                 _allow_fixture_backend=False, clock=time.time):
+                 _allow_fixture_backend=False, clock=time.time, controller_scope=None, controller_guard=None, delegation_guard=None, fence_intent=None):
         self.journal, self.store, self.runtime = journal, store, runtime_journal
         self.client, self.control = client, control_client
         self.backend_factory, self.policy_factory, self.planner_factory = backend_factory, policy_factory, planner_factory
         self.transport, self.test_anchor, self.allow_fixture, self.clock = _transport, _test_anchor, _allow_fixture_backend, clock
+        if controller_scope is not None:
+            if (type(controller_scope) is not dict or set(controller_scope) !=
+                    {'kind','operation_id','family_id','slot','plan_sha256','configuration_sha256','journal'}
+                    or controller_scope['kind'] != 'delegation_family'
+                    or controller_scope['slot'] not in ('child_0','child_1','parent')
+                    or not callable(controller_guard) or not callable(delegation_guard) or not callable(fence_intent)):
+                raise DevelopmentError('invalid_development_controller')
+            development_work_id(controller_scope['operation_id'])
+            opaque(controller_scope['family_id']);sha256(controller_scope['plan_sha256'])
+            sha256(controller_scope['configuration_sha256'])
+        elif controller_guard is not None or delegation_guard is not None or fence_intent is not None:
+            raise DevelopmentError('invalid_development_controller')
+        self.controller_scope = deepcopy(controller_scope)
+        self.controller_guard, self.delegation_guard, self.fence_intent = controller_guard, delegation_guard, fence_intent
+
+    def _controller_cancelled(self, operation_id=None, *, inspection=False):
+        if not inspection and operation_id is not None and self._stopped(operation_id):
+            return True
+        if self.controller_scope is not None:
+            try:
+                return self.controller_guard() is not True
+            except Exception:
+                return True
+        return False
+
+    def _pin_controller(self, op):
+        if (self.controller_scope is not None and op['id']!=self._controller_operation_id()):
+            raise DevelopmentError('development_controller_required')
+        if op['configuration'].get('controller_scope') != self.controller_scope:
+            raise DevelopmentError('development_controller_required')
+
+    def _controller_operation_id(self):
+        return str(uuid.uuid5(uuid.UUID(self.controller_scope['operation_id']),self.controller_scope['slot']))
+
+    def _family_reservation(self, manifest, scope):
+        anchor=canonical_anchor() if self.test_anchor is None else Path(self.test_anchor).absolute()
+        try:anchor.lstat()
+        except FileNotFoundError:
+            if self.controller_scope is not None:raise DevelopmentError('development_family_reservation_missing')
+            return
+        fence=DevelopmentFence(_test_anchor=anchor)
+        try:
+            found=fence.inspect_checkout(manifest['root_identity'])
+            family=None if found is None else found.get('family')
+            if family is None:
+                if self.controller_scope is not None:raise DevelopmentError('development_family_reservation_missing')
+                return
+            descriptor=self.controller_scope
+            if descriptor is None:raise DevelopmentError('development_family_reservation_conflict')
+            from .dev_journal import PrivateDirectory,decode
+            with PrivateDirectory(descriptor['journal']['path']) as private:
+                if _directory_pin(private.path)!=descriptor['journal']:
+                    raise DevelopmentError('development_family_reservation_conflict')
+                state=decode(private.read('family.json',2*1024*1024))
+            expected=state['payload']['fence_descriptor']
+            if (state['operation_id']!=descriptor['operation_id']
+                    or state['configuration_sha256']!=descriptor['configuration_sha256']
+                    or digest(canonical(state['configuration']))!=descriptor['configuration_sha256']
+                    or state['configuration']['server_plan_sha256']!=descriptor['plan_sha256']
+                    or digest(canonical(state['configuration']['server_plan']))!=descriptor['plan_sha256']
+                    or state['payload']['family_id']!=descriptor['family_id']
+                    or state['payload']['slot_scopes'][descriptor['slot']]!=scope
+                    or family['descriptor']!=expected or family['slot']!=descriptor['slot']
+                    or expected['roots'][descriptor['slot']]['identity']!=manifest['root_identity']
+                    or state['workflow_ids'][descriptor['slot']]!=self._controller_operation_id()
+                    or state['configuration']['child_stores'][descriptor['slot']]!={
+                        'runs':_directory_pin(self.store.state_dir),'runtime':_directory_pin(self.runtime.directory)}):
+                raise DevelopmentError('development_family_reservation_conflict')
+            fence.verify_family(state['payload']['fence_reservations'],expected,state['payload'].get('fence_targets',{}))
+        finally:fence.close()
+
+    def _verify_family_binding(self, binding, stage):
+        """The all-slot prefix check alone does not admit a planner effect."""
+        self._family_reservation({'root_identity':binding['root_identity']},binding['scope'])
+        fence=DevelopmentFence(_test_anchor=self.test_anchor)
+        try:
+            found=fence.inspect_checkout(binding['root_identity'])
+            if (found is None or found['operation_id']!=self._controller_operation_id()
+                    or found['binding']!=binding or found.get('family',{}).get('stage')!=stage):
+                raise DevelopmentError('development_family_target_incomplete')
+        finally:fence.close()
 
     @staticmethod
     def _public(op, reason='', planner=None):
@@ -69,7 +151,7 @@ class DevelopmentBoardWorker:
                                   'supervision':backend.supervision}))
 
     def prepare(self, *, scope, request_id, instruction, broker_directory, backend_directory,
-                planner_policy_directory, model, budgets=None):
+                planner_policy_directory, model, budgets=None, operation_id=None, registration=None):
         """Pure read/plan phase; no claim, Runtime reservation, model or test."""
         if (type(instruction) is not str or not instruction.strip()
                 or len(instruction.encode('utf-8','surrogatepass'))>16384):
@@ -77,18 +159,32 @@ class DevelopmentBoardWorker:
         check_content(instruction.encode('utf-8','strict'))
         opaque(model, 'invalid_development_model', 128)
         limits=(budgets or PlannerBudgets()).document()
+        if self.controller_scope is not None and operation_id!=self._controller_operation_id():
+            raise DevelopmentError('development_controller_required')
         with self.journal.lock(scope):
             prior=self.journal.find(scope,request_id)
+            with closing(DevelopmentJournal(broker_directory)) as reserved_manifest:
+                self._family_reservation(reserved_manifest.manifest,scope)
+            if registration is not None and self.controller_scope is None:
+                raise DevelopmentError('invalid_development_controller')
             if prior is not None:
                 self.client.adopt_registration()
+                if registration is not None and registration!=prior['payload']['registration']:
+                    raise DevelopmentError('development_registration_mismatch')
                 registration=prior['payload']['registration']
+            elif registration is not None:
+                self.client.adopt_registration()
+                registration=deepcopy(registration)
             else:
                 registration=self.client.register_initial()
             # Grants must be checked before any claim/Runtime/model or canonical
             # reservation. An empty policy cannot bootstrap its own rights.
             with closing(DevelopmentJournal(broker_directory)) as manifest:
+                self._family_reservation(manifest.manifest,scope)
                 authorization=DevelopmentAuthorization(self.client,scope=scope,manifest=manifest.manifest,
-                                                        registration=registration,clock=self.clock,stop_requested=lambda:self._stopped(prior['id']) if prior else False)
+                                                        registration=registration,clock=self.clock,
+                    stop_requested=lambda:self._controller_cancelled(prior['id'] if prior else None),
+                    delegation_guard=self.delegation_guard)
                 initial=authorization.snapshot()
             def preflight(given,action,resource):
                 try:
@@ -119,9 +215,11 @@ class DevelopmentBoardWorker:
                 config={'schema':1,'kind':'development','instruction':instruction,'model':model,'budgets':limits,
                     'pins':pins,'manifest_hash':manifest.manifest_hash,'policy_hash':policy.fingerprint,
                     'backend_hash':self._backend_pin(backend)}
+                if self.controller_scope is not None:
+                    config['controller_scope']=deepcopy(self.controller_scope)
                 if prior is not None and prior['configuration']!=config:
                     raise DevelopmentError('development_prepare_conflict')
-                op=self.journal.begin(scope,request_id,config)
+                op=self.journal.begin(scope,request_id,config,operation_id=operation_id)
                 if prior is not None:
                     expected=op['payload'].get('initial_context')
                     if op['stage']=='new' and (expected is None or expected['fingerprint']!=initial['context']['fingerprint']):
@@ -132,6 +230,7 @@ class DevelopmentBoardWorker:
                 return self._public(op)
 
     def _pin_configuration(self, op, manifest, policy, backend):
+        self._pin_controller(op)
         config=op['configuration']
         if (config.get('schema')!=1 or config.get('kind')!='development'
                 or config['manifest_hash']!=manifest.manifest_hash or config['policy_hash']!=policy.fingerprint
@@ -197,7 +296,7 @@ class DevelopmentBoardWorker:
                     raise DevelopmentError('development_claim_lost')
                 if intent['action']=='claim_ticket' and ticket['claimant'] is not None:
                     raise DevelopmentError('development_foreign_or_expired_claim')
-                if self._stopped(op['id']):
+                if self._controller_cancelled(op['id']):
                     raise DevelopmentError('development_stop_requested')
                 try:
                     self.client.call(intent['action'],{'ticket_id':scope['ticket_id'],
@@ -248,6 +347,9 @@ class DevelopmentBoardWorker:
                 fence=DevelopmentFence(_test_anchor=self.test_anchor)
                 try:found=fence.inspect_checkout(manifest.manifest['root_identity'])
                 finally:fence.close()
+                if found is not None and found.get('family') is not None:
+                    if self.controller_scope is None:raise DevelopmentError('development_controller_required')
+                    return  # _family_reservation already validated every exact private prefix.
                 if found is not None and (found['operation_id']!=op['id'] or any(
                         found['binding'].get(key)!=parent[key] for key in
                         ('scope','root_identity','journal','child_scope','parent_scope'))):
@@ -273,6 +375,7 @@ class DevelopmentBoardWorker:
             op=self.journal.get(operation_id)
             if reconcile and op['stage'] not in ('result_ready','complete','abandoned') and not self._has_execution_receipt(op):
                 return {**self._public(op),'status':'pending','reason':'development_no_execution_receipt'}
+            self._pin_controller(op)
             self.client.adopt_registration()
             connection=getattr(self.client,'connection_path',None)
             if connection is not None:
@@ -287,12 +390,16 @@ class DevelopmentBoardWorker:
                 return self._public(op)
             config=op['configuration'];pins=config['pins']
             try:
+                with closing(DevelopmentJournal(pins['broker']['path'])) as reserved_manifest:
+                    self._family_reservation(reserved_manifest.manifest,op['scope'])
                 self._existing_fence_check(op)
-                if not reconcile and self._stopped(op['id']):
+                if not reconcile and self._controller_cancelled(op['id']):
                     raise DevelopmentError('development_stop_requested')
                 with closing(DevelopmentJournal(pins['broker']['path'])) as manifest:
                     authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
-                        registration=op['payload']['registration'],clock=self.clock,stop_requested=lambda:self._stopped(op['id']) and not reconcile)
+                        registration=op['payload']['registration'],clock=self.clock,
+                        stop_requested=lambda:self._controller_cancelled(op['id'],inspection=reconcile),
+                        delegation_guard=self.delegation_guard)
                 if 'context' in op['payload']:
                     authorization.expected_context=deepcopy(op['payload']['context'])
                     authorization.claim_version=op['payload']['claim_version']
@@ -327,12 +434,17 @@ class DevelopmentBoardWorker:
                         # fences alternate journals even before a planner exists.
                         existing_parent=op['payload'].get('parent_binding')
                         if existing_parent is None:
-                            fence.bind(parent_binding,op['id'])
+                            if self.controller_scope is None:
+                                fence.bind(parent_binding,op['id'])
+                            else:
+                                proof=self.fence_intent('parent',parent_binding)
+                                fence.transfer_family_slot(proof)
                             op=self._save(op,parent_binding=parent_binding)
                         elif existing_parent!=parent_binding:
                             raise DevelopmentError('development_parent_changed')
                         elif 'context' not in op['payload']:
-                            fence.verify(parent_binding,op['id'])
+                            if self.controller_scope is None:fence.verify(parent_binding,op['id'])
+                            else:self._verify_family_binding(parent_binding,'parent')
                     finally:
                         fence.close()
                     if op['stage'] in ('new','claiming','claimed'):
@@ -354,6 +466,10 @@ class DevelopmentBoardWorker:
                             budgets=PlannerBudgets(**op['payload']['planner_budgets']),enabled=True,
                             context=op['payload']['context'],
                             parent_operation={'binding':parent_binding,'operation_id':op['id']},
+                            fence_intent=None if self.fence_intent is None else
+                                lambda target:self.fence_intent('planner',target),
+                            fence_verify=None if self.fence_intent is None else
+                                lambda target:self._verify_family_binding(target,'planner'),
                             _transport=self.transport,_test_anchor=self.test_anchor,
                             _allow_fixture_backend=self.allow_fixture,_clock=self.clock)
                         try:
@@ -434,11 +550,14 @@ class DevelopmentBoardWorker:
                 'Passed named suites: '+', '.join(sorted(review['tests']))+'\n'
                 'Dated audit only; verify current hashes before accepting or applying changes.')
 
-    def publish(self, operation_id):
+    def publish(self, operation_id, *, audit_outcome=False):
         """Explicit publication of dated evidence in review, never done."""
+        if type(audit_outcome) is not bool:
+            raise DevelopmentError('invalid_development_publication')
         op=self.journal.get(operation_id)
         with self.journal.lock(op['scope']):
             op=self.journal.get(operation_id)
+            self._pin_controller(op)
             if op['stage']=='complete':
                 return self._public(op)
             if op['stage'] not in ('result_ready','publishing'):
@@ -449,7 +568,8 @@ class DevelopmentBoardWorker:
                     from .dev_journal import DevelopmentJournal
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
                         authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
-                            registration=op['payload']['registration'],clock=self.clock,stop_requested=lambda:self._stopped(op['id']))
+                            registration=op['payload']['registration'],clock=self.clock,
+                            stop_requested=lambda:self._controller_cancelled(op['id']),delegation_guard=self.delegation_guard)
                     authorization.expected_context=deepcopy(op['payload']['context'])
                     authorization.claim_version=op['payload']['claim_version']
                     authorization.claim_id=op['payload']['claim_id']
@@ -457,9 +577,14 @@ class DevelopmentBoardWorker:
                     ticket=authorization.snapshot(require_claim=True)['ticket']
                     text=self._audit_text(op)
                     evidence=ticket['evidence']+('\n\n' if ticket['evidence'] else '')+text
-                    changes={'status':'review','outcome':ticket['outcome'],'evidence':evidence,'release_claim':True}
-                    op=self._save(op,'publishing',publication={'expected_version':ticket['version'],'changes':changes})
+                    outcome=('Development audit ready for review; source snapshot SHA256: '+
+                        op['payload']['planner_receipt']['review']['snapshot_sha256']) if audit_outcome else ticket['outcome']
+                    changes={'status':'review','outcome':outcome,'evidence':evidence,'release_claim':True}
+                    op=self._save(op,'publishing',publication={'expected_version':ticket['version'],'changes':changes,
+                        'audit_outcome':audit_outcome})
                 intent=op['payload']['publication']
+                if intent.get('audit_outcome',False) is not audit_outcome:
+                    raise DevelopmentError('development_publication_conflict')
                 response=self.client.call('get_ticket',{'ticket_id':op['scope']['ticket_id']})
                 ticket=response['ticket']
                 if ticket['version']==intent['expected_version'] and ticket['claimant'] is not None:
@@ -467,7 +592,8 @@ class DevelopmentBoardWorker:
                     # an exact optimistic publication intent.
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
                         authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
-                            registration=op['payload']['registration'],clock=self.clock,stop_requested=lambda:self._stopped(op['id']))
+                            registration=op['payload']['registration'],clock=self.clock,
+                            stop_requested=lambda:self._controller_cancelled(op['id']),delegation_guard=self.delegation_guard)
                     authorization.expected_context=deepcopy(op['payload']['context'])
                     authorization.claim_version=op['payload']['claim_version'];authorization.claim_id=op['payload']['claim_id']
                     authorization()
@@ -490,6 +616,10 @@ class DevelopmentBoardWorker:
                 # mismatched state cannot silently create a new publication.
                 op=self._save(op,reason=reason)
                 return self._public(op,reason)
+
+    def reconcile_cleanup(self, operation_id):
+        from .development_cleanup import reconcile_cleanup
+        return reconcile_cleanup(self,operation_id)
 
     def status(self, operation_id):
         return {**self._public(self.journal.get(operation_id)),'stop_requested':self._stopped(operation_id)}

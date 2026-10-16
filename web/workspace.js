@@ -169,6 +169,81 @@ const Workspace = (() => {
     renderTicket(info, events);
     await api(`/threads/${workPath(state.threadId)}/read`, { method: "POST", data: {} });
   }
+
+  const familyStates = { running: "En cours", integrating: "Résultats réunis", review_ready: "À vérifier", cancelled: "Arrêt demandé" };
+  const familyTaskStates = { todo: "À faire", in_progress: "En cours", blocked: "En attente", review: "À vérifier", done: "Terminé" };
+  function delegationCard(t) {
+    const family = t.delegation;
+    if (!family) return null;
+    const card = panel("Travail coordonné");
+    card.classList.add("delegation-card"); card.dataset.familyId = family.family_id;
+    const owner = state.actor?.owner_id === family.owner_id;
+    const heading = el("div", { class: "delegation-summary" },
+      el("p", {}, `Un coordinateur et deux agents · ${ownerName(family.owner_id)}`),
+      badge(family.should_stop && !["cancelled", "review_ready"].includes(family.state) ? "Arrêt nécessaire" : familyStates[family.state] || "Suivi indisponible",
+        family.state === "cancelled" || family.should_stop ? "status-blocked" : "status-running"));
+    const parent = family.coordinator || { ticket_id: family.parent_ticket_id, title: "Tâche du coordinateur" };
+    const rows = [{ ...parent, role: "Coordinateur" }, ...(Array.isArray(family.children) ? family.children.slice(0, 2) : [])];
+    const members = el("ul", { class: "delegation-members", "aria-label": "Équipe du travail coordonné" }, rows.map(member => {
+      const label = `${member.number ? `#${member.number} · ` : ""}${member.title || "Tâche déléguée"}`;
+      return el("li", { class: "delegation-member", "data-ticket-id": member.ticket_id },
+        el("div", { class: "delegation-member-title" }, workLink(label, { ticket: member.ticket_id }),
+          badge(member.result_state === "accepted" ? "Résultat accepté" : familyTaskStates[member.status] || "Suivi indisponible")),
+        el("p", { class: "small muted" }, member.role || "Agent", member.agent_name ? ` · ${member.agent_name}` : ""),
+        member.model ? el("p", { class: "small muted" }, `Modèle : ${member.model}`) : null);
+    }));
+    const body = el("div", { class: "panel-body" }, heading, members,
+      el("p", { class: "small muted delegation-stop-note" }, "Demander l’arrêt prévient les agents. Les exécutions en cours restent occupées jusqu’à confirmation de leur fermeture."));
+    if (owner) {
+      const controls = el("div", { class: "button-row delegation-controls" },
+        btn("Actualiser le suivi", guard(async () => {
+          const value = await api(`/delegation-families/${workPath(family.family_id)}`);
+          if (!card.isConnected || state.actor?.owner_id !== family.owner_id || value.owner_id !== family.owner_id) return;
+          await ticket(t.id, false);
+        }), "quiet"));
+      if (!["cancelled", "review_ready"].includes(family.state)) controls.append(btn("Demander l’arrêt", guard(async () => {
+        const value = await api(`/delegation-families/${workPath(family.family_id)}`);
+        if (!card.isConnected || state.actor?.owner_id !== family.owner_id || value.owner_id !== family.owner_id) return;
+        if (value.id !== family.family_id || !Number.isSafeInteger(value.revision) || value.revision < 1) throw new Error("Ce suivi n’est plus disponible.");
+        if (["cancelled", "review_ready"].includes(value.state)) { await ticket(t.id, false); return; }
+        confirmFamilyStop(t, value);
+      }), "danger"));
+      body.append(controls);
+    }
+    card.append(body); return card;
+  }
+
+  function confirmFamilyStop(t, family) {
+    const error = el("p", { class: "error", role: "alert", hidden: true });
+    const confirm = el("button", { type: "submit", class: "danger" }, "Confirmer l’arrêt");
+    const form = el("form", {}, el("p", {}, `Travail concerné : ${t.title}`), el("p", {}, "Le coordinateur et ses deux agents recevront une demande d’arrêt."),
+      el("p", {}, "Les tâches et résultats sont conservés. Cette demande ne confirme pas la fermeture des exécutions et ne libère pas leur capacité."),
+      error, el("div", { class: "button-row" }, btn("Annuler", closeModal, "quiet"), confirm));
+    form.addEventListener("submit", async event => {
+      event.preventDefault(); if (confirm.disabled) return;
+      if (state.actor?.owner_id !== family.owner_id || state.view !== "ticket" || state.ticket?.id !== t.id || state.ticket?.delegation?.family_id !== family.id) {
+        closeModal(); notify("Le travail affiché a changé. Ouvre son suivi avant de demander l’arrêt.", true); return;
+      }
+      confirm.disabled = true; error.hidden = true;
+      try {
+        const stopped = await api(`/delegation-families/${workPath(family.id)}/stop`, { method: "POST", data: { expected_revision: family.revision } });
+        if (stopped.id !== family.id || stopped.owner_id !== family.owner_id || stopped.state !== "cancelled" || stopped.revision !== family.revision + 1) throw new Error("Stop confirmation unavailable");
+        closeModal(); await ticket(t.id, false);
+        notify("Arrêt demandé. Les exécutions restent occupées jusqu’à confirmation de leur fermeture.");
+      } catch (failure) {
+        if (failure.status === 409) {
+          closeModal();
+          try { await ticket(t.id, false); } catch (refreshError) { workError(refreshError); }
+          notify("Le suivi a changé. Vérifie son état actuel avant de redemander l’arrêt.", true);
+        } else if (form.isConnected) {
+          error.textContent = failure.status === 403 || failure.status === 404 ? "Ce suivi n’est plus accessible." : "La demande n’a pas pu être confirmée. Réessaie pour vérifier le même arrêt.";
+          error.hidden = false;
+        } else workError(failure);
+      } finally { confirm.disabled = false; }
+    });
+    openModal("Demander l’arrêt du travail coordonné", form);
+  }
+
   function renderTicket({ ticket: t, project: p }, events = []) {
     const actions = [btn("Edit task", () => ticketEditor(t, p)), ...(t.status === "done" ? [] : [btn("Delegate subtask", () => delegate(t)), btn("Ask a human", () => askHuman(t, p))])];
     const body = frame(t.title, `#${t.number} in ${p.name}`, actions, workBack(p, t));
@@ -194,6 +269,7 @@ const Workspace = (() => {
       t.human_requests.filter(r => r.status === "open").map(r => requestCard(r, t)),
       t.outcome || t.evidence ? panel("Outcome & verification", el("div", { class: "panel-body" }, Markdown.block(t.outcome), Markdown.block(t.evidence, "muted"))) : null,
       discussion, el("details", { class: "activity-details" }, el("summary", {}, "Task activity"), activityList(events)));
+    const coordinated = delegationCard(t); if (coordinated) body.append(coordinated);
     body.append(el("div", { class: "task-detail-layout" }, main, sidebar));
     renderMessages();
   }

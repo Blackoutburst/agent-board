@@ -45,7 +45,7 @@ async def test_official_clients_both_owners_with_proxy_prefix(tmp_path):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         tools = await session.list_tools()
-                        assert len(tools.tools) == 47
+                        assert len(tools.tools) == 53
                         assert 'release_ticket' in {tool.name for tool in tools.tools}
                         assert {'lookup_human_request', 'lookup_ticket_selection'} <= {tool.name for tool in tools.tools}
                         result = await session.call_tool("read_inbox", {"session_id": owner + "-sdk", "label": "Real socket", "capabilities": ["dns"]})

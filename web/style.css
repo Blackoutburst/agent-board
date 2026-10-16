@@ -135,3 +135,14 @@
 .thread-context,.thread-time{max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .page-head>div{min-width:0;max-width:100%}
 .page-head h1{overflow-wrap:anywhere}
+
+/* Coordinated work uses only project-visible summaries, with owner controls. */
+.delegation-summary,.delegation-member-title{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;min-width:0}
+.delegation-summary>p{flex:1;min-width:0;margin-bottom:12px;overflow-wrap:anywhere}
+.delegation-members{list-style:none;padding:0;margin:0 0 16px;display:grid;gap:10px}
+.delegation-member{min-width:0;border:1px solid var(--line);border-radius:6px;padding:12px}
+.delegation-member-title>a{flex:1;min-width:0;overflow-wrap:anywhere;font-weight:600}
+.delegation-member>p{margin:7px 0 0;overflow-wrap:anywhere}
+.delegation-stop-note{margin-bottom:12px}.delegation-controls>button{white-space:normal;text-align:left}
+.dependency-links li,.dependency-links a{min-width:0}.dependency-links a{overflow-wrap:anywhere}
+@media(min-width:1000px){.delegation-members{grid-template-columns:repeat(3,minmax(0,1fr))}}
