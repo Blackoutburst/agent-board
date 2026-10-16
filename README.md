@@ -27,6 +27,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - [Architecture and data model](docs/ARCHITECTURE.md)
 - [Deployment, verification and rollback](docs/OPERATIONS.md)
 - [API and MCP contract](CONTRACT.md)
+- [Personal Codex adapter](integrations/codex-personal/README.md), including the disabled [development broker primitives](integrations/codex-personal/DEVELOPMENT.md)
 
 ## Run locally
 
