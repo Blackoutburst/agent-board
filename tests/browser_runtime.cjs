@@ -52,6 +52,14 @@ fs.mkdirSync(output, { recursive: true });
     assert.match(await card('running').innerText(), /<svg onload=alert\(2\)>/);
     assert.ok(!(await page.locator('#main').innerText()).includes('PRIVATE OTHER OWNER EXECUTOR'));
     assert.equal(await page.locator(`[data-execution-id="${ids.other}"]`).count(), 0);
+    const sourceLink = card('message').getByRole('link', { name: 'Source message', exact: true });
+    assert.equal(new URL(await sourceLink.getAttribute('href')).searchParams.get('message'), ids.message_source);
+    assert.ok(!(await card('message').innerText()).includes('Ticket null'));
+    await sourceLink.click();
+    await page.locator(`#message-${ids.message_source}.highlight`).waitFor();
+    await page.locator('#agents-nav').click();
+    await page.getByRole('button', { name: 'Runtime', exact: true }).click();
+    await page.getByRole('heading', { name: 'Your runtime limits', exact: true }).waitFor();
     await noOverflow(page);
     await page.screenshot({ path: path.join(output, 'runtime-desktop.png'), fullPage: true });
 

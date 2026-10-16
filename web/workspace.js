@@ -478,10 +478,17 @@ const Workspace = (() => {
     const stopping = active && (execution.stop_requested === true || execution.should_stop === true);
     const stopLabel = execution.stop_requested === true || execution.control_reason === "owner_paused" ? "Stop requested" : "Stop required";
     const identity = agentNames.get(execution.agent_id) || `Agent ${execution.agent_id}`;
+    const messageScope = execution.scope_kind === "message";
+    const work = messageScope
+      ? workLink("Source message", { thread: execution.thread_id, message: execution.message_id })
+      : workLink(`Ticket ${String(execution.ticket_id).slice(0, 12)}`, { ticket: execution.ticket_id });
+    const activity = execution.provider === "local_broker"
+      ? `Local tools · ${execution.model === "read_file" ? "Read files" : execution.model === "patch_file" ? "Update files" : `Test: ${execution.model}`}`
+      : `${execution.provider} · ${execution.model}`;
     const heading = el("div", { class: "runtime-execution-heading" }, el("div", {}, el("h3", {}, identity),
-      el("p", { class: "small muted" }, `${execution.provider} · ${execution.model}`)), badge(label, color));
+      el("p", { class: "small muted" }, activity)), badge(label, color));
     const facts = el("dl", { class: "runtime-facts" },
-      el("dt", {}, "Ticket"), el("dd", {}, workLink(`Ticket ${String(execution.ticket_id).slice(0, 12)}`, { ticket: execution.ticket_id })),
+      el("dt", {}, messageScope ? "Conversation" : "Ticket"), el("dd", {}, work),
       el("dt", {}, "Last heartbeat"), el("dd", {}, execution.last_heartbeat_at ? date(execution.last_heartbeat_at) : "Not reported"),
       el("dt", {}, execution.finished_at ? "Finished" : "Reserved"), el("dd", {}, date(execution.finished_at || execution.created_at) || "Not reported"));
     const card = el("article", { class: "runtime-execution", "data-execution-id": execution.id }, heading, facts);
