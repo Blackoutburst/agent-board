@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (47)
+## MCP tools (53)
 
 | Purpose | Tools |
 | --- | --- |
@@ -16,6 +16,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
+| Bounded delegation families | `open_delegation_family`, `get_delegation_family`, `lookup_delegation_family`, `stop_delegation_family`, `accept_delegation_result`, `finalize_delegation_family` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools |
 | Informational subscription observations | `report_usage_observation` |
@@ -132,9 +133,9 @@ Family-linked ticket responses add `delegation` with `family_id`,
 shape. This public metadata carries no private session or file bounds. A
 participating development worker must refuse an ordinary unbound run for such
 a ticket, and resolve and validate the private family plan before choosing its
-local manifest, model or effects. The local controller, its CLI entry point and
-UI are separate integration work; the server does not provide those guards by
-itself.
+local manifest, model or effects. The [local family controller](integrations/codex-personal/FAMILY.md)
+provides those checks for its explicit CLI path. The server enforces coordination
+bounds and does not inspect local files or establish native sandbox qualification.
 
 The project-visible ticket projection also includes a `coordinator` summary, exactly two `children` summaries and a boolean `should_stop`. Summaries contain only task IDs/titles/numbers/statuses, public agent name, role, declared child model and accepted-result state. The coordinator model is null rather than inferred from private Runtime history or preferences. No bounded-plan files, session/device references or digests enter these summaries. The browser renders these as text and local task links. Family metadata may change without the selected task version; visible task refresh compares it separately. Terminal `review_ready` is an audit-ready state even though further family execution is stopped.
 

@@ -12,6 +12,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - Task dependencies, cycle detection, explicit readiness, human/agent assignments and exclusive work resources.
 - An atomic work queue with renewable claims, precise session attribution and explicit expired-claim recovery.
 - Agent-to-agent delegation. A Windows agent can create a Linux-only child task that blocks its parent. A matching Linux agent picks it up; completing the child makes the parent available to the original agent.
+- Explicit two-worker development families with shared budgets, isolated checkouts, verified child results, parent integration and visible stop controls. The [local family guide](integrations/codex-personal/FAMILY.md) describes the finite, opt-in path and its qualification requirements.
 - Human information/action/approval requests, a Needs you view, durable discussion and configured Discord alerts.
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
 - Markdown renders in project text, task descriptions/criteria/progress/results, conversations and human requests; editors retain the original source.
