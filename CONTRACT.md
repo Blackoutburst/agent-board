@@ -1,6 +1,6 @@
-# Board interface contract — 2.6.2
+# Board interface contract — 2.7.0
 
-The browser REST API and MCP act on one database. Application version is `2.6.2`; schema version is `8`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.7.0`; schema version is `9`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (42)
+## MCP tools (45)
 
 | Purpose | Tools |
 | --- | --- |
@@ -19,6 +19,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
+| Confirmed human-message stream | `open_message_feed`, `read_message_feed`, `checkpoint_message_feed` |
 | Discussion and history | `get_thread`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
 | Files and task tags | `upload_attachment`, `download_attachment`, `list_labels`, `create_label` |
@@ -181,3 +182,7 @@ Human-only `GET /api/runtime` adds `usage_observations`, containing only the own
 Observations are client-reported metadata, not a cryptographic provider attestation. They cannot unpause an owner, release capacity, grant model/project/device rights, change routing, or prove recovery after a reset timestamp. A successful read does not clear a prior quota/authentication block. Existing execution admission remains independent.
 
 The optional personal adapter reads the subscription through a bounded local Codex app-server stdio child: initialization, `account/read` with `refreshToken=false`, then `account/rateLimits/read` with `excludeResetCreditDetails=true` and `supportsLunaReserve=false`. It starts no thread/turn, login, reset, model fallback or daemon. Sparse notifications are not treated as complete measurements. Account IDs, emails, plan/credit/reset details, tokens, raw provider responses and diagnostics are discarded. `usage read` defaults to metadata-only stdout, `--show` explicitly displays normalized measurements, and `--output-private` writes mode 0600. `usage report` requires an explicit connection, session, owner, profile and private observation file. It verifies the registered identity before publication. The board itself holds no provider authentication.
+
+## Confirmed human-message feeds (2.7)
+
+`open_message_feed`, `read_message_feed` and `checkpoint_message_feed` provide a separate acknowledged stream for addressed human messages. A stable opening key pins the exact session/profile and initial bounds. A pending delivery remains fixed until its exact ID and checkpoint are confirmed. Current read permissions, profile state and conversation access are checked on every delivery and ACK; agent messages, tasks and general conversation history are excluded. See [the protocol and retention contract](docs/MESSAGE-FEED.md). Legacy `read_inbox` keeps its existing cursor semantics and response shape.
