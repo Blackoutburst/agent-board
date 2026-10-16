@@ -1,8 +1,8 @@
 # Finite development planner (not activated)
 
 `DevelopmentPlanner` is an explicit controller API over the development broker.
-It has no CLI entrypoint, listener, task picker, account fallback, board write,
-publication or merge operation. The existing PersonalRunner behavior is unchanged. A disabled constructor refuses
+The explicit CLI/Board adapter is described in `DEVELOPMENT_CLI.md`. The core
+has no listener, task picker, account fallback, board write, publication or merge operation. The existing PersonalRunner behavior is unchanged. A disabled constructor refuses
 before creating a work, journal or canonical fence; probing the default cannot
 strand a checkout.
 This lot has been exercised with simulated model/test work and a temporary Board;
@@ -13,7 +13,9 @@ separately qualified `PlannerPolicy` API (policy commit `99f67479`). Its workspa
 must be empty, private and distinct from the real checkout and every private
 journal. Source reaches the model only through explicitly allowlisted broker
 reads. An enabled planner requires a qualified supervised native test backend;
-an unsupervised named-test backend is refused. The underscored transport, backend
+an unsupervised named-test backend is refused. Production construction also
+requires the exact parent WorkJournal operation, whose preallocated work UUID and
+private alias prevent adoption of an unrelated provider dialogue. The underscored transport, backend
 and anchor fixture overrides are Python test injections, never CLI/model options.
 
 Each model response must be exactly one JSON object, with schema 1 and one kind:
@@ -58,10 +60,10 @@ version. The controller cross-checks it before admission and each broker effect,
 alongside stop/budget and Runtime cancellation. The adapter implementing this
 callback must read authoritative current state and validate the exact claim
 (including its lease), membership and permissions. Ticket descriptions, comments,
-model output and a cached registration cannot supply these assertions. This lot
-does not implement a live MCP adapter or manufacture grants on the caller's behalf.
-It freezes the local instruction and does not compose/revalidate a shared Board
-context descriptor; that separate integration is required before a live pilot.
+model output and a cached registration cannot supply these assertions. The core does not manufacture grants. The explicit Board adapter composes and
+revalidates the shared context and seals it with the instruction and parent
+operation, as described in `DEVELOPMENT_CLI.md`. A real pilot still requires
+explicit grants and separately qualified policies; this test lot uses fixtures.
 
 ## Durable stop, budgets and canonical fence
 

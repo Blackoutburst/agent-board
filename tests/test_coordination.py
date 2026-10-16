@@ -518,7 +518,7 @@ def test_schema_v2_upgrade_preserves_data_and_active_claims(tmp_path):
         db.execute("INSERT INTO messages(id,thread_id,body,author,created_at,mentions,attachments) VALUES(?,?,?,?,?,'[]','[]')",('old-message','old-thread','Keep discussion',json.dumps({'kind':'human','owner_id':'blackoutburst'}),1))
     upgraded=Board(path)
     with sqlite3.connect(upgraded.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==9
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 10
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert db.execute('SELECT body FROM messages').fetchone()[0]=='Keep discussion'
         assert db.execute('SELECT title,lease_expires_at FROM tickets').fetchone()[0]=='Existing task'

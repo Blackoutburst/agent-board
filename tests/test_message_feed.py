@@ -313,7 +313,7 @@ def test_schema_eight_upgrade_preserves_messages_and_legacy_cursors(space):
     feed=upgraded.open_message_feed(actor,'upgrade')
     assert [m['id'] for m in upgraded.read_message_feed(actor,feed['feed_id'])['messages']]==[message['id']]
     with upgraded._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==9
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 10
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
 
@@ -346,7 +346,7 @@ def test_backup_restore_keeps_opening_and_pending_delivery_exact(space,tmp_path)
     delivery=b.read_message_feed(actor,feed['feed_id'])
     snapshot=feed_row(b,feed)
     archive=tmp_path/'feed-backup.zip'
-    assert create_backup(b.data_dir,archive)['schema']['user_version']==9
+    assert create_backup(b.data_dir,archive)['schema']['user_version']== 10
     destination=tmp_path/'restored-feed'
     restore_backup(archive,destination)
     restored=Board(destination)

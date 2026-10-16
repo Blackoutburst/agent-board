@@ -20,6 +20,7 @@ REASONS = frozenset({'', 'completed', 'cancelled', 'quota_or_rate_limit',
     'policy_changed', 'claim_lost', 'stop_requested', 'owner_paused'})
 _OPAQUE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$')
 _MODEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$')
+_SHA256 = re.compile(r'^[0-9a-f]{64}$')
 
 
 def _identifier(value, name, *, model=False):
@@ -59,6 +60,56 @@ def migrate_runtime(db):
             UNIQUE(owner_id,work_id,turn_id))""",
         "CREATE INDEX runtime_owner_state ON runtime_executions(owner_id,state)",
     ):
+        db.execute(statement)
+
+
+def migrate_message_runtime(db):
+    """Schema 10: nullable ticket references and a separate exact message scope.
+
+    SQLite cannot remove NOT NULL in place. Rebuild inside Board's existing
+    transaction, preserving all legacy values, indexes and table triggers.
+    """
+    columns = db.execute('PRAGMA table_info(runtime_executions)').fetchall()
+    names = [row['name'] for row in columns]
+    extra = {'scope_kind', 'thread_id', 'message_id', 'source_sha256'}
+    if extra.intersection(names):
+        if (not extra.issubset(names) or any(row['notnull'] for row in columns
+                if row['name'] in ('project_id','ticket_id'))):
+            raise RuntimeError('Unsupported message execution schema')
+        return
+    objects = [row['sql'] for row in db.execute(
+        "SELECT sql FROM sqlite_master WHERE tbl_name='runtime_executions' "
+        "AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name")]
+    db.execute('''CREATE TABLE runtime_executions_v10(
+        id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES owners(id),
+        agent_id TEXT NOT NULL REFERENCES agent_profiles(id), profile_version INTEGER NOT NULL,
+        device_id TEXT NOT NULL REFERENCES devices(id), session_id TEXT NOT NULL REFERENCES sessions(id),
+        project_id TEXT REFERENCES projects(id), ticket_id TEXT REFERENCES tickets(id),
+        work_id TEXT NOT NULL, turn_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL, payload TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('reserved','running','finished','needs_review')),
+        revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+        stop_requested INTEGER NOT NULL DEFAULT 0 CHECK(stop_requested IN (0,1)),
+        cleanup_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_confirmed IN (0,1)),
+        outcome TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+        start_revision INTEGER, heartbeat_revision INTEGER, finish_revision INTEGER,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL, started_at REAL,
+        last_heartbeat_at REAL, finished_at REAL,
+        scope_kind TEXT NOT NULL DEFAULT 'ticket' CHECK(scope_kind IN ('ticket','message')),
+        thread_id TEXT REFERENCES threads(id), message_id TEXT REFERENCES messages(id), source_sha256 TEXT,
+        UNIQUE(owner_id,device_id,session_id,idempotency_key), UNIQUE(owner_id,work_id,turn_id),
+        CHECK((scope_kind='ticket' AND project_id IS NOT NULL AND ticket_id IS NOT NULL
+            AND thread_id IS NULL AND message_id IS NULL AND source_sha256 IS NULL)
+          OR (scope_kind='message' AND thread_id IS NOT NULL AND message_id IS NOT NULL
+            AND source_sha256 IS NOT NULL AND length(source_sha256)=64
+            AND source_sha256 NOT GLOB '*[^0-9a-f]*'
+            AND ((project_id IS NULL AND ticket_id IS NULL)
+              OR (project_id IS NOT NULL AND ticket_id IS NOT NULL)))))''')
+    fields = ','.join('"' + name + '"' for name in names)
+    db.execute(f'INSERT INTO runtime_executions_v10({fields}) SELECT {fields} FROM runtime_executions')
+    db.execute('DROP TABLE runtime_executions')
+    db.execute('ALTER TABLE runtime_executions_v10 RENAME TO runtime_executions')
+    for statement in objects:
         db.execute(statement)
 
 
@@ -116,6 +167,41 @@ class RuntimeMixin:
             _fail('active_ticket_claim_required', 409)
         return actor, profile
 
+    def _runtime_message_authorize(self, db, actor, thread_id, message_id, source_sha256,
+                                   profile_version=None):
+        actor = self._actor(db, actor, 'allow_read')
+        self._actor(db, actor, 'allow_reply')
+        if actor['kind'] != 'agent':
+            _fail('agent_authentication_required', 403)
+        profile = self._profile_for_actor(db, actor)
+        if profile_version is not None and profile['version'] != profile_version:
+            _fail('profile_changed', 409)
+        self._member(db, actor, thread_id)
+        message = db.execute('SELECT * FROM messages WHERE id=? AND thread_id=?',
+                             (message_id,thread_id)).fetchone()
+        if message is None:
+            _fail('message_not_found', 404)
+        author = json.loads(message['author'])
+        if (not isinstance(author,dict) or author.get('kind') != 'human'
+                or not set(self._inbox_targets(db,actor)).intersection(json.loads(message['mentions']))):
+            _fail('addressed_human_message_required', 403)
+        if self._message_source_hash(message) != source_sha256:
+            _fail('message_source_changed', 409)
+        # Thread membership alone must never reveal a private project's IDs.
+        linked = db.execute('''SELECT t.project_id,t.id AS ticket_id FROM tickets t
+            JOIN project_members m ON m.project_id=t.project_id
+            WHERE t.thread_id=? AND m.owner_id=?''', (thread_id,actor['owner_id'])).fetchone()
+        return actor, profile, (dict(linked) if linked else {'project_id':None,'ticket_id':None})
+
+    def _runtime_authorize_row(self, db, actor, row):
+        if row['scope_kind'] == 'message':
+            actor, profile, linked = self._runtime_message_authorize(db,actor,row['thread_id'],
+                row['message_id'],row['source_sha256'],row['profile_version'])
+            if any(row[key] != linked[key] for key in ('project_id','ticket_id')):
+                _fail('message_context_changed',409)
+            return actor, profile
+        return self._runtime_authorize(db,actor,row['project_id'],row['ticket_id'],row['profile_version'])
+
     def _runtime_control_reason(self, db, row):
         if row['state'] == 'finished':
             return 'finished'
@@ -128,7 +214,7 @@ class RuntimeMixin:
         # project details that may have become private since the launch.
         from board import BoardError
         try:
-            self._runtime_authorize(db, actor, row['project_id'], row['ticket_id'], row['profile_version'])
+            self._runtime_authorize_row(db, actor, row)
         except BoardError:
             return 'authorization_changed'
         if self._runtime_limits(db, row['owner_id'])['paused']:
@@ -141,6 +227,8 @@ class RuntimeMixin:
                   'state', 'revision', 'outcome', 'reason', 'created_at', 'updated_at',
                   'started_at', 'last_heartbeat_at', 'finished_at')
         result = {key: row[key] for key in fields}
+        if row['scope_kind'] == 'message':
+            result.update({key:row[key] for key in ('scope_kind','thread_id','message_id','source_sha256')})
         reason = self._runtime_control_reason(db, row)
         result.update(stop_requested=bool(row['stop_requested']), should_stop=bool(reason),
             control_reason=reason, cleanup_confirmed=bool(row['cleanup_confirmed']),
@@ -183,6 +271,47 @@ class RuntimeMixin:
             row = db.execute('SELECT * FROM runtime_executions WHERE id=?', (identifier,)).fetchone()
             return {'reserved': True, 'execution': self._execution_view(db, row), 'retried': False}
 
+    def reserve_message_execution(self, actor, idempotency_key, thread_id, message_id,
+                                  source_sha256, work_id, turn_id, provider, model):
+        values = {key:_identifier(value,key,model=key in {'provider','model'})
+            for key,value in locals().copy().items() if key in {
+                'idempotency_key','thread_id','message_id','work_id','turn_id','provider','model'}}
+        if type(source_sha256) is not str or not _SHA256.fullmatch(source_sha256):
+            _fail('invalid_source_sha256')
+        with self._tx() as db:
+            actor,profile,linked = self._runtime_message_authorize(db,actor,thread_id,message_id,source_sha256)
+            payload = _json(values | linked | {'scope_kind':'message','source_sha256':source_sha256,
+                'agent_id':profile['id'],'profile_version':profile['version']})
+            existing = db.execute('''SELECT * FROM runtime_executions WHERE owner_id=?
+                AND device_id=? AND session_id=? AND idempotency_key=?''',
+                (actor['owner_id'],actor['device_id'],actor['session_id'],idempotency_key)).fetchone()
+            if existing:
+                if existing['payload'] != payload:
+                    _fail('execution_key_conflict',409)
+                return {'reserved':True,'execution':self._execution_view(db,existing),'retried':True}
+            if db.execute('SELECT 1 FROM runtime_executions WHERE owner_id=? AND work_id=? AND turn_id=?',
+                          (actor['owner_id'],work_id,turn_id)).fetchone():
+                _fail('execution_turn_conflict',409)
+            limits = self._runtime_limits(db,actor['owner_id'])
+            if limits['paused']:
+                _fail('owner_paused',409)
+            count = db.execute("SELECT COUNT(*) FROM runtime_executions WHERE owner_id=? AND state!='finished'",
+                               (actor['owner_id'],)).fetchone()[0]
+            if count >= limits['max_concurrent']:
+                _fail('capacity_exhausted',409)
+            identifier,now = secrets.token_hex(16),time.time()
+            db.execute('''INSERT INTO runtime_executions(
+                id,owner_id,agent_id,profile_version,device_id,session_id,project_id,ticket_id,
+                work_id,turn_id,provider,model,idempotency_key,payload,state,created_at,updated_at,
+                scope_kind,thread_id,message_id,source_sha256)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'reserved',?,?,'message',?,?,?)''',
+                (identifier,actor['owner_id'],profile['id'],profile['version'],actor['device_id'],
+                 actor['session_id'],linked['project_id'],linked['ticket_id'],work_id,turn_id,provider,model,
+                 idempotency_key,payload,now,now,thread_id,message_id,source_sha256))
+            self._audit(db,actor,'message_execution_reserved',{'execution_id':identifier})
+            row = db.execute('SELECT * FROM runtime_executions WHERE id=?',(identifier,)).fetchone()
+            return {'reserved':True,'execution':self._execution_view(db,row),'retried':False}
+
     def lookup_execution(self, actor, idempotency_key):
         _identifier(idempotency_key, 'idempotency_key')
         with self._connection() as db:
@@ -201,7 +330,7 @@ class RuntimeMixin:
         _version(expected_revision)
         with self._tx() as db:
             actor, row = self._runtime_execution(db, actor, execution_id)
-            self._runtime_authorize(db, actor, row['project_id'], row['ticket_id'], row['profile_version'])
+            self._runtime_authorize_row(db, actor, row)
             if self._runtime_limits(db, row['owner_id'])['paused']:
                 _fail('owner_paused', 409)
             if row['stop_requested']:

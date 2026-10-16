@@ -116,6 +116,11 @@ def _connection_file(path):
     finally:
         if fd is not None:
             os.close(fd)
+    return _connection_data(config)
+
+
+def _connection_data(config):
+    """Validate already decoded held bytes without reopening a path."""
     if not isinstance(config, dict):
         raise BoardReadError("invalid_connection")
     endpoint = _endpoint(config.get("mcp_url"))

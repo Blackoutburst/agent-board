@@ -16,7 +16,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
 - Markdown renders in project text, task descriptions/criteria/progress/results, conversations and human requests; editors retain the original source.
 - Task files persist with the description, separately from discussion attachments.
-- Durable activity, transactional migration from schemas 1–8 to 9, backups and verification tools.
+- Durable activity, transactional migration from schemas 1–9 to 10, backups and verification tools.
 - Owner execution limits and a private Runtime view for participating executors, with explicit stop requests and cleanup confirmation.
 - Dated, owner-private Codex subscription observations per connection, with explicit unknown/stale states and no automatic permission or model changes.
 
@@ -67,12 +67,16 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Version: `2.7.5`; database schema: `9`
+- Version: `2.8.0`; database schema: `10`
 
-Schema migration is additive and transactional. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Older code cannot run against schema 9: rollback requires both the previous source and its matching database backup.
+Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.8 code cannot run against schema 10: rollback requires both the previous source and its matching database backup.
 
 ## Design reference
 
 [OpenAI Symphony](https://github.com/openai/symphony) provides an orchestration reference for readiness, claims, reconciliation, and evidence. This board uses a distributed pull model: existing authorized agent installations coordinate through MCP rather than a central service spawning agents.
 
 The [confirmed human-message feed](docs/MESSAGE-FEED.md) adds replayable opening, durable pending deliveries and explicit checkpoints. Legacy `read_inbox` remains compatible. No listener or automatic task handling is activated.
+
+The personal adapter also offers an explicitly configured [confirmed-message host](integrations/codex-personal/MESSAGE_HOST.md), disabled at creation and limited to a finite foreground budget. It replies without claiming tickets; migration and installation never start it.
+
+The opt-in personal adapter also exposes a finite [development command](integrations/codex-personal/DEVELOPMENT_CLI.md), with sealed permissions/context, one provider dialogue per operation and separate review publication. It shares Runtime capacity while keeping message and ticket cleanup scopes distinct. Installing this release starts no development operation.

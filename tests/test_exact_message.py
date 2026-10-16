@@ -30,9 +30,10 @@ def test_exact_old_message_is_available_without_scanning_history_or_mutation(spa
         board.post_message(human, ticket['thread_id'], 'Later context', idempotency_key=f'later-{i}')
     assert old['id'] not in {m['id'] for m in board.get_thread(agent, ticket['thread_id'], limit=20)['messages']}
     before = dump(board)
-    assert board.get_message(agent, ticket['thread_id'], old['id']) == {'message': old}
+    result = board.get_message(agent, ticket['thread_id'], old['id'])
+    assert result['message'] == old and len(result['source_sha256']) == 64
     assert dump(board) == before
-    assert board.get_message(agent, ticket['thread_id'], old['id']) == {'message': old}
+    assert board.get_message(agent, ticket['thread_id'], old['id']) == result
     assert dump(board) == before
 
 
@@ -103,6 +104,7 @@ def test_exact_mcp_unicode_source_fits_reader_limit_and_contains_no_extra_contex
         assert response.status_code == 200
         assert len(response.content) < 2*1024*1024
         result = tool_data(response.json()['result'])
-        assert result == {'message': message}
+        assert set(result) == {'message','source_sha256'}
+        assert result['message'] == message and len(result['source_sha256']) == 64
         assert 'UNRELATED_MESSAGE_BODY' not in response.text
     assert dump(board) == before

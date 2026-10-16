@@ -20,7 +20,7 @@ def configure_parser(parser):
     reconcile.add_argument('--batch',required=True)
     commands.add_parser('status',help='Métadonnées locales uniquement.')
     commands.add_parser('stop',help='Désactiver durablement puis annuler coopérativement le travail actif.')
-    commands.add_parser('tick',help='Un passage borné ; au plus un lot déjà choisi.')
+    commands.add_parser('tick',help='Un passage borné ; au plus un lot ou message déjà choisi.')
     commands.add_parser('run',help='Boucle explicite au premier plan, sans service installé.')
 
 

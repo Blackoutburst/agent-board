@@ -7,6 +7,7 @@ import re
 from .run_store import RunStore
 from .runtime_client import RuntimeBoardClient
 from .runtime_guard import RuntimeGuard, RuntimeControlError
+from .dev_runtime import DevelopmentRuntimeGuard
 from .runtime_journal import RuntimeJournal
 
 
@@ -20,6 +21,7 @@ def configure_parser(parser):
     reconcile.add_argument('--operation',required=True)
     reconcile.add_argument('--state',required=True,type=Path)
     reconcile.add_argument('--connection-file',required=True,type=Path)
+    reconcile.add_argument('--development-operation',help='UUID parent explicite du travail de développement.')
 
 
 def run(args):
@@ -31,7 +33,14 @@ def run(args):
             else:
                 operation=journal.get(args.operation)
                 config=operation['configuration'];scope=config['scope']
-                client=RuntimeBoardClient.from_connection_file(args.connection_file,
+                development_id=getattr(args,'development_operation',None)
+                client_kind,guard_kind=RuntimeBoardClient,RuntimeGuard
+                if scope.get('scope_kind')=='message':
+                    if development_id is not None:
+                        raise RuntimeControlError('runtime_development_scope_mismatch')
+                    from .message_runtime import MessageRuntimeClient,MessageRuntimeGuard
+                    client_kind,guard_kind=MessageRuntimeClient,MessageRuntimeGuard
+                client=client_kind.from_connection_file(args.connection_file,
                     session_id=scope['board_session_id'],timeout=3)
                 store=RunStore(args.state);stack.callback(store.close)
                 # Hold the model-work lock: a cached result cannot be reconciled
@@ -44,8 +53,9 @@ def run(args):
                     work=status['work']
                     binding=store.get_context_guard(config['work_id'])
                     if binding is not None:work={**work,'decision_memory':binding}
-                    RuntimeGuard(journal,client,scope).confirm_cached(work,config['turn_id'],
-                        store.turn_result(config['turn_id']))
+                    guard=(guard_kind(journal,client,scope) if development_id is None else
+                        DevelopmentRuntimeGuard(journal,client,scope,operation_id=development_id))
+                    guard.confirm_cached(work,config['turn_id'],store.turn_result(config['turn_id']))
                 output=journal.status(operation['id'])
         print(json.dumps(output,ensure_ascii=False,indent=2));return 0
     except KeyboardInterrupt:

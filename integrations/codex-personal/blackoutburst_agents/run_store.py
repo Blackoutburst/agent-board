@@ -201,7 +201,8 @@ class RunStore:
         return {key: value for key, value in turn.items()
                 if key not in {"prompt_sha256", "result_json", "resolution_reason"}}
 
-    def create_work(self, *, owner_id, agent_id, project_id, ticket_id, workspace, executable, model=None):
+    def create_work(self, *, owner_id, agent_id, project_id, ticket_id, workspace, executable, model=None, work_id=None):
+        if work_id is not None:_uuid(work_id)
         scope = tuple(_identifier(value) for value in (owner_id, agent_id, project_id, ticket_id))
         if model is not None:
             _identifier(model, "invalid_model")
@@ -216,10 +217,13 @@ class RunStore:
             row = db.execute("""SELECT * FROM works WHERE owner_id=? AND agent_id=?
                 AND project_id=? AND ticket_id=? AND status != 'closed'""", scope).fetchone()
             if row is not None:
+                if work_id is not None and row["id"]!=work_id:raise StoreError("work_identity_conflict")
                 if (row["workspace"], row["executable"], row["model"]) != (workspace, executable, model):
                     raise StoreError("scope_configuration_conflict")
                 return dict(row)
-            work_id, now = str(uuid.uuid4()), time.time()
+            if work_id is not None and db.execute("SELECT 1 FROM works WHERE id=?",(work_id,)).fetchone():
+                raise StoreError("work_identity_conflict")
+            work_id, now = work_id or str(uuid.uuid4()), time.time()
             db.execute("""INSERT INTO works(id,owner_id,agent_id,project_id,ticket_id,workspace,
                 executable,model,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (work_id, *scope, workspace, executable, model, "open", now, now))

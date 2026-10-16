@@ -82,6 +82,9 @@ def worker_configuration(target):
 
 def validate(config, *, bind_connections=False):
     """Normalize once on configure; later validate without reading credentials."""
+    if isinstance(config,dict) and type(config.get('schema_version')) is int and config['schema_version']==2:
+        from .message_config import validate as validate_messages
+        return validate_messages(config,bind_connections=bind_connections)
     try:
         required = {'schema_version', 'owner_id', 'board_endpoint', 'interval_seconds',
                     'max_pages', 'page_limit', 'dispatch_budget', 'targets'}
