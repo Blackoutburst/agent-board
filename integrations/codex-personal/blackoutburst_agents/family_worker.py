@@ -11,6 +11,7 @@ import math
 import time
 
 from .development_worker import DevelopmentBoardWorker
+from .development_authorization import DevelopmentAuthorization
 from .dev_manifest import DevelopmentError,canonical,digest,opaque
 from .dev_journal import decode
 from .dev_planner import _directory_pin
@@ -43,6 +44,72 @@ class DevelopmentFamilyWorker:
         if phase is not None:state['phase']=phase
         state['payload'].update(deepcopy(values));self.journal.save(state)
 
+    def _qualification_manifest(self,config,slot,state=None):
+        """Validate an inspection scope without borrowing an execution claim."""
+        if slot not in SLOTS or state is None and slot!='parent':
+            raise DevelopmentError('family_qualification_scope_invalid')
+        if state is not None and (state['configuration']!=config or 'family_id' not in state['payload']):
+            raise DevelopmentError('family_qualification_scope_invalid')
+        selected=config['scope'] if state is None else state['payload']['slot_scopes'][slot]
+        expected={key:selected[key] for key in ('owner_id','agent_id','project_id','ticket_id')}
+        expected.update(device_id=config['parent_manifest']['scope']['device_id'],
+            session_id=selected['board_session_id'],
+            profile_version=config['parent_manifest']['scope']['profile_version'])
+        paths=sorted(config['parent_manifest']['files']) if slot=='parent' else config['inputs'][slot]['files']
+        manifest,hash_value=manifest_document(config['inputs'][slot]['broker_directory'])
+        if (manifest['scope']!=expected or manifest['root']!=config['roots'][slot]['path']
+                or manifest['root_identity']!=config['roots'][slot]['identity']
+                or manifest['base_sha']!=config['parent_manifest']['base_sha']
+                or manifest['resource']!=config['parent_manifest']['resource']
+                or 'repo.run_test' not in manifest['actions']
+                or not set(manifest['actions']).issubset(config['parent_manifest']['actions'])
+                or sorted(manifest['files'])!=paths
+                or any(manifest['files'][path]!=config['parent_manifest']['files'][path] for path in paths)):
+            raise DevelopmentError('family_manifest_caps_changed')
+        if slot=='parent' and hash_value!=config['parent_manifest_sha256']:
+            raise DevelopmentError('family_manifest_changed')
+        if state is not None and slot in state['payload'].get('bindings',{}):
+            if hash_value!=state['payload']['bindings'][slot]['manifest_sha256']:
+                raise DevelopmentError('family_manifest_changed')
+        return manifest,hash_value,selected
+
+    def _qualification_authorizer(self,config,slot,state=None):
+        """Read qualified pins under fresh authority; this grants no execution.
+
+        An unclaimed child is inspected through its exact registered session
+        and the coordinator's live root claim. Its test/model effects still
+        require the child worker's own claim and Runtime admission.
+        """
+        manifest,pinned_hash,selected=self._qualification_manifest(config,slot,state)
+        def allowed(given,action,resource):
+            if (type(given) is not dict or set(given)!=set(manifest['scope'])
+                    or any(type(given[key]) is not type(value) or given[key]!=value
+                           for key,value in manifest['scope'].items())
+                    or type(action) is not str or action!='repo.run_test'
+                    or type(resource) is not str or resource!=manifest['resource']):return False
+            try:
+                current,current_hash,_=self._qualification_manifest(config,slot,state)
+                if current_hash!=pinned_hash:return False
+                if state is None:
+                    if self.journal.stopped():return False
+                    now=self.clock()
+                    if (type(now) not in (int,float) or not math.isfinite(now)
+                            or now>=config['opening']['limits']['deadline']):return False
+                    if controller_sources(config['roots'])!=config['controller_sources']:return False
+                    root_sources(self.client,config['scope'],config['parent_manifest'],
+                        config['registrations']['parent'],baseline=config['root_frame'],clock=self.clock)
+                else:self._live(state)
+                for pin in config['roots'].values():
+                    if _directory_pin(pin['path'])!=pin:return False
+                client=self.workflows[slot].client;client.adopt_registration()
+                authority=DevelopmentAuthorization(client,scope=selected,manifest=current,
+                    registration=config['registrations'][slot],clock=self.clock)
+                authority._registration();policy=authority._policy()
+                return action in policy['actions'] and resource in policy['resources']
+            except Exception:
+                return False
+        return allowed
+
     def prepare(self,request):
         try:existing=self.journal.read()
         except DevelopmentError as error:
@@ -58,7 +125,7 @@ class DevelopmentFamilyWorker:
         # Parent qualification is supplied, never generated by preparation.
         item=config['inputs']['parent'];root=self.workflows['parent']
         with root._resources(item['broker_directory'],item['backend_directory'],item['planner_policy_directory'],
-                             authorize=lambda *_:False) as resources:
+                             authorize=self._qualification_authorizer(config,'parent')) as resources:
             manifest,policy,backend=resources
             if manifest.manifest_hash!=config['parent_manifest_sha256']:
                 raise DevelopmentError('family_manifest_changed')
@@ -175,7 +242,7 @@ class DevelopmentFamilyWorker:
             for slot in SLOTS:
                 worker=self.workflows[slot];item=config['inputs'][slot]
                 with worker._resources(item['broker_directory'],item['backend_directory'],item['planner_policy_directory'],
-                                       authorize=lambda *_:False) as resources:
+                                       authorize=self._qualification_authorizer(config,slot,state)) as resources:
                     document,policy,backend=resources;manifest=document.manifest
                     expected={key:state['payload']['slot_scopes'][slot][key] for key in
                               ('owner_id','agent_id','project_id','ticket_id')}
@@ -224,7 +291,7 @@ class DevelopmentFamilyWorker:
         manifest,hash_value=manifest_document(item['broker_directory'])
         if hash_value!=binding['manifest_sha256']:raise DevelopmentError('family_manifest_changed')
         with worker._resources(item['broker_directory'],item['backend_directory'],item['planner_policy_directory'],
-                               authorize=lambda *_:False) as resources:
+                               authorize=self._qualification_authorizer(config,slot,state)) as resources:
             _,policy,backend=resources
             if {'policy':policy.fingerprint,'backend':worker._backend_pin(backend)}!={k:binding[k] for k in ('policy','backend')}:
                 raise DevelopmentError('family_qualification_changed')
