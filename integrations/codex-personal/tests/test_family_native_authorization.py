@@ -26,6 +26,10 @@ class StrictInspectionBackend(FixtureBackend):
         authorize(self.authorize_scope,self.manifest,'repo.run_test')
         return super().run(request)
 
+    def qualify(self):
+        authorize(self.authorize_scope,self.manifest,'repo.run_test')
+        raise AssertionError('Fixture qualification must never execute')
+
 
 @unittest.skipIf(fixture.Board is None,'Board sources not bundled')
 class FamilyNativeAuthorizationTests(unittest.TestCase):
@@ -106,4 +110,40 @@ class FamilyNativeAuthorizationTests(unittest.TestCase):
         self.assertFalse(callback(manifest['scope'],'repo.run_test','repo:other'))
         self.assertFalse(callback({**manifest['scope'],'session_id':'other'},'repo.run_test',manifest['resource']))
         with self.assertRaises(DevelopmentError):self.worker._qualification_authorizer(config,'child_0')
+        self.assert_no_execution()
+
+    def test_inspected_metadata_stays_readable_but_callback_is_revoked_before_yield(self):
+        config=build_configuration(self.request,self.workflows,self.registrations,clock=lambda:self.now)
+        with self.worker._qualification_resources(config,'parent') as resources:
+            manifest,policy,backend=resources
+            self.assertTrue(backend.inspections)
+            self.assertEqual(manifest.manifest_hash,config['parent_manifest_sha256'])
+            self.assertTrue(policy.fingerprint)
+            self.assertEqual(backend.document['plan_hash'],self.backend['parent'].document['plan_hash'])
+            self.assertFalse(backend.qualified_for(manifest.manifest_hash,manifest.manifest['tests'][0]))
+            with self.assertRaises(DevelopmentError):backend.run(None)
+            with self.assertRaises(DevelopmentError):backend.qualify()
+            self.assertFalse(backend.authorize_scope(manifest.manifest['scope'],'repo.run_test',manifest.manifest['resource']))
+        self.assertFalse(backend.authorize_scope(manifest.manifest['scope'],'repo.run_test',manifest.manifest['resource']))
+        self.assert_no_execution()
+
+    def test_inspection_callback_is_revoked_when_resource_entry_raises(self):
+        config=build_configuration(self.request,self.workflows,self.registrations,clock=lambda:self.now)
+        backend=self.backend['parent']
+        def fail():raise RuntimeError('fixture entry interrupted')
+        backend.before_inspection=fail
+        with self.assertRaises(RuntimeError):
+            with self.worker._qualification_resources(config,'parent'):
+                self.fail('Interrupted resources must not yield')
+        self.assertFalse(backend.authorize_scope(backend.manifest['scope'],'repo.run_test',backend.manifest['resource']))
+        self.assert_no_execution()
+
+    def test_grants_withdrawn_at_workflow_inspection_refuse_before_child_claim(self):
+        self.ready()
+        self.backend['child_0'].before_inspection=lambda:self.board.set_policy(self.human,True,True,True,True,[],[])
+        result=self.worker.run()
+        self.assertEqual(result['status'],'needs_review')
+        self.assertEqual(result['reason'],'development_backend_unqualified')
+        for slot in SLOTS[:2]:
+            self.assertFalse(any(name in ('claim_ticket','renew_ticket') for name,_ in self.workflows[slot].client.calls))
         self.assert_no_execution()
