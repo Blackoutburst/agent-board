@@ -34,7 +34,8 @@
       "real_mcp_transport_scenarios": 3,
       "script_adversarial_regressions": 12,
       "findings_remaining": 0
-    }
+    },
+    "linux_skip_reason": "Directory alias identity scenario requires a case-insensitive filesystem."
   },
   "native_qualification_receipts": [
     "trusted-native-named-tests-20261016.json",
