@@ -1,9 +1,11 @@
 # Per-attempt supervision for named tests
 
 `SupervisedNativeNamedPythonBackend` adds an explicitly prepared supervisor to
-the [native single-process backend](NATIVE_TESTS.md). It remains opt-in and is
-not instantiated by a production worker, event listener, queue or CLI command.
-No model or authentication operation is involved. Darwin is the only qualified
+the [native single-process backend](NATIVE_TESTS.md). It remains opt-in: no
+default worker, event listener, queue or service starts it. The explicit
+[development command](DEVELOPMENT_CLI.md) can use it only with separately
+prepared and qualified plans and current authorization. Backend qualification
+performs no model or authentication operation. Darwin is the only qualified
 platform; other operating systems remain refused by the underlying backend.
 
 The supervisor closes the unsupervised backend's controller-crash gap. A
@@ -86,7 +88,8 @@ cleanup after an operator or compromised host kills the supervisor itself.
 The signal guard tests the measured native boundary; it does not certify
 unrelated privileged tools, arbitrary host configurations or another OS. The
 exclusive disposable checkout and no-secret conditions in `NATIVE_TESTS.md`
-still apply. There is no production development executor or model transport.
+still apply. This qualification activates no production executor and launches
+no model; explicit development execution remains a separate authorized action.
 
 ## Verification
 
@@ -103,6 +106,16 @@ TERM-ignoring script sleeps. It verifies independent cleanup and durable
 completion, reconciles the broker, confirms that replay leaves the execution
 counter at one, and checks that both test and helper disappeared. Only synthetic
 temporary files and processes are used; no production backend is activated.
+
+Run the qualification again against the final adapter source before a pilot.
+Preparation pins all six controller files, including `__init__.py`: even a
+package-version change invalidates an existing supervision plan. Prepare new
+private plan directories and receipts instead of changing old pins or adopting
+old attempts. Keep the final source revision with the new receipt; the dated
+receipt below remains a record of its original measurement. Also repeat the
+separate named-test and planner-policy fixtures documented in the release
+procedure. These qualification commands use no model inference, login or
+account RPC.
 
 The [16 October 2026 Mac receipt](docs/native-supervisor-2026-10-16.json) records
 the measured eleven guards, hard controller crash, durable cancelled receipt,
