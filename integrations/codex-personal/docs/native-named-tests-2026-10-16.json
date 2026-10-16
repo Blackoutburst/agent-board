@@ -1,0 +1,93 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "backend_source_sha256": "6f0e1860a27e27050b1341f52e095456356762786401d0a0abe7fd3cf21c3f7c",
+  "checks": {
+    "ack_required_before_source": true,
+    "cached_replay": true,
+    "cancelled": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "cancelled",
+      "status": "complete"
+    },
+    "failed": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "failed",
+      "status": "complete"
+    },
+    "output": {
+      "cleanup_confirmed": true,
+      "output_bytes": 16,
+      "result": "failed",
+      "status": "complete"
+    },
+    "passed": {
+      "cleanup_confirmed": true,
+      "output_bytes": 16,
+      "result": "passed",
+      "status": "complete"
+    },
+    "timeout": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "failed",
+      "status": "complete"
+    }
+  },
+  "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
+  "cli_version": "codex-cli 0.162.0-alpha.17.2",
+  "controller_authentication_files_read": false,
+  "executable_sha256": "179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818",
+  "host": {
+    "machine": "arm64",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "limitations": [
+    "Darwin only; Linux and Windows unqualified",
+    "Standalone Python tests only; subprocesses denied",
+    "Exclusive disposable checkout without secrets required",
+    "Controller crash can leave a sleeping test alive; independent durable supervision still required",
+    "No model transport or production activation"
+  ],
+  "model_calls": 0,
+  "observed_on": "2026-10-16",
+  "policy": {
+    "filesystem": {
+      ":minimal": "read",
+      ":root": "deny",
+      ":slash_tmp": "deny",
+      ":tmpdir": "deny",
+      "<synthetic-workspace>": "write"
+    },
+    "network": {
+      "enabled": false
+    }
+  },
+  "production_enabled": false,
+  "profile_version": 1,
+  "qualification": {
+    "checks": {
+      "fork": true,
+      "inside_read": true,
+      "inside_write": true,
+      "network_loopback": true,
+      "nproc_raise": true,
+      "outside_read": true,
+      "outside_write": true,
+      "process_group": true,
+      "session": true,
+      "spawn": true
+    },
+    "cleanup_confirmed": true,
+    "plan_hash": "8f705113bfee6d0cd4006d381a4a08831d6a81aef26695f6dfb668db404c97f1",
+    "result": "qualified_single_process_fixture",
+    "schema": 1
+  },
+  "real_repository_tests": false,
+  "result": "passed_fixture_qualification",
+  "schema": 1,
+  "synthetic_files_removed": true,
+  "wrapper_sha256": "c6fecb68e103e2e2d850d0fe23146f5a4bb36de221d489e443a99c0b504052b2"
+}
