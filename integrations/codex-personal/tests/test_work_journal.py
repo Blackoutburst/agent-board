@@ -453,5 +453,50 @@ with WorkJournal(sys.argv[1]) as journal:
             self.assertNotEqual(self.begin(request='new-request')['id'], operation['id'])
 
 
+    def test_parent_allocated_operation_id_is_exact_and_old_callers_remain_compatible(self):
+        allocated=str(uuid.uuid4())
+        with self.journal.lock(self.scope):
+            first=self.journal.begin(self.scope,'owned',self.configuration,operation_id=allocated)
+            self.assertEqual(first['id'],allocated)
+            self.assertEqual(self.journal.begin(self.scope,'owned',self.configuration,operation_id=allocated),first)
+            self.assertEqual(self.journal.begin(self.scope,'owned',self.configuration),first)
+        self.journal.close()
+        with WorkJournal(self.directory) as reopened, reopened.lock(self.scope):
+            self.assertEqual(reopened.begin(self.scope,'owned',self.configuration,operation_id=allocated),first)
+
+    def test_parent_allocated_id_never_adopts_existing_empty_request_with_another_id(self):
+        allocated=str(uuid.uuid4())
+        with self.journal.lock(self.scope):
+            independent=self.begin()
+            self.assertEqual(independent['stage'],'new')
+            self.assertEqual(independent['payload'],{})
+            self.error('operation_id_conflict',lambda:self.journal.begin(self.scope,'request',
+                self.configuration,operation_id=allocated))
+            self.assertEqual(self.journal.get(independent['id']),independent)
+            self.assertIsNone(self.journal.find(self.scope,'missing'))
+
+    def test_parent_allocated_id_is_globally_unique_across_scope_and_request(self):
+        allocated=str(uuid.uuid4())
+        with self.journal.lock(self.scope):
+            original=self.journal.begin(self.scope,'original',self.configuration,operation_id=allocated)
+            self.error('operation_id_conflict',lambda:self.journal.begin(self.scope,'other-request',
+                self.configuration,operation_id=allocated))
+        other={**self.scope,'ticket_id':'different-ticket'}
+        with self.journal.lock(other):
+            self.error('operation_id_conflict',lambda:self.journal.begin(other,'original',
+                self.configuration,operation_id=allocated))
+        self.assertEqual(self.journal.get(allocated),original)
+        self.assertIsNone(self.journal.find(other,'original'))
+
+    def test_parent_allocated_id_rejects_invalid_uuid_before_creating_anything(self):
+        values=('',False,42,'not-a-uuid',str(uuid.uuid4()).upper(),uuid.uuid4())
+        with self.journal.lock(self.scope):
+            for invalid in values:
+                with self.subTest(invalid=repr(invalid)):
+                    self.error('invalid_operation_id',lambda:self.journal.begin(self.scope,'invalid',
+                        self.configuration,operation_id=invalid))
+            self.assertIsNone(self.journal.find(self.scope,'invalid'))
+
+
 if __name__ == '__main__':
     unittest.main()

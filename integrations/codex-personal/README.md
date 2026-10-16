@@ -8,6 +8,8 @@ L’adaptateur 0.10 ajoute un [routage explicite des modèles](MODELS.md) et le 
 
 L’adaptateur 0.11 ajoute la commande [`usage`](USAGE.md). Elle lit les limites rapportées par le client Codex local sans appeler de modèle, puis peut transmettre une observation filtrée au panneau privé Runtime du propriétaire. Ces mesures datées restent distinctes des réservations d’exécution et expirent après deux minutes ; elles ne changent ni les droits, ni une pause, ni le modèle.
 
+L’adaptateur 0.12 ajoute un [hôte local explicite](HOST.md) pour une liste fixée de tickets : configuration privée, activation séparée avec budget fini, Runtime obligatoire, reprises durables et arrêt au premier plan. Il est désactivé par défaut, sans sélection de nouveaux tickets ni service installé.
+
 ## Utilisation
 
 Python **3.10 ou supérieur**, sur macOS ou Linux/POSIX ; aucune bibliothèque Python externe n’est nécessaire à l’exécution. Codex doit être installé et connecté par son propriétaire au moyen de son interface ou de sa CLI officielle. L’authentification reste gérée par Codex. [Documentation officielle de connexion](https://learn.chatgpt.com/docs/auth)
@@ -45,10 +47,12 @@ L’[interface du module et la répartition proposée](INTEGRATION.md) permetten
 ## Vérification
 
 ```sh
-python3 -m unittest discover -s tests -v
+python3 -m pytest tests -q
 ```
 
-Les **557 tests** utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
+Les dépendances de test sont celles de `requirements-dev.txt` à la racine du dépôt ; `pytest` inclut les scénarios adversariaux du host. L’exécution de l’adaptateur ne nécessite aucune de ces dépendances de test.
+
+Les tests utilisent des exécutables factices, des transports simulés et le vrai Board dans une base temporaire, sans inférence : authentification, arguments et environnement, flux JSON, limites, nettoyage, état durable, accès concurrents, doublons, reprise, annulation, sources MCP, bornes Unicode, versions, isolation et refus d’un contexte périmé. Le test réel de reprise a enchaîné deux tours dans des processus distincts : le second a retrouvé une information du premier. Une nouvelle tentative identique a ensuite récupéré la réponse enregistrée sans nouveau tour.
 
 - [Reçu du diagnostic local](docs/local-doctor-2026-10-15.json)
 - [Reçu du tour réel](docs/local-probe-2026-10-15.json)
