@@ -62,9 +62,11 @@ def _error_category(text: str) -> str:
     return "execution_failed"
 
 
-def _arguments(settings: ProbeSettings, executable: Path, session_id: str | None) -> list[str]:
+def _arguments(settings: ProbeSettings, executable: Path, session_id: str | None,
+               planner_arguments: list[str] | None = None) -> list[str]:
     # exec owns the sandbox flag; the resume subcommand does not accept it.
-    arguments = [str(executable), "exec", "--sandbox", "read-only"]
+    arguments = [str(executable), "exec"]
+    arguments.extend(["--sandbox", "read-only"] if planner_arguments is None else planner_arguments)
     if session_id is not None:
         arguments.append("resume")
     arguments.extend([
@@ -128,6 +130,7 @@ def execute_turn(
     on_started: Callable[[int], None] | None = None,
     on_session: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    planner_policy=None,
 ) -> dict[str, object]:
     """Run one text turn, returning only its final message and safe checks.
 
@@ -174,6 +177,16 @@ def execute_turn(
         except Exception:
             return "callback_failed"
 
+    planner_arguments = None
+    if planner_policy is not None:
+        from .planner_policy import PlannerPolicy
+        try:
+            if not isinstance(planner_policy, PlannerPolicy):
+                raise ValueError
+            planner_arguments = planner_policy.validate_for(executable, directory)
+        except Exception:
+            result['reason'] = 'planner_policy_unqualified_or_changed'
+            return result
     failure = cancellation()
     if failure:
         result.update(reason=failure, status="cancelled" if failure == "cancelled" else "blocked")
@@ -189,9 +202,17 @@ def execute_turn(
     if failure:
         result.update(reason=failure, status="cancelled" if failure == "cancelled" else "blocked")
         return result
+    if planner_policy is not None:
+        try:
+            # Metadata inspection can take time; recheck before the first
+            # model launch, never fall back to the legacy sandbox.
+            planner_arguments = planner_policy.validate_for(executable, directory)
+        except Exception:
+            result['reason'] = 'planner_policy_unqualified_or_changed'
+            return result
     try:
         process = subprocess.Popen(
-            _arguments(settings, executable, resume_session_id), cwd=str(directory),
+            _arguments(settings, executable, resume_session_id, planner_arguments), cwd=str(directory),
             env=sanitized_environment(), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
             start_new_session=True,
