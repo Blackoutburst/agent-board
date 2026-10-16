@@ -249,6 +249,83 @@ class MessageHostTests(unittest.TestCase):
         self.assertEqual(self.tick_host()['status'],'needs_review');self.assertEqual(self.calls,1)
         self.assertFalse(any(name=='post_message' for name,_ in self.client.calls))
 
+    def test_prepared_journal_without_context_references_is_refused(self):
+        self.post();self.enable()
+        with patch.object(self.message_runs,'create_work',side_effect=SystemExit('ordinary interruption')):
+            with self.assertRaises(SystemExit):self.tick_host()
+        op=self.operation();payload=dict(op['payload']);del payload['context_refs']
+        self.messages.update(op['id'],op['revision'],'prepared',**payload)
+        self.assertEqual(self.tick_host()['status'],'needs_review');self.assertEqual(self.calls,0)
+        self.assertEqual(self.control.calls,[]);self.assertEqual(self.replies(),[])
+
+    def test_context_change_after_runtime_start_closes_exact_unused_slot(self):
+        self.post();self.enable();original=self.control.call
+        def change_after_start(name,args):
+            response=original(name,args)
+            if name=='start_execution':
+                with self.board._tx() as db:
+                    db.execute('UPDATE threads SET title=? WHERE id=?',('Changed context',self.thread['id']))
+            return response
+        with patch.object(self.control,'call',side_effect=change_after_start):result=self.tick_host()
+        self.assertEqual(result['status'],'needs_review',result);self.assertEqual(self.calls,0)
+        executions=self.board.get_runtime(self.human)
+        self.assertEqual(executions['active_count'],0)
+        self.assertEqual(executions['executions'][0]['state'],'finished')
+        self.assertEqual(executions['executions'][0]['outcome'],'blocked')
+        self.assertTrue(executions['executions'][0]['cleanup_confirmed'])
+        self.assertFalse(any(name in ('post_message','checkpoint_message_feed') for name,_ in self.client.calls))
+
+    def test_new_history_during_model_does_not_replace_or_invalidate_old_context(self):
+        self.post();self.enable()
+        def add_new(callbacks):
+            self.board.post_message(self.human,self.thread['id'],'New unrelated history',idempotency_key='new-history')
+        self.during=add_new
+        self.assertEqual(self.tick_host()['status'],'complete');self.assertEqual(self.calls,1)
+        self.assertEqual(len(self.replies()),1)
+        self.assertNotIn('New unrelated history',self.operation()['payload']['prompt'])
+
+    def test_lost_post_remains_exact_with_new_human_history(self):
+        self.post();self.enable();self.client.lost.add('post_message')
+        self.assertEqual(self.tick_host()['status'],'pending');self.assertEqual(self.calls,1)
+        self.board.post_message(self.human,self.thread['id'],'New history after lost post',idempotency_key='after-lost-post')
+        self.assertEqual(self.tick_host()['status'],'complete');self.assertEqual(self.calls,1)
+        self.assertEqual(len(self.replies()),1)
+
+    def test_transport_callback_rechecks_context_roots_after_five_seconds(self):
+        self.post();self.enable();context_time=0
+        def change(callbacks):
+            nonlocal context_time
+            with self.board._tx() as db:
+                db.execute('UPDATE threads SET title=? WHERE id=?',('Changed while running',self.thread['id']))
+            context_time=6
+            self.assertTrue(callbacks['should_cancel']())
+        self.during=change
+        with patch('blackoutburst_agents.message_worker.time.monotonic',side_effect=lambda:context_time):
+            self.assertEqual(self.tick_host()['status'],'needs_review')
+        self.assertEqual(self.calls,1);self.assertEqual(self.replies(),[])
+
+    def test_runtime_context_hook_is_mandatory_before_reservation(self):
+        from blackoutburst_agents.runtime_guard import RuntimeControlError
+        guard=MessageRuntimeGuard(self.message_runtime,self.control,{
+            'board_endpoint':self.client.endpoint,'board_session_id':self.client.session_id})
+        with self.assertRaisesRegex(RuntimeControlError,'message_context_guard_required'):
+            guard.before({},str(uuid.uuid4()))
+        self.assertEqual(self.control.calls,[])
+
+    def test_context_control_failure_stays_cancelled_even_if_transport_ignores_it(self):
+        self.post();self.enable();context_time=0
+        def transient_failure(callbacks):
+            nonlocal context_time
+            context_time=6
+            with patch.object(self.client,'register',side_effect=BoardReadError('timeout')):
+                self.assertTrue(callbacks['should_cancel']())
+            self.assertTrue(callbacks['should_cancel']())
+        self.during=transient_failure
+        with patch('blackoutburst_agents.message_worker.time.monotonic',side_effect=lambda:context_time):
+            self.assertEqual(self.tick_host()['status'],'needs_review')
+        self.assertEqual(self.calls,1);self.assertEqual(self.replies(),[])
+        self.assertFalse(any(name=='checkpoint_message_feed' for name,_ in self.client.calls))
+
     def test_runtime_cli_reconciles_message_finish_without_new_turn(self):
         import io
         from contextlib import redirect_stdout

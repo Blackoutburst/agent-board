@@ -13,7 +13,7 @@ from .work_journal import _private_file, _encode
 APPLICATION_ID = 0x42424D46
 MAX_DELIVERIES = 256
 MAX_OPERATIONS = 256
-MAX_PAYLOAD = 128 * 1024
+MAX_PAYLOAD = 256 * 1024
 STATES = frozenset({'new','prepared','running','result_ready','posting','complete','ignored','needs_review'})
 NEXT = {'new': {'prepared','ignored','needs_review'}, 'prepared': {'running','needs_review'},
     'running': {'result_ready','needs_review'}, 'result_ready': {'posting','needs_review'},
@@ -104,7 +104,8 @@ class MessageJournal:
 
     def bind_feed(self,reader_id,response):
         if (not isinstance(response,dict) or set(response)!={'feed_id','start_at','limit','human_only','checkpoint'}
-                or response['human_only'] is not True or type(response['checkpoint']) is not int):
+                or response['human_only'] is not True or type(response['checkpoint']) is not int
+                or type(response['limit']) is not int):
             raise HostError('message_feed_invalid')
         identifier(response['feed_id'],hex32=True)
         with self.transaction() as db:
@@ -207,7 +208,8 @@ class MessageJournal:
             reader=dict(db.execute('SELECT * FROM readers WHERE id=?',(delivery['reader_id'],)).fetchone())
             expected={'feed_id':reader['feed_id'],'delivery_id':delivery['remote_id'],
                 'checkpoint':delivery['checkpoint']+1,'acknowledged':True}
-            if response!=expected or type(response.get('checkpoint')) is not int:
+            if (not isinstance(response,dict) or response!=expected or type(response.get('checkpoint')) is not int
+                    or response.get('acknowledged') is not True):
                 raise HostError('message_ack_invalid')
             if delivery['state']=='acked':
                 if delivery['ack']!=response:raise HostError('message_ack_conflict')

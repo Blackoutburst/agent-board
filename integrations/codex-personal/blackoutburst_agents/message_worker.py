@@ -1,9 +1,10 @@
 """One configured human reply; no ticket mutation or executable board command."""
+import time
 from .board_reader import BoardReadError
 from .context import ContextError
 from .host_config import HostError, digest
 from .message_client import MAX_REPLY_BYTES
-from .message_context import exact_source, prepare_context, registration_profile
+from .message_context import exact_source, prepare_context, registration_profile, revalidate_context
 from .message_scope import local_agent, validate_scope
 from .runner import PersonalRunner
 from .runtime_guard import RuntimeControlError
@@ -26,10 +27,11 @@ class MessageWorker:
             'reason':reason or op['payload'].get('reason','message_pending'),'worker_operation_id':op['worker_id'],
             'message_operation_id':op['id']}
 
-    def _fresh(self,op,target,owner,*,source=True):
+    def _fresh(self,op,target,owner,*,history=True):
         registration=self.client.register()
         registration_profile(registration,owner,target['agent_id'],target['board_session_id'],target['profile_version'])
-        if source:exact_source(self.client,op,op['payload'].get('scope'))
+        if op['state']=='new':exact_source(self.client,op)
+        else:revalidate_context(self.client,registration,target,owner,op,history=history)
         return registration
 
     def run(self,operation_id,target,owner,*,should_cancel):
@@ -43,8 +45,9 @@ class MessageWorker:
         try:
             registration=self._fresh(op,target,owner)
             if op['state']=='new':
-                scope,prompt,context_hash=prepare_context(self.client,registration,target,owner,op,target['instruction'])
+                scope,prompt,context_hash,refs=prepare_context(self.client,registration,target,owner,op,target['instruction'])
                 op=self._save(op,'prepared',scope=scope,prompt=prompt,context_sha256=context_hash,
+                    context_refs=refs,
                     configuration_sha256=target_hash,reply_key='host-message-reply-'+digest({
                         'endpoint':self.client.endpoint,'owner_id':owner,'agent_id':target['agent_id'],
                         'thread_id':op['thread_id'],'message_id':op['message_id']}))
@@ -69,21 +72,42 @@ class MessageWorker:
                 self._fresh(op,target,owner)
                 guard=self.runtime_guard_factory(scope)
                 if not isinstance(guard,MessageRuntimeGuard):raise HostError('message_runtime_required')
+                def before_transport():
+                    if should_cancel():raise HostError('host_stopped')
+                    self._fresh(op,target,owner)
+                guard.before_transport=before_transport
                 runner=self.runner_factory(self.runs,runtime_guard=guard)
                 if getattr(runner,'runtime_guard',None) is not guard:raise HostError('message_runtime_required')
+                last_context_check=time.monotonic();context_failed=False
                 def cancelled():
+                    nonlocal last_context_check,context_failed
+                    if context_failed:return True
                     if should_cancel():return True
                     try:
                         if hasattr(self.client,'check_current'):self.client.check_current()
-                    except Exception:return True
+                        now=time.monotonic()
+                        if now-last_context_check>=5:
+                            # Root ACLs are checked during the transport; exact
+                            # history is checked at both effect boundaries.
+                            self._fresh(op,target,owner,history=False)
+                            last_context_check=now
+                    except Exception:
+                        context_failed=True
+                        return True
                     return False
                 try:
                     result=runner.run(work['id'],'host-message-'+op['worker_id'],op['payload']['prompt'],
                         timeout=target['timeout'],should_cancel=cancelled)
-                except RuntimeControlError:
+                except RuntimeControlError as error:
+                    if str(error) in ('message_context_changed','message_context_guard_required'):
+                        op=self._save(op,'needs_review',reason='message_context_requires_review')
+                        return self.receipt(op)
                     # A durable successful RunStore result can reconcile a lost
                     # finish reply on the next pass, without starting inference.
                     return self.receipt(op,'pending','message_runtime_reconciliation')
+                if context_failed:
+                    op=self._save(op,'needs_review',reason='message_context_requires_review')
+                    return self.receipt(op)
                 text=result.get('result',{}).get('text')
                 if (result.get('result',{}).get('status')!='completed' or not isinstance(text,str)
                         or not text.strip() or '\0' in text or len(text.encode())>MAX_REPLY_BYTES):

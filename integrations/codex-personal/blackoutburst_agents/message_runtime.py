@@ -25,6 +25,22 @@ class MessageRuntimeClient(RuntimeBoardClient):
 
 
 class MessageRuntimeGuard(RuntimeGuard):
+    # Set by the message worker for a new admission. Cached cleanup intentionally
+    # needs no context read, because it never sends a prompt or starts inference.
+    before_transport=None
+
+    def before(self,work,turn_id):
+        if not callable(self.before_transport):raise RuntimeControlError('message_context_guard_required')
+        super().before(work,turn_id)
+        try:
+            self.before_transport()
+        except Exception:
+            # Admission succeeded but no transport was invoked. Close this exact
+            # slot with the same private blocked result PersonalRunner records.
+            super().finish(work,turn_id,{'status':'blocked','reason':'runtime_start_requires_review',
+                'text':'','uncertain':True,'verification':{'cleanup_confirmed':True}})
+            raise RuntimeControlError('message_context_changed') from None
+
     def configuration(self,work,turn_id):
         scope=validate_scope(self.scope)
         if (work.get('owner_id')!=scope['owner_id'] or work.get('agent_id')!=local_agent(scope)

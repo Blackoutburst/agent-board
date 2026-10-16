@@ -97,6 +97,23 @@ brief ne tenant pas dans cette borne bloque le départ. Aucune pièce jointe,
 URL ou chemin n’est ouvert ; aucune mémoire de ticket n’est étendue
 implicitement à une conversation générale.
 
+Les références du profil, de la conversation, du projet/ticket éventuel et des
+seuls messages effectivement inclus sont scellées avec leurs empreintes. Chaque
+reprise et chaque publication relisent ces sources exactes ; le contrôle est
+répété après l’admission Runtime, avant le premier appel au transport modèle.
+Un retrait d’accès ou une modification bloque le travail pour revue, sans
+remplacer son prompt par un contexte différent. Les nouveaux messages ne sont
+pas des sources de l’ancien prompt : notre propre publication dont le reçu a
+été perdu peut ainsi être rapprochée sans invalider son contexte.
+
+Pendant le modèle, les callbacks de contrôle relisent au plus toutes les cinq
+secondes le profil, la source et les racines conversation/projet/ticket. Les
+50 références historiques au maximum sont relues intégralement aux frontières
+du modèle et de la publication. Un échec de ce contrôle reste une annulation
+pour ce tour, même si l’accès revient ensuite. Ces lectures sont bornées ; elles ne constituent
+pas une transaction distante couvrant la durée d’un modèle ou d’un post. Un
+ancien journal prototype sans ces références est refusé pour revue.
+
 L’identité réelle owner/profil/appareil/session est conservée dans la connexion
 et Runtime. La nouvelle réservation `reserve_message_execution` est ancrée au
 message et à sa conversation. Le serveur vérifie les droits actuels
@@ -131,7 +148,8 @@ inférence déjà terminée. Une inférence interrompue sans résultat confirmé
 pour revue. Ces garanties concernent les coupures normales de ces journaux,
 pas une restauration partielle ou un rollback arbitraire de fichiers.
 
-Avant publication, profil, connexion, accès et source sont vérifiés de nouveau.
+Avant publication, connexion, accès et toutes les sources scellées du contexte
+sont vérifiés de nouveau.
 Le seul effet est `post_message` dans la conversation d’origine avec le
 `reply_to` exact et une clé idempotente stable par owner/profil/source. Le corps
 retourné, l’auteur, la session, l’appareil et les références doivent correspondre
@@ -152,7 +170,8 @@ Les sous-dossiers sont `messages`, `message-runs` et `message-runtime`. Les
 journaux contiennent des données privées de travail ; `status` et les reçus
 publics n’en exposent ni prompts, ni texte modèle, ni chemins, ni secrets.
 Le journal de messages accepte au plus 256 opérations retenues et 256
-livraisons. Les opérations terminées sont conservées pour preuve. Après un ACK
+livraisons, avec 256 Kio maximum de données privées par opération (prompt,
+références et résultat compris). Les opérations terminées sont conservées pour preuve. Après un ACK
 confirmé, les opérations ignorées sont retirées ; les anciennes livraisons
 acquittées ne contenant aucune réponse sont compactées en conservant la plus
 récente et le checkpoint. Mille pages vides ne remplissent donc pas le journal.
