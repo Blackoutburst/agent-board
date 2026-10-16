@@ -310,13 +310,14 @@ def test_v6_migration_preserves_claims_execution_and_idempotency(usage):
                                     'work', 'turn', 'codex_chatgpt', 'fixture-model')['execution']
     cursor = b.read_inbox(item['actor'])['cursor']
     with sqlite3.connect(b.db_path) as db:
+        db.execute('DROP TABLE ticket_attachments')
         db.execute('DROP TABLE usage_observations')
         db.execute('PRAGMA user_version=6')
         before_keys = db.execute('SELECT * FROM idempotency ORDER BY 1,2').fetchall()
         before_owners = db.execute('SELECT * FROM owners ORDER BY id').fetchall()
     reopened = Board(b.data_dir, base_url=b.base_url)
     with sqlite3.connect(b.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 8
         assert db.execute('SELECT * FROM idempotency ORDER BY 1,2').fetchall() == before_keys
         assert db.execute('SELECT * FROM owners ORDER BY id').fetchall() == before_owners
     assert reopened.get_ticket(item['actor'], ticket['id'])['ticket']['claimant'] == claimed['claimant']
@@ -328,6 +329,7 @@ def test_v6_migration_preserves_claims_execution_and_idempotency(usage):
 def test_v7_migration_failure_rolls_back_schema_and_data(usage, monkeypatch):
     b = usage['board']
     with sqlite3.connect(b.db_path) as db:
+        db.execute('DROP TABLE ticket_attachments')
         db.execute('DROP TABLE usage_observations')
         db.execute('PRAGMA user_version=6')
     def database_dump():
@@ -351,7 +353,7 @@ def test_future_schema_refuses_without_modifying_existing_usage(usage):
     b.report_usage_observation(item['actor'], item['connection'], time.time() - 1, snapshot())
     before = rows(b)
     with sqlite3.connect(b.db_path) as db:
-        db.execute('PRAGMA user_version=8')
+        db.execute('PRAGMA user_version=9')
     with pytest.raises(RuntimeError, match='newer'):
         Board(b.data_dir, base_url=b.base_url)
     assert rows(b) == before

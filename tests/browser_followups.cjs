@@ -40,7 +40,16 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
   {name:'details.custom',mimeType:'application/octet-stream',buffer:Buffer.from('Any extension is allowed.')}
  ]);
  assert.equal(await dialog.getByLabel('Task attachments',{exact:true}).getAttribute('accept'),null);
+ let lostUploadResponse = false;
+ await page.route('**/api/threads/*/attachments', async route => {
+  const response = await route.fetch();
+  if (!lostUploadResponse) { lostUploadResponse = true; await route.abort('failed'); }
+  else await route.fulfill({response});
+ });
  await dialog.getByRole('button',{name:'Create task',exact:true}).click();
+ await dialog.getByRole('alert').filter({hasText:'Task saved.'}).waitFor();
+ assert.equal(await dialog.getByLabel('Task title',{exact:true}).isDisabled(),true);
+ await dialog.getByRole('button',{name:'Retry adding files',exact:true}).click();
  await page.getByRole('heading',{name:'Attached feature',exact:true}).waitFor();
  await page.getByRole('img',{name:'reference.png',exact:true}).waitFor();
  await page.waitForFunction(()=>document.querySelector('.attachment-preview')?.naturalWidth>0);
@@ -49,14 +58,43 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
  assert.equal(await page.getByRole('link',{name:/details.custom/}).count(),1);
  const ticketId=new URL(page.url()).searchParams.get('ticket');
  const me=await (await context.request.get(origin+'/api/me')).json();
- const task=await (await context.request.get(origin+'/api/tickets/'+ticketId)).json();
+ let task=await (await context.request.get(origin+'/api/tickets/'+ticketId)).json();
  assert.deepEqual(task.ticket.labels.sort(),['feature','regression']);
+ assert.equal(task.ticket.attachments.length,3);
+ assert.equal(await page.locator('.task-attachments .attachment').count(),3);
+ assert.equal(await page.locator('#messages .attachment').count(),0);
+ assert.equal((await (await context.request.get(origin+'/api/threads/'+task.ticket.thread_id)).json()).messages.length,0);
+ await page.reload();
+ await page.locator('.task-attachments').getByRole('img',{name:'reference.png',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Edit task',exact:true}).click();
+ dialog=page.getByRole('dialog');
+ await dialog.getByLabel('Task attachments',{exact:true}).setInputFiles({name:'additional.txt',mimeType:'text/plain',buffer:Buffer.from('Edit attachment')});
+ // Lose the link response after the server committed; retry must discover success.
+ let lostLinkResponse=false;
+ await page.route('**/api/tickets/'+ticketId,async route=>{
+  if(route.request().method()==='PATCH'&&route.request().postDataJSON()?.attachment_ids&&!lostLinkResponse){
+   lostLinkResponse=true;await route.fetch();await route.abort('failed');
+  }else await route.continue();
+ });
+ await dialog.getByRole('button',{name:'Save task',exact:true}).click();
+ await dialog.getByRole('alert').filter({hasText:'Task saved.'}).waitFor();
+ await dialog.getByRole('button',{name:'Retry adding files',exact:true}).click();
+ await page.locator('.task-attachments').getByRole('link',{name:/additional.txt/}).waitFor();
+ task=await (await context.request.get(origin+'/api/tickets/'+ticketId)).json();
+ assert.equal(task.ticket.attachments.length,4);
+ assert.equal((await (await context.request.get(origin+'/api/threads/'+task.ticket.thread_id)).json()).messages.length,0);
+ await page.unroute('**/api/tickets/'+ticketId);
+ await page.unroute('**/api/threads/*/attachments');
+
  const other=await browser.newContext();
  const login=await (await other.request.post(origin+'/api/login',{data:{username:'thescreamer',password:'local-ui-fixture-only'}})).json();
  const headers={'X-CSRF-Token':login.csrf_token};
  await page.getByLabel('Message',{exact:true}).fill('Draft must survive updates');
- await other.request.post(origin+'/api/threads/'+task.ticket.thread_id+'/messages',{headers,data:{body:'New task discussion message',idempotency_key:'task-live-message'}});
+ const discussionFile=await (await other.request.post(origin+'/api/threads/'+task.ticket.thread_id+'/attachments',{headers,multipart:{file:{name:'discussion.txt',mimeType:'text/plain',buffer:Buffer.from('Discussion only')}}})).json();
+ await other.request.post(origin+'/api/threads/'+task.ticket.thread_id+'/messages',{headers,data:{body:'New task discussion message',attachment_ids:[discussionFile.id],idempotency_key:'task-live-message'}});
  await page.getByText('New task discussion message',{exact:true}).waitFor({timeout:12000});
+ await page.locator('#messages').getByRole('link',{name:/discussion.txt/}).waitFor();
+ assert.equal(await page.locator('.task-attachments .attachment').count(),4);
  assert.equal(await page.getByLabel('Message',{exact:true}).inputValue(),'Draft must survive updates');
  await other.request.patch(origin+'/api/tickets/'+ticketId,{headers,data:{expected_version:task.ticket.version,priority:'urgent'}});
  await page.locator('.task-sidebar').getByText('Urgent',{exact:true}).waitFor({timeout:12000});
@@ -99,6 +137,6 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
  await page.screenshot({path:path.join(output,'board-followups-mobile.png'),fullPage:true});
- console.log(JSON.stringify({flows:['dynamic project search','archived toggle','task files without type filter','image and playable video embeds','reusable tags','agent mention autocomplete','live conversation and task updates','draft preservation','focused inbox','live badge','collapsed agent work','mobile layout'],javascriptErrors:errors}));
+ console.log(JSON.stringify({flows:['dynamic project search','archived toggle','task description files without discussion comments','lost upload and link response retries','edit and reload attachment persistence','separate discussion files','image and playable video embeds','reusable tags','agent mention autocomplete','live conversation and task updates','draft preservation','focused inbox','live badge','collapsed agent work','mobile layout'],javascriptErrors:errors}));
  await browser.close();
 })().catch(error=>{console.error(error);process.exitCode=1;});

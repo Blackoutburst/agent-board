@@ -17,7 +17,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -206,6 +206,7 @@ class TicketChanges(ProjectBody):
     evidence: str | None = Field(default=None, max_length=20000)
     release_claim: bool | None = None
     depends_on: list[str] | None = Field(default=None, max_length=100)
+    attachment_ids: list[str] | None = Field(default=None, max_length=100)
     labels: list[str] | None = Field(default=None, max_length=50)
     required_skills: list[str] | None = Field(default=None, max_length=50)
     resource: str | None = Field(default=None, max_length=256)
@@ -779,7 +780,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.5.0", "schema_version": 7, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations"]}
+        return {"status": "ok", "version": "2.6.0", "schema_version": 8, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1073,9 +1074,9 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.revoke_device(actor, device_id)
 
     @app.post("/api/threads/{thread_id}/attachments")
-    async def upload(thread_id: str, file: UploadFile = File(...), actor=Depends(human)):
+    async def upload(thread_id: str, file: UploadFile = File(...), idempotency_key: str = Form(default="", max_length=200), actor=Depends(human)):
         content = await file.read(10*1024*1024 + 1)
-        return board.add_attachment(actor, thread_id, file.filename or "attachment", file.content_type or "application/octet-stream", content)
+        return board.add_attachment(actor, thread_id, file.filename or "attachment", file.content_type or "application/octet-stream", content, idempotency_key)
 
     @app.post('/mcp/attachments/{thread_id}')
     async def agent_upload(thread_id: str,file: UploadFile = File(...),actor=Depends(attachment_reader)):

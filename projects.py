@@ -143,6 +143,9 @@ class ProjectsMixin:
                     "acceptance_criteria", "priority", "status", "assignee_owner_id", "version", "outcome", "evidence",
                     "created_at", "updated_at")}
         result["claimant"] = json.loads(row["claimant"]) if row["claimant"] else None
+        result["attachments"] = [self._attachment(item) for item in db.execute(
+            """SELECT a.* FROM ticket_attachments ta JOIN attachments a ON a.id=ta.attachment_id
+                WHERE ta.ticket_id=? ORDER BY ta.position""", (row["id"],))] if db is not None else []
         result["url"] = self.base_url + "/?project=" + row["project_id"] + "&ticket=" + row["id"]
         return result
 
@@ -287,7 +290,7 @@ class ProjectsMixin:
 
     def update_ticket(self, actor, ticket_id, expected_version, **changes):
         _version(expected_version)
-        allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim", "depends_on", "labels", "required_skills", "resource", "progress", "assignee_agent_id"}
+        allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim", "depends_on", "labels", "required_skills", "resource", "progress", "assignee_agent_id", "attachment_ids"}
         if not changes or set(changes) - allowed:
             _fail("Supply only editable ticket fields")
         values = {key: _text(value, key, *_TICKET_TEXT[key]) for key, value in changes.items() if key in _TICKET_TEXT}
@@ -308,6 +311,8 @@ class ProjectsMixin:
                 _fail("Ticket changed; reload before saving", 409)
             if actor["kind"] == "agent" and row["status"] != "done" and (row["lease_expires_at"] or 0) <= time.time():
                 _fail("Claim expired; inspect and recover before updating", 409)
+            if "attachment_ids" in changes:
+                self._set_ticket_attachments(db, row, changes["attachment_ids"])
             if "depends_on" in changes:
                 self._set_dependencies(db, ticket_id, row["project_id"], changes["depends_on"])
             if "labels" in changes:
@@ -381,6 +386,19 @@ class ProjectsMixin:
             if status == "done":
                 self._unblock_dependents(db, actor, ticket_id)
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)
+
+    def _set_ticket_attachments(self, db, ticket, attachment_ids):
+        if (not isinstance(attachment_ids, list) or len(attachment_ids) > 100 or
+                any(not isinstance(item, str) or not item.strip() or len(item) > 200 for item in attachment_ids)):
+            _fail("attachment_ids must be a list of at most 100 file IDs")
+        ids = list(dict.fromkeys(attachment_ids))
+        for attachment_id in ids:
+            if not db.execute("SELECT 1 FROM attachments WHERE id=? AND thread_id=?",
+                              (attachment_id, ticket["thread_id"])).fetchone():
+                _fail("Each task attachment must belong to this task's thread")
+        db.execute("DELETE FROM ticket_attachments WHERE ticket_id=?", (ticket["id"],))
+        db.executemany("INSERT INTO ticket_attachments(ticket_id,attachment_id,position) VALUES(?,?,?)",
+                       [(ticket["id"], attachment_id, index) for index, attachment_id in enumerate(ids)])
 
     def claim_ticket(self, actor, ticket_id, expected_version):
         _version(expected_version)

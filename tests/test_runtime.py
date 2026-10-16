@@ -69,7 +69,7 @@ def test_migration_default_is_read_only_and_persists(runtime):
                      'active_count': 0, 'quota': {'status': 'unavailable'}, 'usage_observations': [], 'executions': []}
     assert snapshot(board) == before
     with sqlite3.connect(board.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 8
     assert Board(board.data_dir).get_runtime(human) == value
 
 
@@ -335,6 +335,7 @@ def test_schema_five_upgrade_preserves_existing_data_and_migrates_once(runtime):
     board, human, _, _, agent = runtime
     actor, ticket, *_ = agent()
     with sqlite3.connect(board.db_path) as db:
+        db.execute('DROP TABLE ticket_attachments')
         db.execute('DROP TABLE usage_observations')
         db.execute('DROP TABLE runtime_executions')
         db.execute('DROP TABLE owner_execution_limits')
@@ -377,6 +378,7 @@ def test_runtime_migration_failure_is_atomic(runtime, monkeypatch):
     import board as board_module
     board, *_ = runtime
     with sqlite3.connect(board.db_path) as db:
+        db.execute('DROP TABLE ticket_attachments')
         db.execute('DROP TABLE usage_observations')
         db.execute('DROP TABLE runtime_executions')
         db.execute('DROP TABLE owner_execution_limits')

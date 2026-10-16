@@ -188,7 +188,7 @@ const Workspace = (() => {
       }), "full-width"));
     }
     const discussion = panel("Discussion", el("div", { id: "older-messages" }), el("div", { id: "messages", class: "messages" }), composer());
-    const main = el("div", {}, panel("Description", el("div", { class: "panel-body prose" }, t.description || "No description provided.")),
+    const main = el("div", {}, panel("Description", el("div", { class: "panel-body" }, el("div", { class: "prose" }, t.description || "No description provided."), el("div", { class: "attachments task-attachments", "aria-label": "Task attachments" }, (t.attachments || []).map(Conversations.attachment)))),
       t.acceptance_criteria ? panel("Acceptance criteria", el("div", { class: "panel-body prose" }, t.acceptance_criteria)) : null,
       t.progress ? el("div", { class: "callout" }, el("strong", {}, "Latest progress"), el("p", {}, t.progress)) : null,
       t.human_requests.filter(r => r.status === "open").map(r => requestCard(r, t)),
@@ -247,6 +247,7 @@ const Workspace = (() => {
     const [allTasks, agentEntries, labels] = await Promise.all([api(`/projects/${workPath(p.id)}/tickets`), api(`/agents?project_id=${workPath(p.id)}`), api(`/projects/${workPath(p.id)}/labels`)]);
     const key = idempotencyKey();
     const uploaded = [];
+    let savedTask = null, selectedFiles = [];
     const file = el('input', {type:'file',multiple:'',name:'task_files','aria-label':'Task attachments'});
     const tagOptions = el('div',{class:'tag-options'},labels.map(label => check(label.name,'labels',t?.labels?.includes(label.name),label.name)));
     const tagName = el('input',{name:'new_tag','aria-label':'New tag name',placeholder:'Create a tag…',maxLength:80});
@@ -268,7 +269,7 @@ const Workspace = (() => {
     const form = el("form", { class: "work-form" }, field("Task title", "title", { value: t?.title || "", required: true, placeholder: "Describe the result you want" }), field("Description", "description", { type: "textarea", rows: 5, value: t?.description || "" }), field("Acceptance criteria", "acceptance_criteria", { type: "textarea", rows: 3, value: t?.acceptance_criteria || "", placeholder: "What needs to be true when this is complete?" }),
       el("div", { class: "form-row" }, select("Priority", "priority", Object.entries(ticketPriorities), t?.priority || "normal"), select("Assigned to", "assignee", [["", "Any available agent"], ...p.participants.map(id => ["owner:" + id, ownerName(id)]), ...agentOptions], who)),
       t ? select("Status", "status", Object.entries(ticketStatuses), t.status) : null,
-      tags, el('label',{},'Task attachments',file,el('span',{class:'field-hint'},'Any file · Up to 10 MB each · Added to the task discussion')),
+      tags, el('label',{},'Task attachments',file,el('span',{class:'field-hint'},'Any file · Up to 10 MB each · Included in the task description')),
       el("details", { class: "metadata-editor" }, el("summary", {}, "Dependencies & work requirements"), dependencyPicker, field("Required skills", "required_skills", { value: (t?.required_skills || []).join(", "), placeholder: "Optional: python, android" }), field("Shared resource", "resource", { value: t?.resource || "", hint: "Tasks using the same resource cannot run at the same time.", placeholder: "Optional: agent-board:main" })),
       t ? el("details", { class: "metadata-editor", open: t.status === "done" ? "" : null }, el("summary", {}, "Outcome & verification"), field("Outcome", "outcome", { type: "textarea", value: t.outcome }), field("Verification evidence", "evidence", { type: "textarea", value: t.evidence, hint: "Required together with an outcome when marking a task done." })) : null,
       formButtons(t ? "Save task" : "Create task"));
@@ -285,14 +286,34 @@ const Workspace = (() => {
         }
       }
       else payload.idempotency_key = key;
-      if ([...file.files].some(item => item.size > 10*1024*1024)) throw new Error('Each attachment must be 10 MB or smaller.');
-      const saved = await api(t ? `/tickets/${workPath(t.id)}` : `/projects/${workPath(p.id)}/tickets`, { method: t ? "PATCH" : "POST", data: payload });
-      for (let index = uploaded.length; index < file.files.length; index++) {
-        const formData = new FormData(); formData.append('file',file.files[index]);
-        uploaded.push(await api(`/threads/${workPath(saved.thread_id)}/attachments`,{method:'POST',form:formData}));
+      if (!savedTask) {
+        selectedFiles = [...file.files];
+        if (selectedFiles.some(item => item.size > 10*1024*1024)) throw new Error('Each attachment must be 10 MB or smaller.');
+        if (selectedFiles.length + (t?.attachments?.length || 0) > 100) throw new Error('A task can have at most 100 attachments.');
+        const controls = [...form.querySelectorAll('input,textarea,select,fieldset')];
+        const disabled = controls.map(control => control.disabled);
+        controls.forEach(control => control.disabled = true);
+        try {
+          savedTask = await api(t ? `/tickets/${workPath(t.id)}` : `/projects/${workPath(p.id)}/tickets`, { method: t ? "PATCH" : "POST", data: payload });
+        } catch (failure) { controls.forEach((control, index) => control.disabled = disabled[index]); throw failure; }
       }
-      if (uploaded.length) await api(`/threads/${workPath(saved.thread_id)}/messages`,{method:'POST',data:{body:'Task attachments',attachment_ids:uploaded.map(item=>item.id),idempotency_key:key+'-attachments'}});
-      closeModal(); await ticket(saved.id); notify(t ? "Task updated." : "Task created.");
+      try {
+        for (let index = uploaded.length; index < selectedFiles.length; index++) {
+          const formData = new FormData(); formData.append('file',selectedFiles[index]);
+          formData.append('idempotency_key',`${key}-file-${index}`);
+          uploaded.push(await api(`/threads/${workPath(savedTask.thread_id)}/attachments`,{method:'POST',form:formData}));
+        }
+        if (uploaded.length) {
+          const current = (await api(`/tickets/${workPath(savedTask.id)}`)).ticket;
+          const ids = (current.attachments || []).map(item => item.id);
+          const merged = [...new Set([...ids, ...uploaded.map(item => item.id)])];
+          if (merged.length !== ids.length) savedTask = await api(`/tickets/${workPath(savedTask.id)}`, {method:'PATCH',data:{expected_version:current.version,attachment_ids:merged}});
+        }
+      } catch (failure) {
+        form.querySelector('button[type="submit"]').textContent = 'Retry adding files';
+        throw new Error(`Task saved. Some files still need to be added. Retry to finish. ${failure.message}`);
+      }
+      closeModal(); await ticket(savedTask.id); notify(t ? "Task updated." : "Task created.");
     });
     openModal(t ? `Edit task #${t.number}` : "New task", form);
   }

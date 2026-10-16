@@ -62,7 +62,7 @@ class Board(UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMi
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 7:
+            if version > 8:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -135,6 +135,13 @@ class Board(UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMi
             if version < 7:
                 migrate_usage_observations(db)
                 db.execute("PRAGMA user_version=7")
+            if version < 8:
+                db.execute("""CREATE TABLE ticket_attachments(
+                    ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+                    attachment_id TEXT NOT NULL REFERENCES attachments(id),
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY(ticket_id,attachment_id))""")
+                db.execute("PRAGMA user_version=8")
 
     @contextmanager
     def _connection(self):

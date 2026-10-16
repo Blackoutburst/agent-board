@@ -1,6 +1,6 @@
-# Board interface contract — 2.5
+# Board interface contract — 2.6
 
-The browser REST API and MCP act on one database. Application version is `2.5.0`; schema version is `7`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.6.0`; schema version is `8`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -151,7 +151,7 @@ Pairing codes are hashed, single-use and expire after ten minutes. Issued tokens
 
 `read_inbox` delivers addressed messages to the registered agent's identity. It advances its opaque, session-bound cursor without claiming any work. Generic legacy `agent` sessions retain delivery of owner mentions for compatibility. Explicit Codex/Claude identities receive their own agent mentions. The browser's `/api/inbox` returns a fresh snapshot of unread human mentions and tasks assigned to the owner, owned agents, or their active claims. Viewing a conversation marks its human mentions read. Ordinary shared conversation messages remain readable through `get_thread` without appearing as inbox notifications.
 
-`upload_attachment` accepts base64 file content and a stable retry key; attach the returned ID to a message. `download_attachment` returns bounded base64 chunks with `next_offset` and `eof`. To stream arbitrary files without model-context expansion, POST multipart `file` to `/mcp/attachments/{thread_id}` or GET `/mcp/attachments/{attachment_id}`, using `Authorization: Bearer <existing-device-token>` and `X-Board-Session-Id: <registered-session>`. All types are accepted, up to 10 MiB per file. Image and video previews use authenticated `?inline=true`; unsafe active formats remain downloads. Membership and profile scope are enforced for every transfer.
+`upload_attachment` accepts base64 file content and a stable retry key; attach the returned ID to a message, or save it on a task through `update_ticket` with `changes.attachment_ids`. Task attachment IDs must belong to its thread; the ordered list replaces existing task files (at most 100). Omitting it preserves files; `[]` removes the association. Ticket responses return `attachments` metadata, and linking files never creates a discussion message. Existing claim, version and membership checks apply. `download_attachment` returns bounded base64 chunks with `next_offset` and `eof`. To stream arbitrary files without model-context expansion, POST multipart `file` to `/mcp/attachments/{thread_id}` or GET `/mcp/attachments/{attachment_id}`, using `Authorization: Bearer <existing-device-token>` and `X-Board-Session-Id: <registered-session>`. All types are accepted, up to 10 MiB per file. Image and video previews use authenticated `?inline=true`; unsafe active formats remain downloads. Membership and profile scope are enforced for every transfer.
 
 `list_labels` and `create_label` expose the project's reusable tag catalog. Feature/bugfix defaults and existing task tags are included. Task creation/editing uses the existing `labels` array. REST equivalents are `/api/projects/{id}/labels` and `/api/threads/{id}/mentionables`.
 

@@ -92,7 +92,7 @@ def test_no_anonymous_private_metadata_and_static_assets(browser):
     assert client.get('/workspace.js').status_code==200
     assert client.get('/connect.py').status_code==200
     health=client.get('/health').json()
-    assert health['version']=='2.5.0' and health['schema_version']==7
+    assert health['version']=='2.6.0' and health['schema_version']==8
 
 
 def test_activity_order_is_available_through_rest_and_mcp(browser):
@@ -224,3 +224,29 @@ def test_mcp_ticket_selection_lookup_never_creates_and_replays_empty_result(brow
         'found': True, 'claimed': False, 'reason': 'no_ready_ticket', 'retried': True}
     assert snapshot(board) == before
     assert board.get_ticket(human, ticket['id'])['ticket']['claimant'] is None
+
+
+def test_task_attachment_upload_retry_and_rest_mcp_links(browser):
+    client, board = browser
+    human = {'kind': 'human', 'owner_id': 'blackoutburst'}
+    p = board.create_project(human, 'Files', ['blackoutburst'], idempotency_key='files')
+    task = board.create_ticket(human, p['id'], 'Task', idempotency_key='task-files')
+    url = '/api/threads/' + task['thread_id'] + '/attachments'
+    def upload(content=b'file'):
+        return client.post(url, files={'file': ('file.txt', content, 'text/plain')}, data={'idempotency_key': 'stable-file'})
+    first = upload()
+    assert first.status_code == 200
+    assert upload().json() == first.json()
+    assert upload(b'different').status_code == 409
+    response = client.patch('/api/tickets/' + task['id'], json={'expected_version': task['version'], 'attachment_ids': [first.json()['id']]})
+    assert response.status_code == 200
+    assert response.json()['attachments'] == [first.json()]
+    assert client.get('/api/threads/' + task['thread_id']).json()['messages'] == []
+    assert client.get('/api/attachments/' + first.json()['id']).content == b'file'
+    assert client.patch('/api/tickets/' + task['id'], json={'expected_version': response.json()['version'], 'attachment_ids': None}).status_code == 422
+    token = board.create_device(human, 'Files worker', [])['token']
+    rpc(client, token, 'register_agent', {'session_id': 'file-api', 'label': 'File API', 'agent_kind': 'codex'})
+    base = {'session_id': 'file-api', 'ticket_id': task['id']}
+    claimed = rpc(client, token, 'claim_ticket', {**base, 'expected_version': response.json()['version']})
+    updated = rpc(client, token, 'update_ticket', {**base, 'expected_version': claimed['version'], 'changes': {'attachment_ids': []}})
+    assert updated['attachments'] == []

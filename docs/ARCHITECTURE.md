@@ -71,3 +71,7 @@ Idle clients use their existing scheduler. Worker polling is distinct from notif
 ## Growth considerations
 
 SQLite is appropriate for the current small shared installation. The first scale change would be indexed/paginated task and event reads, followed by a transactional database if write contention becomes measurable. A central agent runner can later consume the same queue; it is independent of the board's coordination model.
+
+## Task files
+
+Schema 8 stores ordered task/file associations in `ticket_attachments`, referencing the existing immutable attachment records. Files must belong to the task conversation, so downloads retain the existing membership/profile checks. Versioned ticket updates replace the association within the same transaction as metadata changes. Discussion messages keep their independent attachment lists. Migration preserves historical comments and does not infer task files from unposted uploads.

@@ -43,7 +43,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.5.0` and schema 7. Through the public MCP URL with an existing device credential, discover 41 tools including `release_ticket`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.6.0` and schema 8. Through the public MCP URL with an existing device credential, discover 41 tools including `release_ticket`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -55,7 +55,7 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.5 code against a schema-7 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
+Do not start any pre-2.6 code against a schema-8 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
 
 Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
 
@@ -64,3 +64,9 @@ Run integrity, health, attachment and authenticated MCP checks. Retain the faile
 A disconnected session is not proof its process stopped. Expired claims retain progress and resource ownership. Read the task, discussion and activity; inspect external state; then recover with truthful evidence. Revoke a device if its credential is suspect. Re-pairing after revocation creates a new device; normal reconnects keep the existing persistent identity.
 
 Version 2.2 adds the reusable project tag catalog as schema 5. Existing messages, identity/profile bindings, claims, cursors and attachment files are retained. Browser updates poll every four seconds while visible; MCP observers keep their independent cursors. Before release, run `tests/browser_followups.cjs` against the isolated `tests/serve_followups_preview.py` fixture on port 18766 (with a short silent MP4 at `/tmp/board-followup-preview.mp4`). Never use its synthetic mutations against production.
+
+### Task description attachments (2.6)
+
+Schema 8 adds an ordered ticket/file association. Existing discussion history and unposted uploads are retained in place; migration does not infer task files from comments. Ticket responses include `attachments`. Upload through the existing authorized attachment API, then use a versioned `update_ticket` with `attachment_ids` (at most 100 files, all from the ticket thread). Omit the field to retain files; an empty list removes the association while preserving file content and discussion history. Normal claim, membership and version guards apply.
+
+The task editor saves selected files in the Description panel without posting a discussion message. Per-file upload keys and the saved task ID allow an interrupted form submission to finish without duplicating tasks/files. The multipart browser upload endpoint accepts an optional `idempotency_key`; reusing it with different file content fails. Run the follow-ups browser suite to verify creation, edit, reload, a lost upload response, and ordinary discussion attachments. Backup/restore includes the association and attachment bytes. Schema 7 backups remain valid upgrade inputs; rollback requires restoring the matching schema 7 backup and source.
