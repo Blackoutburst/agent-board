@@ -54,6 +54,14 @@ explicit requalification with new private plans, never editing old pins.
 Requalification does not replace the plans or controller source already sealed
 by an existing family; that family requires review after a software change.
 
+From adapter 0.20, native test plans use schema/profile 2 and pin each reviewed
+script separately from the manifest's model file allowlist. A trusted script
+must not be included in a child's or parent's patch capabilities, including
+case/Unicode aliases or the same physical file. Qualification and each new
+execution verify those pins; the test executes the held verified bytes. Old
+unbound plans are refused. Prepare fresh plans explicitly instead of editing old
+plan hashes or widening the model's capabilities to include the check scripts.
+
 ## Private configuration
 
 `prepare --config-file` reads one bounded private JSON file, at most 512 KiB.
