@@ -134,7 +134,10 @@ class DevelopmentFence:
 
     def _read(self):
         state = decode(self.private.read('fence.json', 2 * 1024 * 1024))
-        if (type(state) is not dict or set(state) != {'schema', 'records'} or state['schema'] != 1
+        return self._validate(state)
+
+    def _validate(self, state):
+        if (type(state) is not dict or set(state) != {'schema', 'records'} or state['schema'] not in (1, 2)
                 or type(state['schema']) is not int or type(state['records']) is not dict):
             raise DevelopmentError('fence_corrupt')
         try:
@@ -146,23 +149,35 @@ class DevelopmentFence:
                 _scope(binding['scope'])
                 sha256(binding['configuration_hash'])
                 if (type(value) is not dict or set(value) != {'binding', 'operation_id'}
-                        or type(binding) is not dict or set(binding) != {'scope', 'root_identity',
-                            'journal', 'configuration_hash', 'child_scope'}
+                        or type(binding) is not dict or set(binding) not in ({'scope', 'root_identity',
+                            'journal', 'configuration_hash', 'child_scope'}, {'scope', 'root_identity',
+                            'journal', 'configuration_hash', 'child_scope', 'parent_scope'})
                         or type(binding['root_identity']) is not list or len(binding['root_identity']) != 2
                         or any(type(item) is not int or item < 0 for item in binding['root_identity'])
                         or str(uuid.UUID(value['operation_id'])) != value['operation_id']
                         or key != self.key(binding['scope'], binding['root_identity'])):
                     raise ValueError
+                if 'parent_scope' in binding:
+                    parent = binding['parent_scope']
+                    if (state['schema'] != 2 or type(parent) is not dict or set(parent) !=
+                            {'operation_id', 'journal', 'configuration_hash'}
+                            or str(uuid.UUID(parent['operation_id'])) != parent['operation_id']
+                            or parent['operation_id'] != value['operation_id']):
+                        raise ValueError
+                    sha256(parent['configuration_hash'])
                 children = binding['child_scope']
                 if (type(children) is not dict or set(children) != {'work_id', 'runs', 'runtime'}
                         or str(uuid.UUID(children['work_id'])) != children['work_id']):
                     raise ValueError
-                for pin in (binding['journal'], children['runs'], children['runtime']):
+                for pin in ([binding['journal'], children['runs'], children['runtime']] +
+                            ([binding['parent_scope']['journal']] if 'parent_scope' in binding else [])):
                     if (type(pin) is not dict or set(pin) != {'path', 'identity'}
                             or type(pin['path']) is not str or not pin['path'].startswith('/')
                             or type(pin['identity']) is not list or len(pin['identity']) != 2
                             or any(type(v) is not int or v < 0 for v in pin['identity'])):
                         raise ValueError
+            roots=[tuple(value['binding']['root_identity']) for value in state['records'].values()]
+            if len(set(roots))!=len(roots):raise ValueError
         except Exception:
             raise DevelopmentError('fence_corrupt') from None
         return state
@@ -185,11 +200,51 @@ class DevelopmentFence:
             if len(state['records']) >= 4096:
                 raise DevelopmentError('fence_full')
             state['records'][key] = {'binding': binding, 'operation_id': operation_id}
+            if 'parent_scope' in binding:
+                state['schema'] = 2
+            self._validate(state)
             encoded = canonical(state)
             if len(encoded) > 2 * 1024 * 1024:
                 raise DevelopmentError('fence_full')
             self.private.replace('fence.json', encoded)
             return operation_id, True
+
+    def attach(self, binding, operation_id, parent_binding):
+        """One exact parent-to-planner transition, never release/rekey a root."""
+        with self.lock():
+            state = self._read()
+            key = self.key(binding['scope'], binding['root_identity'])
+            found = state['records'].get(key)
+            if found == {'binding': binding, 'operation_id': operation_id}:
+                return operation_id, False
+            if (found != {'binding': parent_binding, 'operation_id': operation_id}
+                    or 'parent_scope' not in binding
+                    or binding['parent_scope'] != parent_binding.get('parent_scope')
+                    or any(binding[k] != parent_binding.get(k) for k in
+                        ('scope', 'root_identity', 'journal', 'child_scope'))
+                    or binding['parent_scope']['operation_id'] != operation_id
+                    or parent_binding['configuration_hash'] != binding['parent_scope']['configuration_hash']):
+                raise DevelopmentError('canonical_parent_conflict')
+            state['schema'] = 2
+            state['records'][key] = {'binding': binding, 'operation_id': operation_id}
+            self._validate(state)
+            encoded = canonical(state)
+            if len(encoded) > 2 * 1024 * 1024:
+                raise DevelopmentError('fence_full')
+            self.private.replace('fence.json', encoded)
+            return operation_id, True
+
+    def inspect_checkout(self, root_identity):
+        with self.lock():
+            values=[value for value in self._read()['records'].values()
+                    if value['binding']['root_identity']==list(root_identity)]
+            return None if not values else decode(canonical(values[0]))
+
+    def inspect_binding(self, scope, root_identity):
+        """Local metadata only, for refusing a conflicting parent before MCP."""
+        with self.lock():
+            found=self._read()['records'].get(self.key(scope,root_identity))
+            return None if found is None else decode(canonical(found))
 
     def verify(self, binding, operation_id):
         with self.lock():

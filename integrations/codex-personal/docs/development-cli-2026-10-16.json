@@ -1,0 +1,55 @@
+{
+  "actual_mcp_endpoint_calls": 0,
+  "actual_model_turns": 0,
+  "base_commit": "00f95e410f347427e22c7a5c6d206c8dc2d14fb6",
+  "checks": {
+    "conflicting_journal_refuses_locally_before_mcp": true,
+    "connection_hardlink_symlink_refused": true,
+    "crash_after_parent_claim_context_resume_exact": true,
+    "explicit_review_publication_exact_lost_reply_reconciliation": true,
+    "external_change_not_silently_adopted": true,
+    "inspection_output_outside_checkout_and_planner": true,
+    "lost_claim_reply_exact_reconciliation": true,
+    "no_implicit_profile_registration": true,
+    "offline_status_stop_inspect": true,
+    "post_claim_renew_context_sealed": true,
+    "prepare_read_plan_without_claim_runtime_model_or_test": true,
+    "real_empty_board_grants_refuse": true,
+    "same_uuid_parent_fence_before_mutating_mcp": true,
+    "stop_available_while_model_holds_work_lock": true
+  },
+  "date": "2026-10-16",
+  "kind": "explicit_development_cli_fixture_validation",
+  "limits": [
+    "Existing controller-prepared manifest and already qualified policy/backend required; prepare never qualifies.",
+    "Current native implementation requires separately qualified Darwin host, no Linux/model pilot here.",
+    "Shared context is checked multi-read composition, not an atomic Board transaction.",
+    "One sealed model/instruction/context; no silent claim renewal or context rebase after final seal.",
+    "Revoked authority may require explicit human/Runtime cleanup inspection; never re-register to evade revocation.",
+    "Dated review snapshot is not fresh validation of later file state or code acceptance.",
+    "Canonical fence local format2 is same-user/same-machine, not administrator-erasure resistance or multi-host HA.",
+    "An uncertainty between final fence attachment and planner-journal creation remains review.",
+    "No automatic fence release, listener, queue selection, API fallback or ticket-done operation."
+  ],
+  "native_qualifications_in_this_lot": 0,
+  "production_calls": 0,
+  "schema": 1,
+  "source_sha256": {
+    "cli.py": "8fdd2346285ccf820a03b4a8accb4f7d093982338458023ff1fb7c2a67cf83f5",
+    "dev_fence.py": "ac21b2b184043b7083403c8182245c22ee83a8055bc66d586882149dd9ba2244",
+    "dev_planner.py": "46272e749e9594fc1e7dc5d8ec8de53b3137d3acd8e0322cf9b658b0ba65396c",
+    "development_authorization.py": "3063a379e3991f27e1da287d69056522ce9fcce735043ad2c16cadcd13faae66",
+    "development_cli.py": "4ed585b0a98122c8f3b9925c0d58a81b05273fc96708cd390b5e270d7f8f5f68",
+    "development_client.py": "977319ed68784f531b4b9af7e05b3e0c9b36550a55d154425c63dbaf0bcdf2bb",
+    "development_worker.py": "882993b43c9fbc5e460df90c8b2588728b296c7298e7942f788cff906ee92d4b"
+  },
+  "tests": {
+    "development_methods": 146,
+    "new_cli_methods": 3,
+    "new_client_methods": 4,
+    "new_parent_fence_methods": 1,
+    "new_workflow_methods": 15,
+    "runtime_methods": 56,
+    "targeted_passed": 202
+  }
+}

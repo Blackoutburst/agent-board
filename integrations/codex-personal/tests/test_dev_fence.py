@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 from blackoutburst_agents.dev_fence import DevelopmentFence, canonical_anchor, normalized_origin
@@ -45,6 +46,26 @@ class FenceTests(unittest.TestCase):
         with self.assertRaises(DevelopmentError) as caught:
             fence.verify({}, 'unused')
         self.assertEqual(caught.exception.code, 'fence_corrupt')
+
+    def test_parent_attach_keeps_uuid_and_never_adopts_other_parent(self):
+        fence=DevelopmentFence(_test_anchor=self.base/'anchor');self.addCleanup(fence.close)
+        identifier=str(uuid.uuid4());work_id=str(uuid.uuid4())
+        pin={'path':str(self.base),'identity':[1,2]}
+        scope=dict(owner_id='owner',agent_id='agent',project_id='project',ticket_id='ticket',
+                   board_session_id='session',board_endpoint='https://board.test/mcp')
+        parent_scope={'operation_id':identifier,'journal':pin,'configuration_hash':'a'*64}
+        parent={'scope':scope,'root_identity':[3,4],'journal':pin,'configuration_hash':'a'*64,
+                'child_scope':{'work_id':work_id,'runs':pin,'runtime':pin},'parent_scope':parent_scope}
+        self.assertEqual(fence.bind(parent,identifier),(identifier,True))
+        self.assertEqual(json.loads((self.base/'anchor/fence.json').read_text())['schema'],2)
+        final={**parent,'configuration_hash':'b'*64}
+        with self.assertRaises(DevelopmentError):fence.attach(final,str(uuid.uuid4()),parent)
+        self.assertEqual(fence.inspect_binding(scope,[3,4])['binding'],parent)
+        self.assertEqual(fence.attach(final,identifier,parent),(identifier,True))
+        self.assertEqual(fence.attach(final,identifier,parent),(identifier,False))
+        fence.verify(final,identifier)
+        with self.assertRaises(DevelopmentError):fence.bind(parent,str(uuid.uuid4()))
+        self.assertEqual(fence.inspect_binding(scope,[3,4])['operation_id'],identifier)
 
     def test_replaced_lock_is_refused(self):
         fence = DevelopmentFence(_test_anchor=self.base / 'anchor')
