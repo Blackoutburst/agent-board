@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "observed_on": "2026-10-16",
+  "board_version": "2.10.0",
+  "schema_version": 12,
+  "adapter_version": "0.22.0",
+  "qualified_revision": "b067c2c7dd707a6dc1edcacc1d4cff9b78649e79",
+  "implementation_revision": "7443ced335c47175e00ff8338f3a3671ccd04234",
+  "integrated_upstream": "891790b6e85410da1000a47ed2e263942e6e3fe7",
+  "validation": {
+    "mac_adapter": {
+      "passed": 1001,
+      "warnings": 1,
+      "seconds": 231.12
+    },
+    "linux_adapter": {
+      "passed": 1000,
+      "seconds": 396.32,
+      "skipped": 1,
+      "warning": 1
+    },
+    "mac_adapter_sources_identical_to_qualified_revision": true,
+    "linux_runner_sha256": "cee3847137b21fa827d6b36e74ff88838359fe5bdfcc9055a69c454e5b6f2dc8",
+    "linux_archive_sha256": "9566ead4e829a64ef5422d28484fc9eea8fb20e2d7533b01994935f133049520",
+    "linux_skip_reason": "Directory alias identity scenario requires a case-insensitive filesystem.",
+    "server_tests_reused": {
+      "passed": 707,
+      "seconds": 192.63,
+      "warnings": 291
+    },
+    "server_measured_revision": "bd848bd3ae1d5d19aa17d82c3cb3b57f8562541c",
+    "all_server_python_and_test_sources_identical": true,
+    "server_sources_compared": 112,
+    "temporary_sources_removed": true,
+    "independent_review": {
+      "code_revision": "7443ced335c47175e00ff8338f3a3671ccd04234",
+      "targeted_tests": 21,
+      "independent_regressions": 12,
+      "findings_remaining": 0
+    }
+  },
+  "native_qualification_receipts": [
+    "native-auth-named-tests-20261016.json",
+    "native-auth-supervisor-20261016.json",
+    "native-auth-planner-policy-20261016.json"
+  ],
+  "inspection_contract": {
+    "exact_manifest_scope_resource_action": true,
+    "current_registration_grants_root_family_source_required": true,
+    "callback_disabled_before_yield_and_on_failure": true,
+    "native_backend_supervisor_and_normal_worker_unchanged": true
+  },
+  "limitations": [
+    "Native execution qualified only for the measured Darwin CLI/toolchain.",
+    "This qualification contains no actual subscription model run; the refused first proposal created no family/fence/provider dialogue.",
+    "A new explicit local proposal follows publication. Remote and multi-owner acceptance remain separate."
+  ],
+  "model_calls": 0,
+  "auth_rpc_calls_requested": 0,
+  "production_worker_enabled": false
+}

@@ -200,3 +200,13 @@ the running process or its OS sandbox. There is no expiry, release/rekey shortcu
 provider-session adoption. This fence coordinates one OS user and machine only;
 it cannot protect against an administrator rolling back all state or coordinate
 multiple hosts. Restoring state does not reverse source or external effects.
+
+
+From adapter 0.22, native qualification inspection uses the coordinator's live
+authority and the exact slot manifest, registered session, resource and current
+grants. This inspection can occur before a child claim. Its callback is enabled
+only while entering the qualification check, then disabled before the inspected
+backend is returned for reading pins. It cannot authorize execution. Native test
+and model effects continue through the normal worker's own claim and Runtime
+admission. Revocation, stop, deadline and changed source or manifest still refuse
+inspection.
