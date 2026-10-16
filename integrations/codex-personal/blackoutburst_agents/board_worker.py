@@ -14,6 +14,7 @@ import time
 
 from .board_reader import BoardReadError
 from .context import ContextError, ContextScope, build_context, _profile, _hash
+from .decision_memory import DecisionMemoryError, memory_scope
 from .run_store import StoreError
 from .runner import PersonalRunner
 from .work_journal import JournalError
@@ -64,13 +65,14 @@ class BoardWorker:
     conversation reuse across separate connections with coincident board IDs.
     """
 
-    def __init__(self, journal, run_store, client, runner_factory=PersonalRunner, *, runtime_guard_factory=None):
+    def __init__(self, journal, run_store, client, runner_factory=PersonalRunner, *, runtime_guard_factory=None, decision_memory=None):
         self.journal, self.run_store, self.client = journal, run_store, client
         self.runner_factory = runner_factory
         self.runtime_guard_factory = runtime_guard_factory
+        self.decision_memory = decision_memory
 
     def _call(self, name, args):
-        if name not in {'get_ticket', 'get_thread', 'claim_ticket', 'renew_ticket', 'update_ticket', 'request_human_input', 'lookup_human_request'}:
+        if name not in {'get_ticket', 'get_thread', 'get_message', 'claim_ticket', 'renew_ticket', 'update_ticket', 'request_human_input', 'lookup_human_request'}:
             raise _Stop('operation_not_allowed')
         try:
             return self.client.call(name, args)
@@ -156,15 +158,17 @@ class BoardWorker:
         except Exception:
             raise _DurabilityUnavailable() from None
 
-    def _context(self, scope, registration):
+    def _context(self, scope, registration, decision_descriptor=None):
+        options = ({'decision_memory':self.decision_memory,'decision_descriptor':decision_descriptor,
+                    'board_endpoint':scope['board_endpoint']} if self.decision_memory is not None or decision_descriptor is not None else {})
         return build_context(self._call, scope=ContextScope(**{key: scope[key] for key in
-            ('owner_id', 'agent_id', 'project_id', 'ticket_id')}), registration=registration)
+            ('owner_id', 'agent_id', 'project_id', 'ticket_id')}), registration=registration,**options)
 
     def _check_context(self, op, registration, *, remaining=0):
         scope = op['scope']
         ticket = self._ticket(scope)
         self._assert_claim(ticket, registration, scope, remaining=remaining)
-        current = self._context(scope, registration)
+        current = self._context(scope, registration, op['configuration'].get('decision_memory'))
         if current['fingerprint'] != op['payload']['context']['fingerprint']:
             raise _Stop('context_changed')
         # The composer intentionally does not include lease metadata. Recheck it
@@ -203,6 +207,10 @@ class BoardWorker:
                 raise _Stop('invalid_work_request')
             config = {'instruction': instruction, 'workspace': str(Path(workspace).expanduser().resolve(strict=True)),
                       'executable': str(Path(executable).expanduser().resolve(strict=True)), 'model': model, 'timeout': timeout}
+            if self.decision_memory is not None:
+                selected_scope=memory_scope(scope['board_endpoint'],ContextScope(**{key:scope[key] for key in
+                    ('owner_id','agent_id','project_id','ticket_id')}))
+                config['decision_memory']=self.decision_memory.descriptor(selected_scope)
             routing = routing_configuration(model_policy, task_class, owner_id=scope['owner_id'])
             if routing is not None:
                 config['routing'] = routing
@@ -255,6 +263,8 @@ class BoardWorker:
                 except Exception:
                     pass
             return _receipt(operation, reason='effect_unconfirmed', pending=True)
+        except DecisionMemoryError as error:
+            return _receipt(reason=error.code)
         except JournalError:
             return _receipt(reason='local_operation_conflict')
         except PolicyError as error:
@@ -301,9 +311,19 @@ class BoardWorker:
     def _execute_model(self, op, should_cancel):
         options = ({'runtime_guard': self.runtime_guard_factory(op['scope'])}
             if self.runtime_guard_factory is not None else {})
+        def cancelled():
+            if should_cancel is not None and should_cancel():return True
+            if self.decision_memory is not None:
+                try:
+                    selected_scope=memory_scope(op['scope']['board_endpoint'],ContextScope(**{key:op['scope'][key] for key in
+                        ('owner_id','agent_id','project_id','ticket_id')}))
+                    self.decision_memory.require(selected_scope,op['configuration']['decision_memory'])
+                except DecisionMemoryError:return True
+            return False
         value = self.runner_factory(self.run_store, **options).run(op['payload']['work_id'],
             op['payload']['run_request_id'], op['payload']['prompt'], timeout=op['configuration']['timeout'],
-            should_cancel=should_cancel)
+            should_cancel=cancelled if self.decision_memory is not None else should_cancel,
+            **({'context_guard':op['configuration']['decision_memory']} if op['configuration'].get('decision_memory') is not None else {}))
         result = value['result']
         if result.get('status') not in ('completed', 'blocked', 'cancelled'):
             raise _Stop('model_result_invalid')
@@ -487,7 +507,7 @@ class BoardWorker:
             self._assert_claim(ticket, registration, scope, remaining=config['timeout'] + 10)
             if ticket['version'] != expected + 1:
                 raise _Stop('claim_version_changed')
-            context = self._context(scope, registration)
+            context = self._context(scope, registration, config.get('decision_memory'))
             if context['sources']['ticket']['version'] != ticket['version']:
                 raise _Stop('context_changed')
             prompt = (self._human_format(True) + 'Continue only the original human instruction below, as a text-only response. '
@@ -549,7 +569,7 @@ class BoardWorker:
             self._assert_claim(ticket, registration, scope, remaining=config['timeout'] + 10)
             if ticket['version'] != op['payload']['claim_version']:
                 raise _Stop('context_changed')
-            context = self._context(scope, registration)
+            context = self._context(scope, registration, config.get('decision_memory'))
             if context['sources']['ticket']['version'] != ticket['version']:
                 raise _Stop('context_changed')
             if 'route_decision' in op['payload']:
@@ -581,8 +601,10 @@ class BoardWorker:
                 # a RunStore work. A retry of claimed must validate, not reroute.
                 op = self._save(op, 'claimed', context=context, prompt=prompt,
                                 route_decision=decision.to_dict(), selected_model=decision.model)
-            local_agent = 'board-agent-' + hashlib.sha256(_json({key: scope[key] for key in
-                ('board_endpoint', 'board_session_id', 'agent_id')}).encode()).hexdigest()
+            local_identity={key:scope[key] for key in ('board_endpoint','board_session_id','agent_id')}
+            if config.get('decision_memory') is not None:
+                local_identity['decision_memory']=config['decision_memory']
+            local_agent = 'board-agent-' + hashlib.sha256(_json(local_identity).encode()).hexdigest()
             work = self.run_store.create_work(owner_id=scope['owner_id'], agent_id=local_agent,
                 project_id=scope['project_id'], ticket_id=scope['ticket_id'], workspace=config['workspace'],
                 executable=config['executable'], model=op['payload'].get('selected_model', config['model']))

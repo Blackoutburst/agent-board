@@ -12,7 +12,7 @@ import json
 from .board_reader import BoardReader, BoardReadError, MAX_CONNECTION_BYTES, _endpoint, _text
 
 
-WORKER_TOOLS = frozenset({'get_ticket', 'get_thread', 'claim_ticket', 'renew_ticket', 'update_ticket'})
+WORKER_TOOLS = frozenset({'get_ticket', 'get_thread', 'get_message', 'claim_ticket', 'renew_ticket', 'update_ticket'})
 
 
 def _identifier(value):
@@ -38,6 +38,11 @@ def _arguments(name, args):
             raise ValueError
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise BoardReadError('invalid_arguments') from None
+    if name == 'get_message':
+        if set(values) != {'thread_id','message_id'}:
+            raise BoardReadError('invalid_arguments')
+        _identifier(values['thread_id']);_identifier(values['message_id'])
+        return values
     if name == 'get_thread':
         if set(values) - {'thread_id', 'before', 'limit'} or 'thread_id' not in values:
             raise BoardReadError('invalid_arguments')

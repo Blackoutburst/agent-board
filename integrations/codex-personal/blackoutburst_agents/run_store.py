@@ -108,12 +108,14 @@ class RunStore:
                     os.close(_private_file(sidecar))
             self._db = sqlite3.connect(database, timeout=5, isolation_level=None)
             self._db.row_factory = sqlite3.Row
-            if self._db.execute("PRAGMA user_version").fetchone()[0] not in (0, 1):
-                raise StoreError("unsupported_state_version")
+            version=self._db.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0,1,2):raise StoreError("unsupported_state_version")
+            if version==2 and tuple(row['name'] for row in self._db.execute('PRAGMA table_info(context_guards)'))!=('work_id','guard_json'):
+                raise StoreError('context_guard_invalid')
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.execute("PRAGMA journal_mode=DELETE")
             self._db.execute("PRAGMA synchronous=FULL")
-            self._db.executescript("""
+            schema = """
                 CREATE TABLE IF NOT EXISTS works (
                     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, agent_id TEXT NOT NULL,
                     project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, workspace TEXT NOT NULL,
@@ -133,8 +135,14 @@ class RunStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS one_running_turn ON turns(work_id)
                     WHERE status = 'running';
-                PRAGMA user_version=1;
-            """)
+                CREATE TABLE IF NOT EXISTS context_guards (
+                    work_id TEXT PRIMARY KEY REFERENCES works(id), guard_json TEXT NOT NULL
+                );
+                PRAGMA user_version=2;
+            """
+            with self._transaction() as db:
+                for statement in schema.split(';'):
+                    if statement.strip():db.execute(statement)
         except StoreError:
             if self._db is not None:
                 self._db.close()
@@ -216,6 +224,46 @@ class RunStore:
                 executable,model,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (work_id, *scope, workspace, executable, model, "open", now, now))
             return self._work(work_id)
+
+    @staticmethod
+    def _guard_value(value):
+        try:
+            if not isinstance(value,dict) or set(value)!={'instance_id','scope_key','generation','revision','sha256'}:raise ValueError
+            _uuid(value['instance_id'])
+            for key in ('scope_key','sha256'):
+                if not isinstance(value[key],str) or len(value[key])!=64 or any(c not in '0123456789abcdef' for c in value[key]):raise ValueError
+            if any(type(value[k]) is not int or value[k]<1 for k in ('generation','revision')):raise ValueError
+            return value
+        except Exception:raise StoreError('context_guard_invalid') from None
+
+    def get_context_guard(self,work_id):
+        self._work(work_id)
+        try:
+            row=self._db.execute('SELECT guard_json FROM context_guards WHERE work_id=?',(work_id,)).fetchone()
+            if row is None:return None
+            if len(row['guard_json'].encode())>2048:raise ValueError
+            def pairs(items):
+                out={}
+                for key,value in items:
+                    if key in out:raise ValueError
+                    out[key]=value
+                return out
+            return self._guard_value(json.loads(row['guard_json'],object_pairs_hook=pairs))
+        except Exception:raise StoreError('context_guard_invalid') from None
+
+    def check_context_guard(self,work_id,supplied):
+        self._require_lock(work_id)
+        with self._transaction() as db:
+            previous=self.get_context_guard(work_id)
+            if previous is not None:
+                if supplied is None:raise StoreError('context_guard_required')
+                if previous!=self._guard_value(supplied):raise StoreError('context_guard_changed')
+                return
+            if supplied is None:return
+            supplied=self._guard_value(supplied)
+            if self._work(work_id)['provider_session_id'] is not None:raise StoreError('context_guard_session_unbound')
+            if db.execute('SELECT COUNT(*) FROM context_guards').fetchone()[0]>=256:raise StoreError('context_guard_capacity')
+            db.execute('INSERT INTO context_guards VALUES(?,?)',(work_id,json.dumps(supplied,sort_keys=True,separators=(',',':'))))
 
     def get_work(self, work_id):
         return self._work(work_id)

@@ -47,7 +47,7 @@ La commande `context check --key … --connection-file … --session …` vérif
 
 ## Sources, bornes et versions
 
-Le compositeur utilise seulement `get_ticket` et `get_thread`. Le premier fournit aussi le projet. Les identifiants et les relations propriétaire, agent, projet, ticket et conversation sont vérifiés. Le board 2.1 applique les droits du profil, les projets sélectionnés et les droits du propriétaire à chaque lecture. La configuration reçue doit appartenir à l’agent attendu, être active et correspondre exactement à la version épinglée dans sa session.
+Sans mémoire optionnelle, le compositeur utilise seulement `get_ticket` et `get_thread`. Les pins explicites ajoutent des lectures exactes `get_message`, sans élargir la portée. Le premier fournit aussi le projet. Les identifiants et les relations propriétaire, agent, projet, ticket et conversation sont vérifiés. Le board 2.1 applique les droits du profil, les projets sélectionnés et les droits du propriétaire à chaque lecture. La configuration reçue doit appartenir à l’agent attendu, être active et correspondre exactement à la version épinglée dans sa session.
 
 Par défaut, le JSON canonique est limité à **48 000 octets UTF-8**, à 40 messages récents, trois pages au maximum et 20 éléments par liste de métadonnées. Chaque champ textuel commence avec une limite de 6 000 octets. Le compositeur réduit ces limites si nécessaire et signale les extraits tronqués, listes réduites et anciennes conversations non chargées. Il garde les références indispensables ou refuse un budget impossible. Les corps des pièces jointes et tâches historiques ne sont pas chargés dans le contexte. Une réponse HTTP dépassant 2 Mio est refusée avant composition.
 
@@ -55,7 +55,7 @@ Les sources incluent le profil disponible (identité, nom, type, compétences et
 
 Les pages sont ancrées à la tranche la plus récente lue au départ. Le ticket et le projet sont relus après la pagination pour détecter une modification pendant la préparation. Le board ne fournit pas de transaction atomique couvrant profil, projet et messages : un changement après la dernière lecture reste possible. Le contrôle ne réserve pas le ticket et ne garantit pas une permission pour un effet futur.
 
-Ce contexte est un extrait versionné, pas un résumé généré ni une mémoire sémantique exhaustive. Une décision importante plus ancienne que la fenêtre doit être reportée dans le contexte du projet, le résultat ou l’avancement du ticket. La personnalisation du profil est éditable dans le board. Le rappel sémantique d’anciennes décisions reste à développer.
+Ce contexte est un extrait versionné, pas un résumé généré ni une mémoire sémantique exhaustive. Une décision importante hors de la fenêtre peut être épinglée explicitement avec la [mémoire de décisions](MEMORY.md), ou reportée par le propriétaire dans le contexte du projet ou le ticket. La personnalisation du profil reste éditable dans le board. La recherche sémantique automatique n’est pas fournie.
 
 ## Corriger ou réinitialiser
 
@@ -69,3 +69,7 @@ python3 -m blackoutburst_agents context --state private/context forget \
 Cette commande efface toutes les révisions locales de cette portée. Elle ne supprime pas les exports créés explicitement, les sauvegardes externes, le board ni l’historique Codex. Pour éviter de reprendre aussi l’ancien contexte de conversation Codex, fermer le work inactif par `runner resolve --decision abandon --reason …`, puis le recréer. Le nouveau work démarrera une nouvelle session ; cela ne promet pas l’effacement de l’ancien historique du client.
 
 La version du profil et ses préférences complètes participent à l’empreinte avant troncature. Une modification impose une nouvelle inspection. Les droits, appareils liés et travaux actifs ne sont pas transmis au modèle. Les préférences peuvent guider la langue et le style dans le périmètre demandé ; elles ne changent ni fournisseur, ni modèle actif, ni autorisations.
+
+## Décisions anciennes choisies explicitement
+
+Les commandes `prepare`, `check` et `prompt` acceptent `--decision-memory` vers un magasin local déjà inspecté. Les pins restent limités au propriétaire/agent/projet/ticket et à l’origine MCP ; leurs sources anciennes sont relues exactement, sans parcourir tout le board. Un contexte qui contient un descripteur mémoire ne peut pas être utilisé sans le magasin courant correspondant. Reset/retrait/correction et perte de source invalident les anciennes photographies avant un nouveau tour. Voir [MEMORY.md](MEMORY.md), notamment les traces d’audit conservées et la séparation des sessions après reset.

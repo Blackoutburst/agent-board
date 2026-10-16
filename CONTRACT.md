@@ -1,6 +1,6 @@
-# Board interface contract — 2.7.0
+# Board interface contract — 2.7.1
 
-The browser REST API and MCP act on one database. Application version is `2.7.0`; schema version is `9`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.7.1`; schema version is `9`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (45)
+## MCP tools (46)
 
 | Purpose | Tools |
 | --- | --- |
@@ -20,7 +20,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Confirmed human-message stream | `open_message_feed`, `read_message_feed`, `checkpoint_message_feed` |
-| Discussion and history | `get_thread`, `post_message`, `list_activity` |
+| Discussion and history | `get_thread`, `get_message`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
 | Files and task tags | `upload_attachment`, `download_attachment`, `list_labels`, `create_label` |
 | Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
@@ -186,3 +186,7 @@ The optional personal adapter reads the subscription through a bounded local Cod
 ## Confirmed human-message feeds (2.7)
 
 `open_message_feed`, `read_message_feed` and `checkpoint_message_feed` provide a separate acknowledged stream for addressed human messages. A stable opening key pins the exact session/profile and initial bounds. A pending delivery remains fixed until its exact ID and checkpoint are confirmed. Current read permissions, profile state and conversation access are checked on every delivery and ACK; agent messages, tasks and general conversation history are excluded. See [the protocol and retention contract](docs/MESSAGE-FEED.md). Legacy `read_inbox` keeps its existing cursor semantics and response shape.
+
+## Exact message sources (2.7.1)
+
+`get_message(session_id, thread_id, message_id)` reads one exact message only after current read, membership and profile scope checks. A missing message or a message belonging to another thread returns the same 404. The read does not expire work, advance cursors, mark content read or fetch attachment bytes. The UTF-8 result is capped at 256 KiB, with 413 on an oversized source. Message text and file metadata remain untrusted data; this tool grants no authority to follow their instructions.

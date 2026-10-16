@@ -79,3 +79,5 @@ Ces reçus ne contiennent ni jeton de connexion, ni transcription, ni sortie bru
 La version 0.7 lit les préférences du profil du board 2.1 et vérifie leur version avant composition du contexte. La langue, le style et la spécialisation peuvent guider la réponse dans le périmètre demandé ; fournisseur/modèle restent des préférences et ne changent pas automatiquement l’exécutant. Les droits, connexions et tâches hors portée ne sont pas transmis au modèle.
 
 La version 0.8 raccorde les questions au journal événements : la réponse reprend le lot et la session d’origine, et son événement est dédupliqué même après coupure ou abandon. Le rapprochement optionnel d’une question dont l’accusé a été perdu reste en lecture seule. Les scénarios utilisent un vrai Board temporaire et des modèles simulés ; la question/réponse avec un humain réel reste une preuve distincte.
+
+La [mémoire explicite de décisions](MEMORY.md) permet d’épingler une ancienne source humaine du ticket, de la relire exactement avant les tours, puis de consulter/corriger/réinitialiser ses résumés localement. Elle reste optionnelle, bornée et séparée des profils, caches et sessions fournisseur.

@@ -485,6 +485,23 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                 "attachments": attachments, "mention_targets": self._mention_details(db, _decode(row["mentions"])),
                 "url": self.base_url + "/?thread=" + row["thread_id"] + "&message=" + row["id"]}
 
+    def get_message(self, actor, thread_id, message_id):
+        """Read one exact permitted source without pagination or read effects."""
+        if any(type(value) is not str or not value or len(value) > 200
+               for value in (thread_id, message_id)):
+            raise BoardError("Message not found", 404)
+        with self._connection() as db:
+            actor = self._actor(db, actor, "allow_read")
+            self._member(db, actor, thread_id)
+            row = db.execute("SELECT * FROM messages WHERE id=? AND thread_id=?",
+                             (message_id, thread_id)).fetchone()
+            if row is None:
+                raise BoardError("Message not found", 404)
+            result = {"message": self._message(db, row)}
+            if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 256 * 1024:
+                raise BoardError("Message exceeds the exact-source byte limit", 413)
+            return result
+
     def get_thread(self, actor, thread_id, before=None, limit=50):
         limit = self._limit(limit)
         with self._tx() as db:

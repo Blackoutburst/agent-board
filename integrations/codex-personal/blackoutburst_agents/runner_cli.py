@@ -1,6 +1,7 @@
 """Human-invoked commands for one personal installation."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ def configure_parser(parser):
     turn.add_argument('--timeout', type=float, default=120)
     turn.add_argument('--output-text', type=Path, help='Écrire explicitement la réponse privée dans ce fichier.')
     turn.add_argument('--context-state', type=Path)
+    turn.add_argument('--decision-memory',type=Path,help='Magasin privé exact requis si le contexte inspecté épingle une mémoire.')
     turn.add_argument('--context-key')
     turn.add_argument('--context-fingerprint')
     turn.add_argument('--board-connection', type=Path)
@@ -64,10 +66,13 @@ def _write_private(path: Path, value: str):
 
 def run(args):
     from .board_reader import BoardReadError
-    from .context import ContextError
+    from .context import ContextError,ContextScope
     from .context_cache import ContextCache, ContextCacheError
     from .context_cli import verified_context, render_prompt
     store = None
+    memory_resources=ExitStack()
+    memory=None
+    artifact=None
     try:
         store = RunStore(args.state)
         if args.runner_command == 'create':
@@ -99,6 +104,11 @@ def run(args):
             if not raw or len(raw) > 65536:
                 raise ValueError('invalid_prompt_size')
             prompt = raw.decode('utf-8', 'strict')
+            if args.decision_memory is not None:
+                from .decision_memory import DecisionMemory
+                memory=memory_resources.enter_context(DecisionMemory(args.decision_memory,create=False))
+            if memory is not None and args.context_state is None:
+                raise ContextCacheError('incomplete_context_arguments')
             context_args = (args.context_state, args.context_key, args.context_fingerprint,
                             args.board_connection, args.board_session)
             if any(v is not None for v in context_args):
@@ -108,7 +118,10 @@ def run(args):
                 scope = {k: work[k] for k in ('owner_id', 'agent_id', 'project_id', 'ticket_id')}
                 with ContextCache(args.context_state) as cache:
                     artifact = verified_context(cache, args.context_key, args.context_fingerprint,
-                                                args.board_connection, args.board_session, scope)
+                                                args.board_connection, args.board_session, scope,
+                                                **({'decision_memory':memory} if memory is not None else {}))
+                if memory is not None:
+                    memory.bind_work(ContextScope(**artifact['scope']),artifact['sources']['decision_memory'],work)
                 prompt = render_prompt(artifact, prompt)
             cancelled = threading.Event()
             previous = {}
@@ -117,8 +130,16 @@ def run(args):
             try:
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     previous[signum] = signal.signal(signum, lambda *_: cancelled.set())
+                def should_cancel():
+                    if cancelled.is_set():return True
+                    if memory is not None:
+                        try:
+                            memory.require_descriptor(ContextScope(**artifact['scope']),artifact['sources']['decision_memory'])
+                        except Exception:return True
+                    return False
                 value = PersonalRunner(store).run(args.work, args.request, prompt,
-                    timeout=args.timeout, should_cancel=cancelled.is_set)
+                    timeout=args.timeout, should_cancel=should_cancel if memory is not None else cancelled.is_set,
+                    **({'context_guard':artifact['sources']['decision_memory']} if memory is not None else {}))
             finally:
                 for signum, handler in previous.items():
                     signal.signal(signum, handler)
@@ -136,5 +157,6 @@ def run(args):
         print(json.dumps({'status': 'blocked', 'reason': 'invalid_configuration_or_local_io'}))
         return 2
     finally:
+        memory_resources.close()
         if store is not None:
             store.close()

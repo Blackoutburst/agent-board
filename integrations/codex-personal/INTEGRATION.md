@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.7.0**, schéma **9**, adaptateur **0.14.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.7.1**, schéma **9**, adaptateur **0.15.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
@@ -24,7 +24,7 @@ Les préférences de fournisseur des profils ne prouvent ni accès ni connexion.
 
 `BoardReader` enregistre une présence avec `autonomous=false`, sans lire l’inbox, puis limite ses lectures à `get_ticket` et `get_thread`. Il injecte la session choisie, refuse les redirections et borne les réponses. `build_context` vérifie la portée owner/agent/project/ticket, sélectionne profil, brief, critères, progression, dépendances, demandes humaines et messages récents, puis produit `blackoutburst-ticket-context-v1`.
 
-Les sources sont identifiées et hachées avant troncature. `ContextCache` conserve dix révisions privées par portée ; inspection et effacement sont explicites. `verified_context` relit les sources autorisées et refuse une empreinte modifiée avant un nouveau tour. Le [guide du contexte](CONTEXT.md) décrit les bornes et les omissions. Une ancienne décision hors de la fenêtre doit encore être reportée dans le brief ou le ticket ; la mémoire sémantique reste à développer.
+Les sources sont identifiées et hachées avant troncature. `ContextCache` conserve dix révisions privées par portée ; inspection et effacement sont explicites. `verified_context` relit les sources autorisées et refuse une empreinte modifiée avant un nouveau tour. Le [guide du contexte](CONTEXT.md) décrit les bornes et les omissions. La [mémoire de décisions](MEMORY.md) permet un pin explicite d’un message humain exact, relu par `get_message`, sans parcourir tout l’historique. Elle sépare les portées, borne les résumés et invalide les anciennes sessions après correction ou reset ; aucune recherche sémantique automatique n’est ajoutée. RunStore passe au format privé 2 : arrêter les anciens coordinateurs avant sa migration locale.
 
 Les messages, résultats, URLs et fichiers sont des données non fiables. Ils ne remplacent ni les instructions locales ni les autorisations. Le contexte ne suit pas automatiquement une URL ou un chemin et ne transmet pas l’historique privé d’un autre propriétaire.
 
@@ -54,4 +54,4 @@ Le noyau `DevelopmentBroker` de 0.13 est une bibliothèque **désactivée par d�
 
 Le [backend supervisé](SUPERVISED_TESTS.md) de 0.14 fournit une qualification locale Mac sur des scénarios synthétiques, dont un crash du contrôleur ; il est opt-in et reste séparé des workers. Linux et le raccordement Runtime du développement restent à qualifier.
 
-Restent à raccorder et à valider : transport de développement, délégation avec contrôle de la famille, mémoire des anciennes décisions, mentions générales et recette distante avec plusieurs agents par propriétaire. Les preuves personnelles locales ne valent pas qualification d’un service mutualisé. Installation, mise à jour, observation de quotas et redémarrage du board n’activent aucun listener ou hôte personnel.
+Restent à raccorder et à valider : transport de développement, délégation avec contrôle de la famille, mentions générales et recette distante avec plusieurs agents par propriétaire. Les preuves personnelles locales ne valent pas qualification d’un service mutualisé. Installation, mise à jour, observation de quotas et redémarrage du board n’activent aucun listener ou hôte personnel.

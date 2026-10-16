@@ -23,7 +23,7 @@ import urllib.request
 MAX_CONNECTION_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PROTOCOL_VERSION = "2025-06-18"
-READ_TOOLS = frozenset({"get_ticket", "get_thread"})
+READ_TOOLS = frozenset({"get_ticket", "get_thread", "get_message"})
 
 
 class BoardReadError(Exception):
@@ -194,6 +194,10 @@ class BoardReader:
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), _NoRedirect(),
             urllib.request.HTTPSHandler(context=_tls_context()))
+
+    @property
+    def endpoint(self):
+        return self._config['mcp_url']
 
     def _rpc(self, method, params):
         self._next_id += 1

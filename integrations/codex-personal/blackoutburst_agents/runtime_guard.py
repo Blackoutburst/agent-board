@@ -13,7 +13,7 @@ import time
 
 from .runtime_client import REASONS
 from .runtime_journal import RuntimeJournal
-from .run_store import StoreError
+from .run_store import StoreError,RunStore
 
 
 class RuntimeControlError(StoreError):
@@ -30,8 +30,10 @@ class RuntimeGuard:
         self.control_failed = False
 
     def configuration(self, work, turn_id):
-        local_agent = 'board-agent-' + hashlib.sha256(json.dumps({key:self.scope[key] for key in
-            ('board_endpoint','board_session_id','agent_id')},ensure_ascii=False,sort_keys=True,
+        identity={key:self.scope[key] for key in ('board_endpoint','board_session_id','agent_id')}
+        if work.get('decision_memory') is not None:
+            identity['decision_memory']=RunStore._guard_value(work['decision_memory'])
+        local_agent = 'board-agent-' + hashlib.sha256(json.dumps(identity,ensure_ascii=False,sort_keys=True,
             separators=(',',':'),allow_nan=False).encode()).hexdigest()
         if (any(work.get(key) != self.scope[key] for key in ('owner_id','project_id','ticket_id'))
                 or work.get('agent_id') != local_agent):

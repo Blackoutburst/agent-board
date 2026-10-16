@@ -98,3 +98,7 @@ Après abandon, une nouvelle clé peut désigner une nouvelle demande explicitem
 Les tests utilisent le vrai Board dans une base temporaire, une inférence simulée et des transports contrôlés. Ils couvrent publication en revue, refus de permission, changement de contexte, concurrence, isolation de propriétaires et connexions, réponses réseau perdues, réouverture du journal, annulation et résultat trop volumineux. Ils ne constituent pas un essai complet de développement autonome sur deux comptes réels.
 
 Le drain durable des événements d’un ticket est documenté dans [EVENTS.md](EVENTS.md). Avec `--human-owner` fixé dès sa création, il conserve et reprend les questions de son propre lot. La sélection des tâches, la délégation et les outils de développement restent des fonctions distinctes. Le listener précédemment arrêté n’est pas réactivé par cette commande.
+
+## Mémoire de décisions optionnelle
+
+`worker run --decision-memory /absolute/private/decisions` ajoute uniquement les décisions explicitement épinglées pour ce ticket. Leur descripteur est immuable pour l’opération et relu avant la reprise humaine et toute inférence/publication. Un reset ou une correction demande une revue ; une nouvelle opération avec la nouvelle génération utilise une session fournisseur distincte. Aucun chemin du magasin ne figure dans le prompt. La réconciliation d’un ancien résultat Runtime reste possible sans relancer le modèle. Voir [MEMORY.md](MEMORY.md).

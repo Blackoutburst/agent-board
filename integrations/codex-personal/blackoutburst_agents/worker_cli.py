@@ -13,6 +13,7 @@ import stat
 import threading
 import uuid
 
+from .decision_memory import DecisionMemory, DecisionMemoryError
 from .board_reader import BoardReadError, _text
 from .board_worker import BoardWorker
 from .human_client import HumanWorkerClient
@@ -41,6 +42,7 @@ def configure_parser(parser):
     run.add_argument('--workspace', required=True, type=Path)
     run.add_argument('--codex', required=True, help='Chemin absolu du client Codex personnel.')
     run.add_argument('--model')
+    run.add_argument('--decision-memory',type=Path,help='Mémoire privée explicite des décisions de ce ticket, épinglée à cette opération.')
     configure_routing(run)
     configure_runtime(run)
     run.add_argument('--human-owner', help='Destinataire fixe d’une éventuelle question ; reprise explicite après sa réponse.')
@@ -142,8 +144,10 @@ def _close_work(store, operation):
     with store.work_lock(work_id):
         work = store.get_work(work_id)
         scope, configuration = operation['scope'], operation['configuration']
-        identity = json.dumps({key: scope[key] for key in ('board_endpoint', 'board_session_id', 'agent_id')},
-                              ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        local_identity={key:scope[key] for key in ('board_endpoint','board_session_id','agent_id')}
+        if configuration.get('decision_memory') is not None:
+            local_identity['decision_memory']=configuration['decision_memory']
+        identity = json.dumps(local_identity,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False)
         agent = 'board-agent-' + hashlib.sha256(identity.encode('utf-8')).hexdigest()
         if (any(work[key] != scope[key] for key in ('owner_id', 'project_id', 'ticket_id'))
                 or work['agent_id'] != agent
@@ -233,6 +237,8 @@ def run(args):
                     for signum in (signal.SIGINT, signal.SIGTERM):
                         previous[signum] = signal.signal(signum, lambda *_: cancelled.set())
                     options = runtime_worker_options(args, client, resources)
+                    if args.decision_memory is not None:
+                        options['decision_memory']=resources.enter_context(DecisionMemory(args.decision_memory,create=False))
                     result = BoardWorker(journal, store, client, **options).run(scope=scope,
                         request_id=args.request, instruction=instruction, workspace=workspace,
                         executable=executable, model=args.model, timeout=args.timeout,
@@ -246,7 +252,7 @@ def run(args):
             exit_code = 0 if output['status'] == 'complete' else 2
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return exit_code
-    except (JournalError, StoreError, BoardReadError, PolicyError) as error:
+    except (JournalError, StoreError, BoardReadError, PolicyError, DecisionMemoryError) as error:
         print(json.dumps({'status': 'blocked', 'reason': error.code}))
         return 2
     except (OSError, ValueError, TypeError):
