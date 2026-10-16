@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "kind": "synthetic_server_contract_tests",
+  "server_version": "2.9.0",
+  "database_schema": 11,
+  "tools": 53,
+  "base_commit": "14ca33e0d79d5a3c2ae2dfdf85d3c77837465509",
+  "family_tests": {
+    "passed": 93,
+    "module": 31,
+    "api": 34,
+    "runtime_and_migration": 28
+  },
+  "full_server_suite": {
+    "passed": 679,
+    "main_run_passed": 678,
+    "main_run_deselected": 1,
+    "main_run_deselection": "test_official_clients_both_owners_with_proxy_prefix",
+    "isolated_sdk_transport_passed": 1,
+    "isolated_sdk_reason": "Local temporary loopback listener requires permission outside the default environment."
+  },
+  "limitations": [
+    "Real temporary SQLite databases, TestClient and official SDK transport with fictitious accounts only.",
+    "No model, provider authentication, production MCP, SSH, deployment or filesystem/process qualification.",
+    "The server records supplied manifest/result/snapshot digests and verification declarations; local artifact inspection is a separate controller responsibility.",
+    "Publication versions, consolidated manifest, current-main rebase and independent review remain integration work."
+  ],
+  "files": {
+    "delegation_families.py": "484c2bde5d2fffee5d62da4a704593453c2fb6b674205573f04dc5ea369e3f9f",
+    "app.py": "21572f37367f2d20bb7dfb81f8d03cdf0ed0ce4c58c567d54f9727c702b9f5c2",
+    "board.py": "7fef72a21a0a41157cb3595a86ce0daf63fd2f515e30238b2a649a241615e4a0",
+    "coordination.py": "f1b9493474ad969540a5e7b4f7889f6fad985ca935decef4b2e5739b30c8fab1",
+    "runtime.py": "c940f9509b5b1347f625ca359478f69aac5829ca7803e7f94f2c87568b544122",
+    "CONTRACT.md": "9b3071bee6ea3e69c4e7810fb8ebb46cdd3f02597d8fc77e246b07c1f7e6f41d",
+    "tests/test_delegation_families.py": "df97bed0c4ec8305421ce0c88dc79f21aae01bc4c5554541c484c60e4d9ac625",
+    "tests/test_delegation_families_api.py": "c3ac867918198e797f159a365305f26783c1b02329014fb13343e4d1f4baf28c",
+    "tests/test_delegation_runtime_integration.py": "3148733529f36b4835af8b36fdae3de31bd489df29a457d301c241d6d738e05e"
+  }
+}

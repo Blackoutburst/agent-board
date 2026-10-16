@@ -72,6 +72,154 @@ An accepted reconciliation clears the claim and lease, changes `in_progress` to 
 
 The recovery key is bound to the exact authorized owner/device/session, ticket and trimmed evidence. `expected_version` is a strict positive integer CAS precondition, excluded from the key payload. Retrying the same key checks current authorization and returns the current ticket without reapplying the release, even if another claim or human edit has appeared. Changed evidence with an existing key conflicts. Unsupported older servers reject this separate tool; clients must not fall back to ordinary claim/release or reuse the old session to bypass its registration guard.
 
+## Bounded coordinator families (2.9, schema 11)
+
+Six separate MCP tools provide temporary workers without creating permanent
+profiles: `open_delegation_family`, `get_delegation_family`,
+`lookup_delegation_family`, `stop_delegation_family`,
+`accept_delegation_result` and `finalize_delegation_family`. Each takes the
+registered `session_id` in addition to the arguments below. These tools record
+coordination and verification declarations; they launch no model, inspect no
+checkout and supply no filesystem or process attestation.
+
+`open_delegation_family(parent_ticket_id, expected_version, children, limits,
+actions, resource, manifest_sha256, idempotency_key)` requires the exact live
+coordinator claim, current read/work permissions and an active current profile.
+The parent keeps that claim and gains dependencies on exactly two newly created
+tickets. The children inherit its project, owner, profile, priority and exact
+resource. There is no nested delegation. Each child descriptor has exactly
+`session_id`, `role`, `model`, `title`, `description`, `acceptance_criteria` and
+`files`; its already registered session must belong to the same owner, device
+and profile version as the coordinator. The three sessions must be distinct,
+idle except for the coordinator's parent claim, and never previously bound to
+another family. Outstanding Runtime cleanup on the parent also prevents opening,
+including records left by a previous owner after a human reassignment.
+
+`limits` contains exactly `max_model_turns` (2–64), `max_tool_actions` (0–128),
+`max_concurrent` (1–4) and a finite absolute Unix `deadline` in the next 24 hours.
+`actions` is a unique subset of `repo.read_file`, `repo.patch_file` and
+`repo.run_test`, bounded by current effective grants; any action requires the
+exact resource grant. `manifest_sha256` is a lowercase SHA256 digest supplied by
+the caller. Each child has at most 64 relative file paths of at most 200 UTF-8
+bytes, with no hidden, empty, traversal, absolute or backslash components.
+Normalized case-insensitive aliases and overlaps between the two sets are
+refused. These declarations constrain participating local controllers; the
+server does not read the files or validate a manifest's contents. Family history
+is retained, capped at 256 entries per owner, and never silently purged.
+
+Opening is atomic with both tickets, discussion membership, dependencies,
+numbers, audit and the exact-session retry record. Reusing its key with a
+different plan conflicts; `expected_version` is a strict positive CAS
+precondition, excluded from retry content. An accepted retry returns the current
+family after current coordinator authorization, without recreating children.
+`lookup_delegation_family(parent_ticket_id, idempotency_key)` is read-only and
+returns `{"found": false}` or `{"found": true, "family": ...}` for that exact
+session's opening. It never opens, claims or renews work.
+
+`get_delegation_family(family_id)` checks current read permissions and project
+membership. Its public view contains `id`, `owner_id`, `agent_id`, `project_id`,
+`parent_ticket_id`, `state`, `revision`, timestamps, `stop_reason`,
+`plan_sha256`, `final_snapshot_sha256`, `should_stop`, `control_reason` and
+`children`. Each child has `ticket_id`, `role`, `model`, `state`,
+`result_sha256` and `accepted_version`. Only the owner human or an authorized
+session of that same owner/profile receives the additional `plan`, including
+the temporary sessions, file bounds, actions, resource and parent manifest
+digest. No device credential or provider authentication is returned.
+
+Family-linked ticket responses add `delegation` with `family_id`,
+`parent_ticket_id`, `owner_id`, `agent_id`, `state`, `revision`, `role` and
+`model` (`null` for the coordinator). Ordinary tickets keep their existing
+shape. This public metadata carries no private session or file bounds. A
+participating development worker must refuse an ordinary unbound run for such
+a ticket, and resolve and validate the private family plan before choosing its
+local manifest, model or effects. The local controller, its CLI entry point and
+UI are separate integration work; the server does not provide those guards by
+itself.
+
+Only each child's exact temporary session can claim that ticket. A session
+bound to a family cannot claim or reserve another ticket, including after
+cancellation. These dedicated sessions create only ticket-scoped Runtime;
+addressed-message reservations are refused even in the parent or child's own
+discussion, so a separate response host cannot spend their family budget. The
+same fence refuses legacy `claim_task` before claim expiry or lock mutations;
+legacy discovery no longer advertises those tasks as authorized to the dedicated
+sessions. Existing unrelated sessions retain the legacy API's behavior. The
+coordinator likewise remains bound to its parent. Children use explicit
+`claim_ticket`; the normal queue's
+one unfinished claim per profile rule is preserved. The shared resource lock
+permits only members of that same family to coexist. Opening refuses an existing
+legacy resource lock. Other ticket and legacy work remains blocked while any
+family claim is retained or any family Runtime record has unresolved cleanup,
+including after stop and after claims have been released. The resource fence is
+removed only when both kinds of uncertainty are gone. This exception is not
+permission to share a checkout: local file bounds and isolated checkouts still
+require verification.
+
+The existing Runtime admission paths enforce the family bounds inside their
+central transaction after retry lookup and before inserting a reservation.
+Ticket-scoped family executions also consume the normal owner-wide capacity
+limit shared with other ticket and message work. Every new `codex_chatgpt`
+family reservation spends one
+model turn; every `local_broker` reservation spends one tool action, including
+cancelled attempts. Retries and `start_execution` never spend a second turn.
+Only those providers are accepted. Child model reservations must match their
+declared model; local action reservations must fit the plan's action set.
+The coordinator cannot execute until both results have been accepted.
+
+Admission, start and live control recheck deadline, parent claim/lease,
+membership, profile and grants, the parent's exact resource, and both children's
+scope. A pending child's reassignment, foreign/expired claim, changed resource,
+title, description or acceptance criteria, unfinished dependency, human request
+or `blocked`/unaccepted `done` state stops participation. A released `review`
+result is allowed. Accepted children must remain at their exact accepted
+version and outcome/evidence digest. Runtime reports any family control refusal
+as the existing closed code `authorization_changed`; family reads expose a
+bounded diagnostic `control_reason`. These are cooperative stop instructions,
+not proof that a process ended.
+
+`accept_delegation_result(family_id, expected_revision, child_ticket_id,
+expected_child_version, result_sha256, verification_evidence, idempotency_key)`
+requires the exact authorized coordinator and a current, unclaimed child in
+`review`, with resolved dependencies/human requests and nonempty outcome and
+evidence. `result_sha256` is SHA256 of compact, sorted-key UTF-8 JSON with
+unescaped Unicode and exactly `{"outcome": ..., "evidence": ...}`. All Runtime
+records for that child must be finished with cleanup confirmed. The caller must
+have independently checked its local artifacts before supplying nonempty
+verification evidence; the server checks identity, CAS and this declared digest,
+not those artifacts. Acceptance marks the child done, records its resulting
+version, advances family and parent versions, and retains the parent claim.
+The family changes from `running` to `integrating` after the second acceptance.
+An exact retry returns the current family without accepting twice; changed
+result/evidence content conflicts. The two expected versions are strict CAS
+preconditions, excluded from retry content.
+
+`finalize_delegation_family(family_id, expected_revision, snapshot_sha256,
+verification_evidence, idempotency_key)` requires `integrating`, both unchanged
+accepted children and confirmed cleanup for every parent/child Runtime record.
+It stores the caller's integration snapshot digest and verification declaration,
+then changes the family to `review_ready`. This is an audit receipt for an
+inspected snapshot, not a fresh filesystem validation. It never marks the parent
+done, releases its claim, publishes code or merges changes. A later application
+or acceptance must revalidate through its separately authorized effect. Retry
+content is the family, snapshot digest and evidence, excluding the CAS revision.
+
+`stop_delegation_family(family_id, expected_revision)` is available to the exact
+original coordinator through the identity-only execution channel even after
+profile/policy withdrawal; a revoked device still refuses. The owner human can
+also stop using CSRF-protected `POST /api/delegation-families/{id}/stop` with
+`{"expected_revision": ...}`. Owner-only `GET /api/delegation-families/{id}`
+returns 404 for an absent or different owner's family. Stop changes the family
+to `cancelled`; an exact lost-response retry is idempotent. It never marks
+Runtime finished, confirms cleanup, releases capacity or removes claims.
+Existing exact-identity Runtime lookup/control/finish remain the cleanup path.
+
+Schema 11 adds the two family tables and an owner-history index in the same
+transaction as the schema version. Existing ticket/message Runtime rows,
+claims, accounts, credentials and messages are retained. A failed migration
+rolls back both tables and version; full backups retain plans, accepted results,
+claims and unresolved capacity. No listener or new execution is activated by
+migration.
+
 ## Durable queue selection (2.3)
 
 `claim_next_ticket(session_id, idempotency_key, project_id="")` checks current work permission, profile queue autonomy and the session's `autonomous=true` declaration. The key is bound to the exact authenticated owner/device/session and project filter. A successful first call returns `{"claimed": true, "ticket": <current ticket>, "retried": false}`. No selection returns `{"claimed": false, "reason": <code>, "retried": false}`, where the fixed code is `no_ready_ticket`, `unfinished_work` or `waiting_on_human`. Both kinds of result are recorded atomically. Repeating a key returns that same selected ticket or negative result with `retried: true`; it never chooses a newly available or higher-priority ticket. A new intentional selection requires a new key. Successful historical keys remain valid; queue selection itself required no schema change in 2.3.
