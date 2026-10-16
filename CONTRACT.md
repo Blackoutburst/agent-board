@@ -136,6 +136,8 @@ local manifest, model or effects. The local controller, its CLI entry point and
 UI are separate integration work; the server does not provide those guards by
 itself.
 
+The project-visible ticket projection also includes a `coordinator` summary, exactly two `children` summaries and a boolean `should_stop`. Summaries contain only task IDs/titles/numbers/statuses, public agent name, role, declared child model and accepted-result state. The coordinator model is null rather than inferred from private Runtime history or preferences. No bounded-plan files, session/device references or digests enter these summaries. The browser renders these as text and local task links. Family metadata may change without the selected task version; visible task refresh compares it separately. Terminal `review_ready` is an audit-ready state even though further family execution is stopped.
+
 Only each child's exact temporary session can claim that ticket. A session
 bound to a family cannot claim or reserve another ticket, including after
 cancellation. These dedicated sessions create only ticket-scoped Runtime;

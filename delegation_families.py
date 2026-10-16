@@ -178,10 +178,31 @@ class DelegationFamiliesMixin:
         if family is not None:
             member = db.execute('SELECT role,model FROM delegation_members WHERE family_id=? AND ticket_id=?',
                 (family['id'],row['id'])).fetchone()
+            # Every family ticket belongs to this already-authorized project.
+            # Publish only card summaries, never the private bounded plan or
+            # session/device/file/hash details attached to its execution.
+            parent = db.execute('SELECT id,title,number,status FROM tickets WHERE id=? AND project_id=?',
+                (family['parent_ticket_id'],family['project_id'])).fetchone()
+            children = db.execute('''SELECT t.id,t.title,t.number,t.status,m.role,m.model,m.state
+                FROM delegation_members m JOIN tickets t ON t.id=m.ticket_id
+                WHERE m.family_id=? AND t.project_id=? ORDER BY t.number,t.id''',
+                (family['id'],family['project_id'])).fetchall()
+            if parent is None or len(children)!=2:
+                _fail('Delegation family not found',404)
+            profile = db.execute('SELECT * FROM agent_profiles WHERE id=? AND owner_id=?',
+                (family['agent_id'],family['owner_id'])).fetchone()
+            agent_name = self._profile_public(profile)['name'] if profile else ''
+            coordinator = {'ticket_id':parent['id'],'title':parent['title'],'number':parent['number'],
+                'status':parent['status'],'agent_name':agent_name,'role':'coordinator','model':None}
+            summaries = [{'ticket_id':child['id'],'title':child['title'],'number':child['number'],
+                'status':child['status'],'agent_name':agent_name,'role':child['role'],
+                'model':child['model'],'result_state':child['state']} for child in children]
             value['delegation'] = {'family_id':family['id'],'parent_ticket_id':family['parent_ticket_id'],
                 'owner_id':family['owner_id'],'agent_id':family['agent_id'],'state':family['state'],
                 'revision':family['revision'],'role':'coordinator' if member is None else member['role'],
-                'model':None if member is None else member['model']}
+                'model':None if member is None else member['model'],
+                'should_stop':bool(self._delegation_stop_reason(db,family)),
+                'coordinator':coordinator,'children':summaries}
         return value
 
     @staticmethod

@@ -108,3 +108,11 @@ Preparation launches no model/test and claims no ticket. Publication is a separa
 command that records a dated audit in review, never ticket done. Version changes
 invalidate native source pins and require explicit requalification of the final
 package before a pilot. Installation starts no listener or development work.
+
+### Coordinated-work cards (2.9)
+
+Family-linked task pages show the coordinator and two temporary workers with their project-visible task links, roles, declared child models and current task states. The coordinator model remains unspecified when no public model is declared. Names and titles render as text; the private plan, file bounds, sessions, device details and digests stay out of the card.
+
+Only the exact owner can consult the private family endpoint or request a stop. Confirmation sends the revision just consulted. A 409 refreshes the current task and requires a new deliberate confirmation; no blind retry is made. Stop leaves active or uncertain Runtime reservations occupied until the executor confirms cleanup. Other project members see the public card and links without requesting the private endpoint.
+
+Validate `tests/browser_family.cjs` in Firefox against `tests/serve_family_preview.py` on loopback port 18770, with disposable accounts only. It covers desktop/mobile layout, text escaping, exact task links, owner isolation, confirmation, retained capacity, metadata updates without a task-version change and an actual revision conflict. The fixture records synthetic Runtime receipts and launches no model or provider. Stop it after the test.
