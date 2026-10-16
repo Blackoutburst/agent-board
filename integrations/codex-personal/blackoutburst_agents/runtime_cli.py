@@ -41,7 +41,10 @@ def run(args):
                     turn=next((t for t in status['turns'] if t['id']==config['turn_id']),None)
                     if turn is None or turn['status'] not in ('completed','blocked','cancelled'):
                         raise RuntimeControlError('runtime_turn_requires_review')
-                    RuntimeGuard(journal,client,scope).confirm_cached(status['work'],config['turn_id'],
+                    work=status['work']
+                    binding=store.get_context_guard(config['work_id'])
+                    if binding is not None:work={**work,'decision_memory':binding}
+                    RuntimeGuard(journal,client,scope).confirm_cached(work,config['turn_id'],
                         store.turn_result(config['turn_id']))
                 output=journal.status(operation['id'])
         print(json.dumps(output,ensure_ascii=False,indent=2));return 0

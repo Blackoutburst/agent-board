@@ -1,6 +1,7 @@
 """Inspectable board context; explicit reads only, no listener, claim or publication."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 from pathlib import Path
 
@@ -36,20 +37,31 @@ def _connection_arguments(parser):
     parser.add_argument('--connection-file', type=Path, required=True,
                         help='Connexion privée créée par le connect.py du board.')
     parser.add_argument('--session', required=True, help='Session propre à ce contexte, conservée pour les reprises.')
+    parser.add_argument('--decision-memory',type=Path,help='Mémoire privée explicitement épinglée pour ce ticket ; jamais découverte depuis le contexte.')
 
 
-def fetch_context(connection, session, scope):
+def fetch_context(connection, session, scope, *, decision_memory=None, decision_descriptor=None):
     reader = BoardReader.from_connection_file(connection, session_id=session)
-    return build_context(reader.call, scope=scope, registration=reader.register())
+    options = ({'decision_memory':decision_memory,'decision_descriptor':decision_descriptor,
+                'board_endpoint':reader.endpoint} if decision_memory is not None or decision_descriptor is not None else {})
+    return build_context(reader.call, scope=scope, registration=reader.register(),**options)
 
 
-def verified_context(cache, key, fingerprint, connection, session, expected_scope=None):
+def verified_context(cache, key, fingerprint, connection, session, expected_scope=None, *, decision_memory=None):
     """Recheck access and selected source content before using a pinned snapshot."""
     artifact = cache.get(key, fingerprint=fingerprint)
     if expected_scope is not None and artifact['scope'] != expected_scope:
         raise ContextCacheError('context_scope_mismatch')
     scope = ContextScope(**artifact['scope'])
-    fresh = fetch_context(connection, session, scope)
+    descriptor = artifact.get('sources',{}).get('decision_memory')
+    if descriptor is not None and decision_memory is None:
+        raise ContextCacheError('decision_memory_required')
+    if descriptor is None and decision_memory is not None:
+        raise ContextCacheError('unexpected_decision_memory')
+    if descriptor is not None:
+        decision_memory.require_descriptor(scope,descriptor)
+    options = ({'decision_memory':decision_memory,'decision_descriptor':descriptor} if descriptor is not None else {})
+    fresh = fetch_context(connection, session, scope, **options)
     if fresh['fingerprint'] != artifact['fingerprint']:
         raise ContextCacheError('context_sources_changed')
     return artifact
@@ -82,11 +94,16 @@ def read_instruction(path):
 
 def run(args):
     try:
-        with ContextCache(args.state) as cache:
+        with ContextCache(args.state) as cache, ExitStack() as resources:
+            memory=None
+            if getattr(args,'decision_memory',None) is not None:
+                from .decision_memory import DecisionMemory
+                memory=resources.enter_context(DecisionMemory(args.decision_memory,create=False))
+            options={'decision_memory':memory} if memory is not None else {}
             if args.context_command == 'prepare':
                 scope = ContextScope(owner_id=args.owner, agent_id=args.agent,
                                      project_id=args.project, ticket_id=args.ticket)
-                artifact = fetch_context(args.connection_file, args.session, scope)
+                artifact = fetch_context(args.connection_file, args.session, scope, **options)
                 output = {'status': 'prepared', **cache.save(artifact)}
             elif args.context_command == 'inspect':
                 artifact = cache.get(args.key, revision=args.revision)
@@ -97,12 +114,16 @@ def run(args):
                 output = {'status': 'forgotten', 'context_key': args.key}
             elif args.context_command == 'check':
                 previous = cache.get(args.key)
-                fresh = fetch_context(args.connection_file, args.session, ContextScope(**previous['scope']))
+                descriptor=previous.get('sources',{}).get('decision_memory')
+                if descriptor is not None and memory is None:raise ContextCacheError('decision_memory_required')
+                if descriptor is None and memory is not None:raise ContextCacheError('unexpected_decision_memory')
+                fresh = fetch_context(args.connection_file,args.session,ContextScope(**previous['scope']),
+                    **({'decision_memory':memory,'decision_descriptor':descriptor} if descriptor is not None else {}))
                 output = {'status': 'current' if fresh['fingerprint'] == previous['fingerprint'] else 'changed',
                           'context_key': args.key, 'fingerprint': previous['fingerprint'],
                           'current_fingerprint': fresh['fingerprint']}
             else:
-                artifact = verified_context(cache, args.key, args.fingerprint, args.connection_file, args.session)
+                artifact = verified_context(cache, args.key, args.fingerprint, args.connection_file, args.session, **options)
                 prompt = render_prompt(artifact, read_instruction(args.instruction_file))
                 _write_private(args.output, prompt)
                 output = {'status': 'exported', 'context_key': args.key, 'fingerprint': artifact['fingerprint']}

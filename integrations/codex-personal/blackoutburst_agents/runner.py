@@ -16,7 +16,7 @@ class PersonalRunner:
         self.runtime_guard = runtime_guard
 
     def run(self, work_id: str, request_id: str, prompt: str, *,
-            timeout: float = 120, should_cancel: Callable[[], bool] | None = None) -> dict:
+            timeout: float = 120, should_cancel: Callable[[], bool] | None = None, context_guard=None) -> dict:
         """Process one explicit input. Retrying its key never starts another turn.
 
         The returned result may contain model text. Callers must treat it as
@@ -24,6 +24,8 @@ class PersonalRunner:
         """
         with self.store.work_lock(work_id):
             work = self.store.get_work(work_id)
+            self.store.check_context_guard(work_id,context_guard)
+            if context_guard is not None:work={**work,'decision_memory':context_guard}
             settings = ProbeSettings(executable=work['executable'], model=work['model'],
                                      timeout_seconds=timeout)
             entry = self.store.begin_turn(work_id, request_id, prompt)
