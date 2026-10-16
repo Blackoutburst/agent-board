@@ -153,7 +153,7 @@ const Workspace = (() => {
     const assignee = t.claimant?.agent_name || t.assignee_agent_name || (t.assignee_owner_id ? ownerName(t.assignee_owner_id) : "Anyone");
     return el("article", { class: "issue-row" }, el("span", { class: `issue-icon ${t.status === "done" ? "done" : ""}`, "aria-label": ticketStatuses[t.status] }, t.status === "done" ? "✓" : "◉"),
       el("div", { class: "issue-content" }, el("div", { class: "issue-title" }, workLink(t.title, { ticket: t.id }), t.labels.map(label => badge(label, "label-badge"))),
-        el("div", { class: "issue-meta" }, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
+        el("div", { class: "issue-meta" }, t.project_name ? workLink(t.project_name, { project: t.project_id }) : null, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
       el("div", { class: "issue-trailing" }, status(t), t.priority !== "normal" ? badge(ticketPriorities[t.priority], `priority-${t.priority}`) : null, el("span", { class: "assigned-label", title: assignee }, assignee)));
   }
 

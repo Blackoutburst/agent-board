@@ -41,6 +41,44 @@ def running(home):
     return profile, device, raw, registration, actor
 
 
+def test_conversation_uses_current_avatar_without_rewriting_author_provenance(home):
+    board, human, project = home
+    profile, _, _, _, actor = running(home)
+    thread_id = board.create_ticket(human, project['id'], 'Conversation')['thread_id']
+    message = board.post_message(actor, thread_id, 'Existing message', idempotency_key='avatar-message')
+    original_author = message['author'].copy()
+    with board._connection() as db:
+        original_stored = db.execute('SELECT author FROM messages WHERE id=?', (message['id'],)).fetchone()[0]
+    board.update_agent_profile(human, profile['id'], profile['version'], avatar='🔆',
+                               instructions='Private revised instructions')
+    # A project peer can see the chosen public icon, without access to private profile fields.
+    peer = {'kind': 'human', 'owner_id': 'other'}
+    visible = board.get_thread(peer, thread_id)['messages'][0]
+    assert visible['author_avatar'] == '🔆'
+    assert visible['author'] == original_author
+    assert 'instructions' not in visible['author']
+    assert 'Private revised instructions' not in json.dumps(visible)
+    assert board.get_message(peer, thread_id, message['id'])['message']['author'] == visible['author']
+    with board._connection() as db:
+        assert db.execute('SELECT author FROM messages WHERE id=?', (message['id'],)).fetchone()[0] == original_stored
+
+
+def test_legacy_message_avatar_resolves_only_the_original_owner_device_session(home):
+    board, human, project = home
+    profile, _, _, _, actor = running(home)
+    thread_id = board.create_ticket(human, project['id'], 'Legacy conversation')['thread_id']
+    message = board.post_message(actor, thread_id, 'Legacy stamp', idempotency_key='legacy-avatar')
+    board.update_agent_profile(human, profile['id'], profile['version'], avatar='🔎')
+    legacy = {key: value for key, value in message['author'].items() if key != 'agent_id'}
+    with board._tx() as db:
+        db.execute('UPDATE messages SET author=? WHERE id=?', (json.dumps(legacy), message['id']))
+    assert board.get_message(human, thread_id, message['id'])['message']['author_avatar'] == '🔎'
+    legacy['device_id'] = 'not-the-original-device'
+    with board._tx() as db:
+        db.execute('UPDATE messages SET author=? WHERE id=?', (json.dumps(legacy), message['id']))
+    assert not board.get_message(human, thread_id, message['id'])['message']['author_avatar']
+
+
 def test_new_profile_is_unbound_restricted_and_creation_retry_does_not_duplicate(home):
     board, human, _ = home
     first = board.create_agent_profile(human, 'A helper', avatar='🌱', idempotency_key='profile')
