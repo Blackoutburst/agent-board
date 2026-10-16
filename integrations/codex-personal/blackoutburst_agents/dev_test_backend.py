@@ -40,7 +40,7 @@ REQUIRED_CHECKS = {'inside_read', 'inside_write', 'outside_read', 'outside_write
 # The same process verifies the actual sandbox and hard limits immediately
 # before running one reviewed script in that same interpreter. No shell is used.
 WRAPPER = r'''
-import errno,json,os,resource,runpy,select,socket,sys
+import errno,json,os,resource,runpy,select,signal,socket,sys
 p=json.loads(sys.argv[1])
 if os.getsid(0) != os.getpid():
     os.setsid()
@@ -90,6 +90,8 @@ denied('fork',fork,{errno.EAGAIN,errno.EPERM,errno.EACCES})
 denied('spawn',spawn,{errno.EAGAIN,errno.EPERM,errno.EACCES})
 denied('session',os.setsid,{errno.EPERM})
 denied('process_group',lambda:os.setpgid(0,0),{errno.EPERM})
+if p.get('outside_signal_pid') is not None:
+    denied('outside_signal',lambda:os.kill(p['outside_signal_pid'],signal.SIGUSR1),{errno.EPERM,errno.EACCES})
 try:
     resource.setrlimit(resource.RLIMIT_NPROC,(2,2))
     checks['nproc_raise']=False
@@ -136,7 +138,10 @@ def _binary(path):
         finally:
             os.close(parent)
         before = os.fstat(descriptor)
-        if (not stat.S_ISREG(before.st_mode) or not before.st_mode & 0o111
+        immutable_system_links = (before.st_uid == 0 and os.geteuid() != 0
+            and not os.access(value, os.W_OK, effective_ids=True))
+        if (not stat.S_ISREG(before.st_mode) or (before.st_nlink != 1 and not immutable_system_links)
+                or not before.st_mode & 0o111
                 or before.st_mode & 0o022 or before.st_uid not in (0, os.geteuid())
                 or before.st_size > 512 * 1024 * 1024):
             raise DevelopmentError('invalid_backend_executable')
@@ -492,7 +497,11 @@ class NativeNamedPythonBackend:
         except ProcessLookupError:
             pass
 
-    def _execute(self, request, *, qualify):
+    def _execute(self, request, *, qualify, outside_signal_pid=None):
+        if outside_signal_pid is not None and (type(outside_signal_pid) is not int
+                or outside_signal_pid < 2 or outside_signal_pid == os.getpid()):
+            raise DevelopmentError('invalid_signal_canary')
+        required_checks = REQUIRED_CHECKS | ({'outside_signal'} if outside_signal_pid is not None else set())
         timeout = 15 if qualify else request.timeout_seconds
         maximum = 0 if qualify else request.max_output_bytes
         nonce = uuid.uuid4().hex
@@ -521,6 +530,7 @@ class NativeNamedPythonBackend:
             payload = {'inside': str(inside), 'inside_write': str(inside) + '-write',
                 'outside': str(outside), 'outside_write': str(outside) + '-write',
                 'port': listener.getsockname()[1], 'timeout': timeout, 'qualify': qualify,
+                'outside_signal_pid': outside_signal_pid,
                 'executable': self.plan['executable'],
                 'script': None if qualify else self.plan['tests'][request.name]['script'],
                 'environment': self.plan['environment']}
@@ -570,7 +580,7 @@ class NativeNamedPythonBackend:
                                 or type(value['pid']) is not int or value['pid'] < 2
                                 or value['pid'] == os.getpid()
                                 or value['pgid'] != value['pid'] or value['sid'] != value['pid']
-                                or type(value['checks']) is not dict or set(value['checks']) != REQUIRED_CHECKS
+                                or type(value['checks']) is not dict or set(value['checks']) != required_checks
                                 or any(type(item) is not bool for item in value['checks'].values())):
                             reason = 'guard_protocol_invalid'
                             break

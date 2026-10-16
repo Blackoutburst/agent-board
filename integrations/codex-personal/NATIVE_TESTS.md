@@ -81,6 +81,8 @@ wall timeout:** `RLIMIT_CPU` bounds CPU use and does not stop sleep. This lot ha
 no independent durable supervisor, so it cannot certify cleanup after a
 controller crash. Such supervision is required before a production executor.
 The backend does not guess a PID after restart or kill an unrelated process.
+The separate opt-in [supervised backend](SUPERVISED_TESTS.md) supplies per-attempt
+supervision; this class keeps its original unsupervised behavior.
 An operator must inspect uncertain processes and effects before preparing a
 separately authorized new manifest. There is no force-abandon command here.
 

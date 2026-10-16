@@ -1,0 +1,67 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "backend_source_sha256": "8ee24c1c523e947b706d92a6b12a81524794578664a247a67dfdf6baed5a1874",
+  "checks": {
+    "controller_hard_killed": true,
+    "crash_recovery": {
+      "cleanup_confirmed": true,
+      "result": "cancelled"
+    },
+    "crash_replay_no_execution": true,
+    "durable_helper_completion": true,
+    "passed": {
+      "cleanup_confirmed": true,
+      "result": "passed"
+    },
+    "test_and_helper_gone": true,
+    "timeout": {
+      "cleanup_confirmed": true,
+      "result": "failed"
+    }
+  },
+  "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
+  "cli_version": "codex-cli 0.162.0-alpha.17.2",
+  "controller_authentication_files_read": false,
+  "hardkill_target": "exact owned synthetic controller only",
+  "host": {
+    "machine": "arm64",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "limitations": [
+    "Darwin only; Linux and Windows unqualified",
+    "Trusted supervisor and host required; supervisor or OS failure remains uncertain",
+    "Exclusive disposable checkout without secrets and outside controller/toolchain/state required",
+    "Crash before helper acceptance can leave an uncertain intent; no automatic replay",
+    "No model transport, listener or production activation"
+  ],
+  "model_calls": 0,
+  "observed_on": "2026-10-16",
+  "production_enabled": false,
+  "profile_version": 1,
+  "qualification": {
+    "checks": {
+      "fork": true,
+      "inside_read": true,
+      "inside_write": true,
+      "network_loopback": true,
+      "nproc_raise": true,
+      "outside_read": true,
+      "outside_signal": true,
+      "outside_write": true,
+      "process_group": true,
+      "session": true,
+      "spawn": true
+    },
+    "cleanup_confirmed": true,
+    "plan_hash": "72f425768f2101d4673b9cd99d39e5f82dd0e1e3bd075d71c570c1972cfb6ab8",
+    "result": "qualified_supervised_fixture",
+    "schema": 1,
+    "supervision_hash": "012ebe1f59ada5f2b0c9cfdd12ffd1ffed7ae1d6d3d2fa0fa945094f8b79f481"
+  },
+  "result": "passed_supervisor_fixture",
+  "schema": 1,
+  "supervisor_source_sha256": "8f09504d7f824d4d60f7f1aa8823f79ff88d57a622c70106224719fb3a9dd609",
+  "synthetic_files_removed": true,
+  "wrapper_sha256": "7f935355437161b386bafb7343c0d4b64bcadce1bbc647e33a372e2f991fba65"
+}
