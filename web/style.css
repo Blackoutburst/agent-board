@@ -122,3 +122,5 @@
   .sidebar{padding-top:12px;padding-bottom:12px;gap:9px}
   .workspace-nav{min-height:0;flex-shrink:1;overflow-y:auto}
 }
+/* Profile avatars are plain text; constrain the supported 32-character label. */
+.avatar.agent.custom{display:block;line-height:30px;text-align:center;font-size:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

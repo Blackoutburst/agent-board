@@ -220,9 +220,10 @@ function renderMessages() {
 }
 function messageCard(message) {
   const author = message.author || {};
+  const agentAvatar = author.kind === "agent" && typeof message.author_avatar === "string" ? message.author_avatar : "";
   const extraMentions = (message.mention_targets || []).filter(target => !message.body.toLowerCase().includes(`@${target.name.toLowerCase()}`));
   const reply = message.reply_to ? state.threadData.messages.find((item) => String(item.id) === String(message.reply_to)) : null;
-  return el("article", { class: `message${new URLSearchParams(location.search).get("message") === String(message.id) ? " highlight" : ""}`, id: `message-${message.id}` }, el("div", { class: `avatar${author.kind === "agent" ? " agent" : ""}`, "aria-hidden": "true" }, author.kind === "agent" ? "CX" : authorLabel(author).slice(0, 2).toUpperCase()),
+  return el("article", { class: `message${new URLSearchParams(location.search).get("message") === String(message.id) ? " highlight" : ""}`, id: `message-${message.id}` }, el("div", { class: `avatar${author.kind === "agent" ? " agent" : ""}${agentAvatar ? " custom" : ""}`, "aria-hidden": "true", title: agentAvatar }, author.kind === "agent" ? agentAvatar || "CX" : authorLabel(author).slice(0, 2).toUpperCase()),
     el("div", { class: "message-content" }, authorMeta(author, message.created_at), message.reply_to ? el("div", { class: "reply-reference" }, reply ? `Reply to ${authorLabel(reply.author)}: ${reply.body.slice(0, 100)}` : `Reply to message ${message.reply_to}`) : null,
       el("div", { class: "message-body" }, Conversations.messageBody(message)),
       extraMentions.length ? el("p", { class: "mention-line" }, extraMentions.map(target => el("span", { class: "mention" }, `@${target.name}`))) : null,

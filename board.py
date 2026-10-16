@@ -475,12 +475,25 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             return self._thread(db, self._member(db, actor, thread_id), actor["owner_id"])
 
     def _message(self, db, row):
+        author = _decode(row["author"])
+        avatar = ""
+        if author.get("kind") == "agent":
+            agent_id = author.get("agent_id")
+            if not agent_id:
+                # Pre-profile messages retain their stamp; resolve only the same owner/device/session.
+                session = db.execute("SELECT agent_id FROM sessions WHERE id=? AND owner_id=? AND device_id=?",
+                                     (author.get("session_id"), author.get("owner_id"), author.get("device_id"))).fetchone()
+                agent_id = session["agent_id"] if session else None
+            profile = db.execute("SELECT json_extract(fields,'$.avatar') AS avatar FROM agent_profiles WHERE id=? AND owner_id=?",
+                                 (agent_id, author.get("owner_id"))).fetchone()
+            if profile:
+                avatar = profile["avatar"] or ""
         attachments = []
         for attachment_id in _decode(row["attachments"]):
             attachment = db.execute("SELECT * FROM attachments WHERE id=?", (attachment_id,)).fetchone()
             if attachment:
                 attachments.append(self._attachment(attachment))
-        return {"id": row["id"], "thread_id": row["thread_id"], "body": row["body"], "author": _decode(row["author"]),
+        return {"id": row["id"], "thread_id": row["thread_id"], "body": row["body"], "author": author, "author_avatar": avatar,
                 "created_at": row["created_at"], "reply_to": row["reply_to"], "mentions": _decode(row["mentions"]),
                 "attachments": attachments, "mention_targets": self._mention_details(db, _decode(row["mentions"])),
                 "url": self.base_url + "/?thread=" + row["thread_id"] + "&message=" + row["id"]}
