@@ -1,0 +1,21 @@
+{
+  "adapter_version": "0.19.0",
+  "board_version": "2.9.0",
+  "model_calls": 0,
+  "authentication_rpc_calls": 0,
+  "production_enabled": false,
+  "source_pins": {
+    "__init__.py": "7c76fbf04d13bd70a4146184caad1f0a5ed723c4e62087f932a51f6e7afa8915",
+    "dev_manifest.py": "561a04535d6da43aadb24b8c627ed32a94378d5adcb621a0605937243b12f644",
+    "dev_journal.py": "7d2236333ce390eef55ae0859c44ede63a9a3bc0011021063ea1827b8d583d86",
+    "dev_broker.py": "a3bc0e8aeeb377b1f0e5967248844bffa586ddb99321ef194f8ed1392d14afaf",
+    "dev_test_backend.py": "8ee24c1c523e947b706d92a6b12a81524794578664a247a67dfdf6baed5a1874",
+    "dev_test_supervisor.py": "8f09504d7f824d4d60f7f1aa8823f79ff88d57a622c70106224719fb3a9dd609"
+  },
+  "proof_files": [
+    "family-native-supervisor-20261016.json",
+    "family-native-named-tests-20261016.json",
+    "family-planner-policy-20261016.json"
+  ],
+  "note": "Qualification of native synthetic test and planner components only; not an owner subscription or remote pilot."
+}
