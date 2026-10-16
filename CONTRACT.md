@@ -1,6 +1,6 @@
-# Board interface contract — 2.8.1
+# Board interface contract — 2.9.0
 
-The browser REST API and MCP act on one database. Application version is `2.8.1`; schema version is `10`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.9.0`; schema version is `11`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
