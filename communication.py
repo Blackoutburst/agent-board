@@ -103,7 +103,7 @@ class CommunicationMixin:
         with self._connection() as db:
             actor=self._human(db,actor)
             rows=self._addressed_messages(db,actor,unread=True,limit=None)
-            tickets=[self._ticket(row,db) for row in db.execute('''SELECT t.* FROM tickets t
+            tickets=[{**self._ticket(row,db),'project_name':row['project_name']} for row in db.execute('''SELECT t.*,p.name AS project_name FROM tickets t
                 JOIN projects p ON p.id=t.project_id JOIN project_members m ON m.project_id=p.id
                 LEFT JOIN agent_profiles a ON a.id=t.assignee_agent_id
                 WHERE m.owner_id=? AND p.archived=0 AND t.status!='done'
