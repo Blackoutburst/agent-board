@@ -139,8 +139,10 @@ require the same private paired `--connection-file CONNECTION`.
    alone does not publish or complete the parent. No command commits, pushes,
    merges, deploys or certifies that an old inspected snapshot is still current.
 
-Child candidate source is bounded to 8 KiB in aggregate; private audits and
-journals have separate durable ceilings. Oversized candidates, missing tests,
+Child candidate source is bounded to 8 KiB in aggregate. The family has a 32 MiB
+inspection allowance, charged conservatively by 8 MiB before each audit. A crash
+does not refund that charge; repeated inspections can exhaust the allowance.
+Private journals have separate durable ceilings. Oversized candidates, missing tests,
 changed files/context, exhausted budgets or uncertain cleanup stop for review
 instead of silently truncating or treating a declaration as proof. The server
 records coordination and supplied digests; it does not inspect the local checkout.
@@ -184,8 +186,9 @@ An absent active anchor or a partial family requires review, not reconstruction.
 
 Stop older coordinators before sharing format 3; old readers refuse it. Preserve
 matching adapter code, family/workflow journals, stores and canonical anchor for
-recovery. Family controller source pins reject changed code on resume; they are
-not native sandbox attestation. There is no expiry, release/rekey shortcut or
+recovery. Family controller source pins measure twelve explicit family/integration
+modules and reject changed code on resume. They do not attest every Python import,
+the running process or its OS sandbox. There is no expiry, release/rekey shortcut or
 provider-session adoption. This fence coordinates one OS user and machine only;
 it cannot protect against an administrator rolling back all state or coordinate
 multiple hosts. Restoring state does not reverse source or external effects.
