@@ -12,6 +12,8 @@ L’adaptateur 0.12 ajoute un [hôte local explicite](HOST.md) pour une liste fi
 
 L’adaptateur 0.13 ajoute les [primitives du broker de développement](DEVELOPMENT.md), désactivées par défaut : fichiers explicitement autorisés, lectures bornées, remplacement exact avec contrôle du hash, budgets durables et rapprochement après coupure. Cette bibliothèque reste séparée des commandes existantes ; elle ne fournit ni transport de modèle, ni shell, ni backend réel de tests. Un stage dont la propriété ne peut pas être prouvée reste conservé et bloque la reprise jusqu’à inspection humaine.
 
+L’adaptateur 0.14 ajoute un [backend natif de tests Python nommés](NATIVE_TESTS.md) et sa [supervision séparée](SUPERVISED_TESTS.md), sur option et après qualification locale. Le backend supervisé a été vérifié sur Mac avec des fichiers synthétiques, dont un crash du contrôleur suivi d’un nettoyage et d’un rapprochement sans réexécution. Linux reste non qualifié. Les workers existants n’exposent pas ce backend au modèle et aucune installation ne l’active.
+
 ## Utilisation
 
 Python **3.10 ou supérieur**, sur macOS ou Linux/POSIX ; aucune bibliothèque Python externe n’est nécessaire à l’exécution. Codex doit être installé et connecté par son propriétaire au moyen de son interface ou de sa CLI officielle. L’authentification reste gérée par Codex. [Documentation officielle de connexion](https://learn.chatgpt.com/docs/auth)

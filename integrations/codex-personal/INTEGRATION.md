@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.7.0**, schéma **9**, adaptateur **0.13.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.7.0**, schéma **9**, adaptateur **0.14.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
@@ -52,4 +52,6 @@ L’hôte actuel ne lit pas les conversations générales et n’installe aucun 
 
 Le noyau `DevelopmentBroker` de 0.13 est une bibliothèque **désactivée par défaut**, séparée du worker textuel. Il borne la lecture et le remplacement de fichiers existants dans un checkout isolé, exige des autorisations fraîches et journalise ses intentions avant effet. Les tests nommés refusent un backend non qualifié. Il n’expose encore aucun outil au modèle et ne lance aucun shell. [DEVELOPMENT.md](DEVELOPMENT.md) décrit ses limites, notamment l’usage exclusif du checkout et le rapprochement humain des stages incertains.
 
-Restent à raccorder et à valider : backend de tests supervisé, transport de développement, délégation avec contrôle de la famille, mémoire des anciennes décisions, mentions générales et recette distante avec plusieurs agents par propriétaire. Les preuves personnelles locales ne valent pas qualification d’un service mutualisé. Installation, mise à jour, observation de quotas et redémarrage du board n’activent aucun listener ou hôte personnel.
+Le [backend supervisé](SUPERVISED_TESTS.md) de 0.14 fournit une qualification locale Mac sur des scénarios synthétiques, dont un crash du contrôleur ; il est opt-in et reste séparé des workers. Linux et le raccordement Runtime du développement restent à qualifier.
+
+Restent à raccorder et à valider : transport de développement, délégation avec contrôle de la famille, mémoire des anciennes décisions, mentions générales et recette distante avec plusieurs agents par propriétaire. Les preuves personnelles locales ne valent pas qualification d’un service mutualisé. Installation, mise à jour, observation de quotas et redémarrage du board n’activent aucun listener ou hôte personnel.
