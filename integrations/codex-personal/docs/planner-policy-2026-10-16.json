@@ -10,7 +10,7 @@
   "cleanup_confirmed": true,
   "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
   "cli_version": "codex-cli 0.162.0-alpha.17.2",
-  "fingerprint": "af86d1e327a36bef03187d37d68facada6fe449491037ea93af6d06ac6b8f694",
+  "fingerprint": "f29d84a7e1b80b0fc89e376e351f05e71574c5f763c737a5d22af2ad93fb66b0",
   "host": {
     "machine": "arm64",
     "release": "25.5.0",
