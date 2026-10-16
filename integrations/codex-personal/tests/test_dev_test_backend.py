@@ -25,6 +25,7 @@ class NativeTestBackendTests(unittest.TestCase):
         self.root = self.base / 'checkout'
         self.root.mkdir(mode=0o700)
         (self.root / 'case.py').write_text("print('synthetic')\n")
+        (self.root / 'data.json').write_text('{}\n')
         self.cli = self.base / 'fake-codex'
         self.cli.write_bytes(b'synthetic executable, never launched')
         self.cli.chmod(0o700)
@@ -43,7 +44,7 @@ class NativeTestBackendTests(unittest.TestCase):
         self.allowed = True
         self.manifest_dir = self.base / 'manifest'
         prepare_manifest(self.manifest_dir, root=str(self.root), base_sha='a' * 40, scope=self.scope,
-            paths=['case.py'], resource='repo:fixture', authorize_scope=self.authorize,
+            paths=['data.json'], resource='repo:fixture', authorize_scope=self.authorize,
             tests=[NamedTest('unit', backend_id=backend_id(self.plan), timeout_seconds=5, max_output_bytes=64)])
         self.manifest = json.loads((self.manifest_dir / 'manifest.json').read_text())
         self.directory = self.base / 'backend'

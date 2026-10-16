@@ -358,6 +358,7 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
 
     def _run_supervised(self, request, *, qualify):
         self._authorize()
+        self._pins()  # Trusted source pins precede even the owned helper launch.
         self._supervision_pins()
         job = uuid.uuid4().hex + uuid.uuid4().hex if qualify else request.operation_id
         nonce = uuid.uuid4().hex
@@ -454,6 +455,7 @@ def supervise_packet(packet_path):
         result, checks, reason = _receipt(), {}, 'supervisor_execution_uncertain'
         try:
             backend._authorize()
+            backend._pins()
             canary = _SignalCanary(backend.supervision['executable'], private.path)
             result, checks, reason = backend._execute(request, qualify=packet['qualify'], outside_signal_pid=canary.pid)
         except DevelopmentError as error:

@@ -6,6 +6,7 @@ immutable plan and explicitly qualifies this host before it can run a test.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import errno
 import fcntl
 import hashlib
@@ -22,15 +23,17 @@ import subprocess
 import threading
 import time
 import uuid
+import unicodedata
 
 from .dev_broker import TestRequest
 from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import (DevelopmentError, RepositoryFiles, authorize, canonical,
-                           digest, opaque, relative_path, sha256, validate_manifest)
+                           digest, opaque, relative_path, sha256, validate_manifest, check_content, identity)
 
 
-PROFILE_VERSION = 1
-PROFILE_NAME = 'board-named-python-v1'
+PROFILE_VERSION = 2
+PROFILE_NAME = 'board-named-python-v2'
+MAX_SCRIPT_BYTES = 65536
 HEADER = b'BB_NAMED_TEST_V1 '
 MAX_DOCUMENT = 128 * 1024
 REQUIRED_CHECKS = {'inside_read', 'inside_write', 'outside_read', 'outside_write',
@@ -40,7 +43,7 @@ REQUIRED_CHECKS = {'inside_read', 'inside_write', 'outside_read', 'outside_write
 # The same process verifies the actual sandbox and hard limits immediately
 # before running one reviewed script in that same interpreter. No shell is used.
 WRAPPER = r'''
-import errno,json,os,resource,runpy,select,signal,socket,sys
+import base64,errno,hashlib,json,os,resource,select,signal,socket,sys
 p=json.loads(sys.argv[1])
 if os.getsid(0) != os.getpid():
     os.setsid()
@@ -114,8 +117,12 @@ if p['qualify']:
     os._exit(0)
 os.environ.clear()
 os.environ.update(p['environment'])
+source=base64.b64decode(p['script_base64'],validate=True)
+if len(source)>65536 or hashlib.sha256(source).hexdigest()!=p['script_sha256']:
+    os._exit(80)
 sys.argv[:]=[p['script']]
-runpy.run_path(p['script'],run_name='__main__')
+code=compile(source,p['script'],'exec',dont_inherit=True)
+exec(code,{'__name__':'__main__','__file__':p['script'],'__package__':None,'__cached__':None})
 '''
 
 
@@ -179,12 +186,76 @@ def _toml_policy(root):
     return '{filesystem={' + entries + '},network={enabled=false}}'
 
 
+@contextmanager
+def _script_parent(files, path):
+    parts=relative_path(path);files.verify();fd=os.dup(files.fd)
+    parents=[list(files.identity)]
+    try:
+        for part in parts[:-1]:
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=child;info=os.fstat(fd)
+            if info.st_uid!=os.geteuid() or info.st_mode&0o022:
+                raise DevelopmentError('trusted_script_directory_refused')
+            parents.append(list(identity(info)))
+        yield fd,parts[-1],parents
+    except OSError:
+        raise DevelopmentError('trusted_script_access_refused') from None
+    finally:os.close(fd)
+
+
+def _script_read(files,path):
+    with _script_parent(files,path) as (parent,name,parents):
+        data,signature=files.read_at(parent,name,MAX_SCRIPT_BYTES)
+        check_content(data)
+        with _script_parent(files,path) as (fresh,_,current):
+            if current!=parents or identity(os.fstat(parent))!=identity(os.fstat(fresh)):
+                raise DevelopmentError('trusted_script_changed')
+        files.verify()
+        return data,{'sha256':digest(data),'bytes':len(data),'identity':list(signature[:2]),'parents':parents}
+
+
+def _script_pin(pin,path):
+    if (type(pin) is not dict or set(pin)!={'sha256','bytes','identity','parents'}
+            or type(pin['bytes']) is not int or not 0<=pin['bytes']<=MAX_SCRIPT_BYTES
+            or type(pin['identity']) is not list or len(pin['identity'])!=2
+            or type(pin['parents']) is not list or len(pin['parents'])!=len(relative_path(path))
+            or any(type(pair) is not list or len(pair)!=2 or any(type(v) is not int or v<0 for v in pair)
+                   for pair in [pin['identity'],*pin['parents']])):
+        raise DevelopmentError('invalid_trusted_script_pin')
+    sha256(pin['sha256'])
+
+
+def _disjoint_scripts(plan,manifest):
+    """Separate trusted test code from every model-patchable path and alias."""
+    normalized={unicodedata.normalize('NFC',path).casefold() for path in manifest['files']}
+    with _repository(plan) as files:
+        identities=set()
+        for path in manifest['files']:
+            try:
+                with files.parent(path) as (parent,name):
+                    info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+                    identities.add(identity(info))
+            except OSError:
+                raise DevelopmentError('trusted_script_access_refused') from None
+        for test in plan['tests'].values():
+            if (unicodedata.normalize('NFC',test['script']).casefold() in normalized
+                    or tuple(test['script_pin']['identity']) in identities):
+                raise DevelopmentError('trusted_script_in_patch_caps')
+
+
+@contextmanager
+def _repository(plan):
+    files=RepositoryFiles(plan['root'],plan['root_identity'])
+    try:yield files
+    finally:files.close()
+
+
 def pin_test_plan(*, root, codex, cli_version, scripts, executable='/usr/bin/python3'):
     """Trusted controller step; creates no process and performs no model call.
 
     scripts maps each approved test name to {script, timeout_seconds,
-    max_output_bytes}. The paths must be existing allowlisted manifest files
-    when the backend is bound later. First backend supports Darwin only.
+    max_output_bytes}. The paths must be existing trusted files outside the model manifest
+    allowlist when the backend is bound later. First backend supports Darwin only.
     """
     if _host()['system'] != 'Darwin' or os.getuid() == 0:
         raise DevelopmentError('native_test_platform_unqualified')
@@ -203,8 +274,9 @@ def pin_test_plan(*, root, codex, cli_version, scripts, executable='/usr/bin/pyt
             if (type(suite['timeout_seconds']) is not int or not 1 <= suite['timeout_seconds'] <= 600
                     or type(suite['max_output_bytes']) is not int or not 0 <= suite['max_output_bytes'] <= 1048576):
                 raise DevelopmentError('invalid_test_plan')
-            tests[name] = dict(suite)
-        plan = {'schema': 1, 'profile_version': PROFILE_VERSION, 'host': _host(),
+            _,pin=_script_read(files,suite['script'])
+            tests[name] = {**suite,'script_pin':pin}
+        plan = {'schema': 2, 'profile_version': PROFILE_VERSION, 'host': _host(),
             'root': files.root, 'root_identity': list(files.identity), 'codex': os.fspath(codex),
             'codex_sha256': _binary(codex), 'cli_version': cli_version,
             'executable': os.fspath(executable), 'executable_sha256': _binary(executable),
@@ -216,28 +288,40 @@ def pin_test_plan(*, root, codex, cli_version, scripts, executable='/usr/bin/pyt
 
 
 def backend_id(plan):
-    return 'native-python-v1-' + digest(canonical(plan))[:40]
+    return 'native-python-v2-' + digest(canonical(plan))[:40]
+
+
+def _manifest_binding(plan,manifest):
+    expected=backend_id(plan)
+    if (plan['root']!=manifest['root'] or plan['root_identity']!=manifest['root_identity']
+            or set(plan['tests'])!={test['name'] for test in manifest['tests']}):
+        raise DevelopmentError('test_plan_scope_mismatch')
+    for suite in manifest['tests']:
+        test=plan['tests'][suite['name']]
+        if (suite['backend_id']!=expected or any(suite[key]!=test[key]
+                for key in ('timeout_seconds','max_output_bytes'))):
+            raise DevelopmentError('test_plan_scope_mismatch')
 
 
 def prepare_backend(directory, *, manifest, plan):
     """Bind an immutable controller plan to the frozen development manifest."""
     validate_manifest(manifest)
     _validate_plan(plan)
-    expected = backend_id(plan)
-    if (plan['root'] != manifest['root'] or plan['root_identity'] != manifest['root_identity']
-            or set(plan['tests']) != {test['name'] for test in manifest['tests']}):
-        raise DevelopmentError('test_plan_scope_mismatch')
-    for suite in manifest['tests']:
-        test = plan['tests'][suite['name']]
-        if (suite['backend_id'] != expected or test['script'] not in manifest['files']
-                or any(suite[key] != test[key] for key in ('timeout_seconds', 'max_output_bytes'))):
-            raise DevelopmentError('test_plan_scope_mismatch')
+    _manifest_binding(plan,manifest)
+    expected=backend_id(plan)
+    _disjoint_scripts(plan,manifest)
+    with _repository(plan) as files:
+        for test in plan['tests'].values():
+            if _script_read(files,test['script'])[1]!=test['script_pin']:
+                raise DevelopmentError('trusted_script_changed')
     if Path(directory).absolute().is_relative_to(Path(plan['root']).absolute()):
         raise DevelopmentError('journal_inside_workspace')
-    document = {'schema': 1, 'manifest_hash': digest(canonical(manifest)),
+    document = {'schema': 2, 'manifest_hash': digest(canonical(manifest)),
                 'plan': plan, 'backend_id': expected, 'plan_hash': digest(canonical(plan))}
+    encoded=canonical(document)
+    if len(encoded)>MAX_DOCUMENT:raise DevelopmentError('test_plan_too_large')
     with PrivateDirectory(directory, create=True) as private:
-        private.create('plan.json', canonical(document))
+        private.create('plan.json', encoded)
         private.create('qualification.json', canonical(None))
 
 
@@ -245,7 +329,7 @@ def _validate_plan(plan):
     if (type(plan) is not dict or set(plan) != {'schema', 'profile_version', 'host', 'root',
             'root_identity', 'codex', 'codex_sha256', 'cli_version', 'executable', 'executable_sha256',
             'wrapper_sha256', 'policy', 'tests', 'environment'}
-            or type(plan['schema']) is not int or plan['schema'] != 1
+            or type(plan['schema']) is not int or plan['schema'] != 2
             or type(plan['profile_version']) is not int or plan['profile_version'] != PROFILE_VERSION
             or plan['host'] != _host() or plan['host']['system'] != 'Darwin'
             or type(plan['root']) is not str or not plan['root'].startswith('/')
@@ -265,11 +349,14 @@ def _validate_plan(plan):
     sha256(plan['executable_sha256'])
     for name, test in plan['tests'].items():
         opaque(name, 'invalid_test_name', 64)
-        if (type(test) is not dict or set(test) != {'script', 'timeout_seconds', 'max_output_bytes'}
+        if (type(test) is not dict or set(test) != {'script', 'timeout_seconds', 'max_output_bytes','script_pin'}
                 or type(test['timeout_seconds']) is not int or not 1 <= test['timeout_seconds'] <= 600
                 or type(test['max_output_bytes']) is not int or not 0 <= test['max_output_bytes'] <= 1048576):
             raise DevelopmentError('invalid_test_plan')
-        relative_path(test['script'])
+        relative_path(test['script']);_script_pin(test['script_pin'],test['script'])
+        if test['script_pin']['parents'][0]!=plan['root_identity']:
+            raise DevelopmentError('invalid_trusted_script_pin')
+    if len(canonical(plan))>MAX_DOCUMENT:raise DevelopmentError('test_plan_too_large')
 
 
 def _receipt(status='needs_review', *, cleanup=False, output=b''):
@@ -289,7 +376,7 @@ class NativeNamedPythonBackend:
             self.document = decode(self.private.read('plan.json', MAX_DOCUMENT))
             if (type(self.document) is not dict or set(self.document) != {
                     'schema', 'manifest_hash', 'plan', 'backend_id', 'plan_hash'}
-                    or type(self.document['schema']) is not int or self.document['schema'] != 1
+                    or type(self.document['schema']) is not int or self.document['schema'] != 2
                     or self.document['manifest_hash'] != digest(canonical(manifest))):
                 raise DevelopmentError('invalid_test_plan')
             self.plan = self.document['plan']
@@ -297,6 +384,8 @@ class NativeNamedPythonBackend:
             if (self.document['plan_hash'] != digest(canonical(self.plan))
                     or self.document['backend_id'] != backend_id(self.plan)):
                 raise DevelopmentError('invalid_test_plan')
+            _manifest_binding(self.plan,manifest)
+            _disjoint_scripts(self.plan,manifest)
             self.backend_id = self.document['backend_id']
             self.manifest = decode(canonical(manifest))
             self.authorize_scope = authorize_scope
@@ -354,8 +443,18 @@ class NativeNamedPythonBackend:
         if (_binary(self.plan['codex']) != self.plan['codex_sha256']
                 or _binary(self.plan['executable']) != self.plan['executable_sha256']):
             raise DevelopmentError('backend_executable_changed')
-        files = RepositoryFiles(self.plan['root'], self.plan['root_identity'])
-        files.close()
+        _manifest_binding(self.plan,self.manifest)
+        _disjoint_scripts(self.plan,self.manifest)
+        for name in self.plan['tests']:self._script_payload(name)
+
+    def _script_payload(self,name):
+        test=self.plan['tests'].get(name)
+        if test is None:raise DevelopmentError('invalid_test_name')
+        with _repository(self.plan) as files:
+            data,pin=_script_read(files,test['script'])
+        if pin!=test['script_pin']:raise DevelopmentError('trusted_script_changed')
+        return {'script':test['script'],'script_base64':base64.b64encode(data).decode('ascii'),
+                'script_sha256':pin['sha256']}
 
     def qualified_for(self, manifest_hash, suite):
         try:
@@ -532,8 +631,8 @@ class NativeNamedPythonBackend:
                 'port': listener.getsockname()[1], 'timeout': timeout, 'qualify': qualify,
                 'outside_signal_pid': outside_signal_pid,
                 'executable': self.plan['executable'],
-                'script': None if qualify else self.plan['tests'][request.name]['script'],
                 'environment': self.plan['environment']}
+            if not qualify:payload.update(self._script_payload(request.name))
             # Preserve HOME/CODEX_HOME values for the CLI itself; no auth file
             # is opened by this controller, and none reaches the test env.
             cli_env = {key: os.environ[key] for key in ('HOME', 'CODEX_HOME', 'TMPDIR') if key in os.environ}
