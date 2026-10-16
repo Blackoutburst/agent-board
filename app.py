@@ -611,6 +611,14 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                                     idempotency_key, reason, status, unassign_self)
 
     @mcp.tool()
+    async def reconcile_profile_claim(session_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
+                                       expected_version: Version, idempotency_key: RuntimeOpaque,
+                                       recovery_evidence: Annotated[str, Field(strict=True, min_length=1, max_length=20000)]) -> dict:
+        """Release an expired claim held by another old-version session of this same profile and device, after inspecting prior effects. Requires current work-request permission, exact ticket version, stable retry key and concrete recovery evidence. Refuses live claims, other profiles/devices, current-version sources and any unresolved runtime execution. Preserves progress, results, evidence, dependencies and requests; retains assignment and never executes, resumes or completes work. Lease expiry or missing runtime records alone do not prove cleanup. Retry the same key after a lost response; retries never clear a later claim."""
+        return board.reconcile_profile_claim(session_actor(session_id), ticket_id, expected_version,
+                                             idempotency_key, recovery_evidence)
+
+    @mcp.tool()
     async def register_agent(session_id: str, label: str, agent_kind: str, identity_key: str = "default",
                              name: str = "", skills: list[str] | None = None, autonomous: bool = False) -> dict:
         """Register this chat under a persistent installation identity. Keep agent_kind/identity_key stable across chats (codex and claude-code are different agents); use a unique session_id for each chat. name is used only when creating the identity. autonomous=true declares human-authorized worker participation; it grants no shell access."""
@@ -780,7 +788,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.6.0", "schema_version": 8, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments"]}
+        return {"status": "ok", "version": "2.6.1", "schema_version": 8, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

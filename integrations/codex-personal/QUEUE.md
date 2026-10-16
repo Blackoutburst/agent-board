@@ -16,9 +16,11 @@ python3 -m blackoutburst_agents queue \
 
 Sans `--execute`, seuls l’enregistrement non autonome et les lectures du projet et de la file sont effectués. Aucun journal, réservation ou modèle n’est créé. Ajouter `--execute` constitue une demande ponctuelle de sélection. `--human-owner identifiant-proprietaire` autorise le même parcours question/réponse que [`worker`](WORKER.md), avec destinataire immuable. Relancer la même commande reprend ce ticket ; une réponse humaine ne sélectionne jamais un autre ticket.
 
+Une question dont la réservation a été libérée bloque son ticket côté serveur, tout en permettant une sélection explicite pour un autre ticket prêt. Le journal local de `queue` reste séquentiel : une opération de file encore inachevée, y compris en attente humaine, empêche un nouveau cycle dans ce journal. Une sélection distincte ne répond pas à la question précédente et ne reprend pas son modèle.
+
 ## Un travail à la fois
 
-Le serveur choisit atomiquement selon l’affectation, les dépendances, la priorité et les permissions courantes. Une réservation inachevée, même expirée, ou une demande humaine ouverte de ce profil empêche de sélectionner un nouveau ticket, sur ses autres sessions et appareils aussi. La réservation explicite d’un ticket reste une opération séparée.
+Le serveur choisit atomiquement selon l’affectation, les dépendances, la priorité et les permissions courantes. Une réservation inachevée, même expirée, empêche de sélectionner un nouveau ticket, sur les autres sessions et appareils du profil aussi. Une demande humaine dont la réservation a été libérée bloque uniquement son propre ticket. La réservation explicite d’un ticket reste une opération séparée.
 
 Le journal privé fixe le propriétaire, le profil, la connexion, la session, le projet, le modèle et l’instruction. Ses clés de sélection et d’exécution sont écrites avant les effets. Un verrou partagé entre projets et sessions du même profil empêche de contourner une opération encore ouverte. Les chemins doivent désigner des répertoires privés appartenant à l’utilisateur (`0700`). Conserver les mêmes chemins pour la reprise.
 
