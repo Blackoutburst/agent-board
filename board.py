@@ -64,7 +64,7 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 11:
+            if version > 12:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -153,6 +153,15 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
             if version < 11:
                 migrate_delegation_families(db)
                 db.execute("PRAGMA user_version=11")
+            if version < 12:
+                db.execute('''CREATE TABLE mcp_page_cursors(token_hash TEXT PRIMARY KEY,
+                    reader TEXT NOT NULL, scope TEXT NOT NULL, position TEXT NOT NULL,
+                    created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
+                db.execute('CREATE INDEX mcp_page_cursor_expiry ON mcp_page_cursors(expires_at)')
+                db.execute('CREATE INDEX mcp_page_cursor_reader ON mcp_page_cursors(reader,created_at)')
+                db.execute("ALTER TABLE message_feeds ADD COLUMN pending_view TEXT NOT NULL DEFAULT 'full'")
+                db.execute("ALTER TABLE message_feeds ADD COLUMN pending_compact_json TEXT")
+                db.execute("PRAGMA user_version=12")
 
     @contextmanager
     def _connection(self):
@@ -556,6 +565,10 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
     def post_message(self, actor, thread_id, body, reply_to=None, mentions=None, attachment_ids=None, idempotency_key=""):
         if not isinstance(body, str) or len(body) > 100000:
             raise BoardError("Message exceeds 100,000 characters")
+        try:
+            body.encode('utf-8')
+        except UnicodeEncodeError:
+            raise BoardError('Message must contain valid Unicode')
         mentions = _strings(mentions or [], "mentions")
         attachment_ids = _strings(attachment_ids or [], "attachment_ids")
         if not body.strip() and not attachment_ids:
@@ -797,7 +810,7 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
             raise BoardError("Limit must be between 1 and 200")
         return limit
 
-    def read_inbox(self, actor, cursor=None, limit=50, reader_id="", include_work=False):
+    def read_inbox(self, actor, cursor=None, limit=50, reader_id="", include_work=False, *, mcp_compact=False):
         limit = self._limit(limit)
         if type(include_work) is not bool:
             raise BoardError("include_work must be a boolean")
@@ -813,16 +826,43 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
                 if not issued:
                     raise BoardError("Cursor was not issued for this session", 400)
                 boundary = issued[0]
+                if mcp_compact:
+                    # Presentation acknowledges the previous durable page. A
+                    # lost/rejected initial response can be replayed cursorless.
+                    db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader,boundary))
             rows = self._addressed_messages(db, actor, boundary=boundary, limit=limit)
-            next_seq = rows[-1]["seq"] if len(rows)==limit else db.execute('SELECT COALESCE(MAX(seq),0) FROM messages').fetchone()[0]
+            source_count = len(rows)
             token = secrets.token_urlsafe(32)
-            db.execute("INSERT INTO cursors VALUES(?,?,?)", (_hash(token), reader, next_seq))
-            db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader, next_seq))
             session = None
             if actor["kind"] == "agent":
                 db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (time.time(), actor["session_id"]))
                 session = self._session(db.execute("SELECT * FROM sessions WHERE id=?", (actor["session_id"],)).fetchone())
+            if mcp_compact:
+                from mcp_views import compact, size, BUDGET
+                metadata = {"messages":[], "cursor":token, "session":session}
+                if include_work:
+                    metadata['work']={'detail_tool':'get_work','legacy_tasks_detail':'list_thread_tasks','embedded':False}
+                selected, used = [], size(compact(metadata))
+                for row in rows:
+                    used += size(compact(self._message(db,row)))+1
+                    if used>BUDGET:
+                        break
+                    selected.append(row)
+                if rows and not selected:
+                    raise BoardError('One inbox summary exceeds budget; use an explicit full read',413)
+                rows = selected
+            next_seq = rows[-1]["seq"] if rows and (len(rows)==limit or len(rows)<source_count) else db.execute('SELECT COALESCE(MAX(seq),0) FROM messages').fetchone()[0]
+            db.execute("INSERT INTO cursors VALUES(?,?,?)", (_hash(token), reader, next_seq))
+            if not mcp_compact:
+                db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader, next_seq))
             result = {"messages": [self._message(db, row) for row in rows], "cursor": token, "session": session}
+            if mcp_compact:
+                result = compact(result)
+                if include_work:
+                    result.update(work={'detail_tool':'get_work','legacy_tasks_detail':'list_thread_tasks','embedded':False})
+                if size(result)>BUDGET:
+                    raise BoardError('Inbox metadata exceeds budget; request an explicit full read',413)
+                return result
             if not include_work:
                 return result
             self._expire(db)

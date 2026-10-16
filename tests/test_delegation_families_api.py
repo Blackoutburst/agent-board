@@ -46,7 +46,7 @@ def test_family_tools_schema_and_open_get_lookup_roundtrip(family_api):
     response=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},
         json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
     tools={tool['name']:tool for tool in response.json()['result']['tools']}
-    assert TOOLS<=set(tools) and len(tools)==53
+    assert TOOLS<=set(tools) and len(tools)==55
     schema=tools['open_delegation_family']['inputSchema']
     assert schema['properties']['children']['minItems']==2
     assert schema['properties']['children']['maxItems']==2
@@ -59,7 +59,7 @@ def test_family_tools_schema_and_open_get_lookup_roundtrip(family_api):
         'idempotency_key':args['idempotency_key']})=={'found':True,'family':value}
     assert client.get('/api/delegation-families/'+value['id']).json()==value
     health=client.get('/health').json()
-    assert health['version']=='2.9.0' and health['schema_version']==11
+    assert health['version']=='2.10.0' and health['schema_version']==12
     assert 'delegation_families' in health['features']
     assert board.get_runtime(human)['active_count']==0
     with board._connection() as db:
@@ -198,3 +198,33 @@ def test_child_result_acceptance_and_finalization_use_exact_real_receipts(family
     parent=board.get_ticket(human,args['parent_ticket_id'])['ticket']
     assert parent['status']=='in_progress' and parent['claimant']['session_id']=='runtime-api'
     assert board.get_runtime(human)['active_count']==0
+
+
+def test_compact_family_budget_and_trusted_full_source_client(family_api):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0,str(Path(__file__).parents[1]/'integrations/codex-personal'))
+    from blackoutburst_agents.family_client import FamilyBoardClient
+    from blackoutburst_agents.board_reader import BoardReadError
+    from test_api import call_tool,tool_data
+    browser,args=family_api;client,board,human,token,*_=browser
+    args=copy.deepcopy(args);args['limits']['max_concurrent']=1
+    args['children'][1]['role']='reviewer'
+    args['children'][0]['description']='Exact family source '+'😀'*1000
+    channel=FamilyBoardClient({'mcp_url':'https://board.test/mcp','token':'synthetic','client':'codex','identity_key':'fixture','name':'Fixture'},'runtime-api',3)
+    channel.adopt_registration();channel._initialize=lambda:None
+    calls=[]
+    def rpc(method,params):
+        calls.append(params)
+        return call_tool(client,token,params['name'],params['arguments'])
+    channel._rpc=rpc
+    full=channel.call('open_delegation_family',args)
+    assert full['plan']['children'][0]['description']==args['children'][0]['description']
+    assert channel.call('get_delegation_family',{'family_id':full['id']})==full
+    assert all(x['arguments']['view']=='full' for x in calls)
+    count=len(calls)
+    with pytest.raises(BoardReadError):channel.call('get_delegation_family',{'family_id':full['id'],'view':'full'})
+    assert len(calls)==count
+    compact=call_tool(client,token,'get_delegation_family',{'session_id':'runtime-api','family_id':full['id']})
+    assert not compact.get('isError') and len(json.dumps(compact,ensure_ascii=True).encode())<20000
+    assert 'description' not in tool_data(compact)['plan']['children'][0]

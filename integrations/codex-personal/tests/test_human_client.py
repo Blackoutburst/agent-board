@@ -27,7 +27,7 @@ class HumanClientTests(unittest.TestCase):
         self.assertEqual(len(requests), 4)
         self.assertFalse(requests[1]['params']['arguments']['autonomous'])
         for request, name in zip(requests[2:], ('lookup_human_request', 'request_human_input')):
-            self.assertEqual(request['params'], {'name': name, 'arguments': {**self.arguments, 'session_id': 'explicit-worker',
+            self.assertEqual(request['params'], {'name': name, 'arguments': {**self.arguments, 'session_id': 'explicit-worker', 'view':'full',
                 **({'expected_version': 7} if name == 'request_human_input' else {})}})
 
     def test_invalid_or_broader_requests_never_register_or_reach_network(self):

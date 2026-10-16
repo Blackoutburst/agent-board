@@ -92,7 +92,7 @@ def test_no_anonymous_private_metadata_and_static_assets(browser):
     assert client.get('/workspace.js').status_code==200
     assert client.get('/connect.py').status_code==200
     health=client.get('/health').json()
-    assert health['version']=='2.9.0' and health['schema_version']== 11
+    assert health['version']=='2.10.0' and health['schema_version']== 12
 
 
 def test_activity_order_is_available_through_rest_and_mcp(browser):
@@ -114,7 +114,7 @@ def test_activity_order_is_available_through_rest_and_mcp(browser):
     token=board.create_device(human,'Activity reader',[])['token']
     rpc(client,token,'register_agent',{'session_id':'activity-reader','label':'Reader','agent_kind':'codex'})
     def activity(arguments):
-        result=rpc(client,token,'list_activity',{'session_id':'activity-reader',**arguments})
+        result=rpc(client,token,'list_activity',{'session_id':'activity-reader','view':'full',**arguments})
         return result['result'] if isinstance(result,dict) else result
     assert activity(params)==first
     assert activity({**params,'after':first[-1]['id']})==second
@@ -151,7 +151,7 @@ def test_mcp_lookup_human_request_does_not_create_and_reads_resolved_answer(brow
     task=board.create_ticket(human,project['id'],'Task',idempotency_key='task')
     token=board.create_device(human,'Worker',[])['token']
     rpc(client,token,'register_agent',{'session_id':'lookup','label':'Lookup','agent_kind':'codex'})
-    arguments={'session_id':'lookup','ticket_id':task['id'],'owner_id':'blackoutburst',
+    arguments={'session_id':'lookup','view':'full','ticket_id':task['id'],'owner_id':'blackoutburst',
                'question':'Which value?','idempotency_key':'question'}
     assert rpc(client,token,'lookup_human_request',arguments)=={'found':False}
     assert board.get_ticket(human,task['id'])['ticket']==task

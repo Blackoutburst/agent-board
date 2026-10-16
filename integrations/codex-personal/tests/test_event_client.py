@@ -32,7 +32,7 @@ class EventClientTests(unittest.TestCase):
             self.assertEqual(self.client.call('list_activity', self.args), events)
             self.assertEqual(self.args, before)
             self.client._rpc.assert_called_with('tools/call', {'name': 'list_activity',
-                'arguments': {**self.args, 'session_id': 'session'}})
+                'arguments': {**self.args, 'session_id': 'session', 'view':'full'}})
 
     def test_only_complete_scoped_ascending_requests_pass(self):
         bad = [None, {}, {**self.args, 'session_id': 'other'}, {**self.args, 'order': 'desc'},

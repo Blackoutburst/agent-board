@@ -100,7 +100,7 @@ def test_exact_mcp_unicode_source_fits_reader_limit_and_contains_no_extra_contex
     before = dump(board)
     with TestClient(application) as client:
         response = rpc(client, device['token'], 'tools/call', {'name': 'get_message', 'arguments': {
-            'session_id': 'memory-source', 'thread_id': thread['id'], 'message_id': message['id']}})
+            'session_id': 'memory-source', 'thread_id': thread['id'], 'message_id': message['id'], 'view':'full'}})
         assert response.status_code == 200
         assert len(response.content) < 2*1024*1024
         result = tool_data(response.json()['result'])

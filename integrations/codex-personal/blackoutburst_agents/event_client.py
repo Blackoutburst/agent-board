@@ -23,7 +23,7 @@ class EventBoardClient(WorkerBoardClient):
                 args[key].encode('utf-8', 'strict')
         except UnicodeError:
             raise BoardReadError('invalid_arguments') from None
-        values = {**args, 'session_id': self.session_id}
+        values = {**args, 'session_id': self.session_id, 'view':'full'}
         if not self._registered:
             self.register()
         result = self._rpc('tools/call', {'name': 'list_activity', 'arguments': values})

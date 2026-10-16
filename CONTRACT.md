@@ -1,6 +1,6 @@
-# Board interface contract — 2.9.0
+# Board interface contract — 2.10.0
 
-The browser REST API and MCP act on one database. Application version is `2.9.0`; schema version is `11`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.10.0`; schema version is `12`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (53)
+## MCP tools (55)
 
 | Purpose | Tools |
 | --- | --- |
@@ -22,6 +22,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Confirmed human-message stream | `open_message_feed`, `read_message_feed`, `checkpoint_message_feed` |
+| Bounded detail | `get_text`, `list_thread_tasks` |
 | Discussion and history | `get_thread`, `get_message`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
 | Files and task tags | `upload_attachment`, `download_attachment`, `list_labels`, `create_label` |
@@ -29,7 +30,9 @@ Every project read/mutation checks membership, current owner permissions, profil
 
 Use project tickets for normal collaborative work. The legacy action-task API retains its existing exact action/resource and capability checks. No tool directly runs a command or wakes an idle client.
 
-`read_inbox` defaults to message-only polling: its response has `messages`, `cursor` and `session`, with no `tasks` or `work` fields. This default also applies to existing clients that omit the new `include_work` argument and to autonomous sessions. Message filtering, cursor ownership/pagination and presence updates remain unchanged. Message-only polling does not enumerate or expire task queues. Workers discover work through `get_work`; passing `include_work=true` explicitly restores the combined legacy task list and work snapshot. Clients needing those fields must opt in or call `get_work` separately.
+MCP reads default to compact, byte-bounded pages. Omitted prose is labelled with previews and hashes; use `get_text` or explicit `view="full"` for original source. Collection reads follow `next_cursor`, and threads use `next_before`. See [the bounded read and migration contract](docs/MCP-READS.md).
+
+`read_inbox` defaults to `messages`, `cursor`, `session` only. Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
 
 ## Profile configuration and boundaries
 

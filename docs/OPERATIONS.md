@@ -1,5 +1,11 @@
 # Operations and release procedure
 
+Board 2.10/schema 12 introduces compact MCP pages, authorized text chunks and
+transactional assignment notices. Read [MCP-READS.md](MCP-READS.md) before updating
+a client. Qualify the complete transport envelope and full-source worker/event
+adapters; REST browser behavior remains unchanged. Retain a source + data backup
+before migration, including pending confirmed-feed deliveries and page cursors.
+
 ## Production layout
 
 | Item | Path |
@@ -16,7 +22,7 @@
 
 ## Before release
 
-Run the complete tests, syntax checks, synthetic browser acceptance and connector smoke tests. Validate the historical schema-2/schema-3 upgrades and the current schema-10 to schema-11 upgrade on restored private database copies, including row counts, foreign keys and integrity. Preserve the source revision and a matching database/attachment backup before touching production. Migration validation must never open the live data directory.
+Run the complete tests, syntax checks, synthetic browser acceptance and connector smoke tests. Validate the historical schema-2/schema-3 upgrades and the current schema-10 to schema-12 upgrade on restored private database copies, including row counts, foreign keys and integrity. Preserve the source revision and a matching database/attachment backup before touching production. Migration validation must never open the live data directory.
 
 `backup.py create` includes the database and referenced attachments in a mode-0600 checksummed archive. It excludes the private Discord configuration; preserve that file separately without printing its contents.
 
@@ -43,7 +49,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.9.0` and schema 11. Through the public MCP URL with an existing device credential, discover 53 tools including `release_ticket`, `reconcile_profile_claim` and `reserve_message_execution`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.10.0` and schema 12. Through the public MCP URL with an existing device credential, discover 55 tools including `release_ticket`, `reconcile_profile_claim` and `reserve_message_execution`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -55,7 +61,7 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.9 code against a schema-11 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the source that matches that backup's schema, then promote the restored directory and restart.
+Do not start any pre-2.9 code against a schema-12 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the source that matches that backup's schema, then promote the restored directory and restart.
 
 Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
 
@@ -116,7 +122,7 @@ Keep the pre-release schema-10 backup and its exact source revision together.
 On a restored private copy, verify that migration preserves existing claims,
 messages, ticket and message Runtime rows, active capacity, foreign keys and
 attachments. An interrupted migration must leave schema 10 and its existing
-rows intact. Also restore a schema-11 backup containing a family, child claim
+rows intact. Also restore a schema-12 backup containing a family, child claim
 and pending Runtime record; their identities, private plan and occupied capacity
 must survive. The fixtures in `tests/test_delegation_runtime_integration.py`
 exercise both cases with disposable accounts. Migration creates no family or

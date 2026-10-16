@@ -298,11 +298,12 @@ class CoordinationMixin(ProjectsMixin):
         _version(expected_version)
         ticket_id = _text(ticket_id, 'ticket_id', 1, 200)
         idempotency_key = _text(idempotency_key, 'idempotency_key', 1, 200)
+        if isinstance(recovery_evidence,str):
+            try:
+                recovery_evidence.encode('utf-8', 'strict')
+            except UnicodeError:
+                _fail('reconcile_claim_invalid_evidence')
         recovery_evidence = _text(recovery_evidence, 'recovery_evidence', 1, 20000)
-        try:
-            recovery_evidence.encode('utf-8', 'strict')
-        except UnicodeError:
-            _fail('reconcile_claim_invalid_evidence')
         payload = {'ticket_id': ticket_id, 'recovery_evidence': recovery_evidence}
         with self._tx() as db:
             actor = self._actor(db, actor, 'allow_requests')
@@ -487,7 +488,7 @@ class CoordinationMixin(ProjectsMixin):
             ticket['project_name'] = row['project_name']
             yield ticket
 
-    def get_work(self, actor, project_id='', limit=20):
+    def get_work(self, actor, project_id='', limit=20, *, _mcp_all=False):
         limit = self._limit(limit)
         with self._connection() as db:
             actor = self._actor(db, actor, 'allow_read')
@@ -509,7 +510,7 @@ class CoordinationMixin(ProjectsMixin):
                     ON m.project_id=t.project_id WHERE m.owner_id=? AND t.status='blocked'
                     AND (t.assignee_agent_id=? OR t.assignee_owner_id=?) AND (?='' OR t.project_id=?)""",
                     (actor['owner_id'],identity,actor['owner_id'],project_id,project_id)) if self._profile_project_allowed(db, actor, row['project_id'])]
-            return {'ready': ready[:limit], 'recovery': recovery[:limit], 'assigned': owned, 'waiting': waiting,
+            return {'ready': ready if _mcp_all else ready[:limit], 'recovery': recovery if _mcp_all else recovery[:limit], 'assigned': owned, 'waiting': waiting,
                     'human_requests': self._list_requests_tx(db, actor, project_id),
                     'policy': self._effective_profile_policy(db, actor, self._profile_for_actor(db, actor)) if actor['kind'] == 'agent' else json.loads(self._owner(db, actor['owner_id'])['policy'])}
 
@@ -709,7 +710,7 @@ class CoordinationMixin(ProjectsMixin):
             self._audit(db, actor, 'human_input_resolved', {'ticket_id': row['id'], 'request_id': request_id})
             return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone())
 
-    def list_activity(self, actor, project_id='', ticket_id='', after=0, limit=100, order='desc'):
+    def list_activity(self, actor, project_id='', ticket_id='', after=0, limit=100, order='desc', *, _mcp_all=False):
         limit = self._limit(limit)
         if type(after) is not int or after < 0:
             _fail('after must be a nonnegative event ID')
@@ -731,7 +732,7 @@ class CoordinationMixin(ProjectsMixin):
             rows = db.execute(f"""SELECT e.*,t.number,t.title,t.project_id FROM ticket_events e
                 JOIN tickets t ON t.id=e.ticket_id JOIN project_members m ON m.project_id=t.project_id
                 WHERE m.owner_id=? AND (?='' OR t.project_id=?) AND (?='' OR t.id=?) AND e.id>? AND t.project_id IN ({placeholders})
-                ORDER BY e.id {direction} LIMIT ?""", (actor['owner_id'], project_id, project_id, ticket_id, ticket_id, after, *allowed, limit))
+                ORDER BY e.id {direction} LIMIT ?""", (actor['owner_id'], project_id, project_id, ticket_id, ticket_id, after, *allowed, -1 if _mcp_all else limit))
             return [{**dict(row), 'actor': json.loads(row['actor']), 'detail': json.loads(row['detail'])} for row in rows]
 
     def delegate_task(self, actor, parent_ticket_id, expected_version, title, description,

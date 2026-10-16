@@ -108,7 +108,7 @@ class BoardReaderTests(unittest.TestCase):
         self.assertEqual(requests[1]["params"], {"name": "register_agent", "arguments": {
             "session_id": "explicit-session", "agent_kind": "codex", "identity_key": "paired-identity",
             "name": "Codex · Test Mac", "label": "Codex · Test Mac context",
-            "skills": [], "autonomous": False}})
+            "skills": [], "autonomous": False, "view": "full"}})
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(reader._opener.requests[0][0].get_header("Authorization"), "Bearer " + TOKEN)
         self.assertNotIn(TOKEN, repr(reader))

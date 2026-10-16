@@ -1,6 +1,7 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.9.0**, schéma **11**, adaptateur **0.20.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.10.0**, schéma **12**, adaptateur **0.21.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
@@ -21,6 +22,12 @@ Une identité de profil persiste entre chats ; la session d’exécution reste d
 Les préférences de fournisseur des profils ne prouvent ni accès ni connexion. Cet adaptateur utilise le Codex personnel connecté à ChatGPT. Il n’implémente aucun transport Strata/GLM et n’étend pas ses droits à partir d’un champ de préférence.
 
 ## Sources et contexte
+
+Depuis Board 2.10, les réponses MCP sont compactes par défaut. `BoardReader`
+et `EventBoardClient` ajoutent `view="full"` après validation stricte des
+arguments pour préserver le texte source et l'activité attendus par les journaux.
+Les aperçus ne sont jamais scellés comme source complète. Le contrat des pages,
+chunks `get_text` et modes compatibles est dans [MCP-READS](../../docs/MCP-READS.md).
 
 `BoardReader` enregistre une présence avec `autonomous=false`, sans lire l’inbox, puis limite ses lectures à `get_ticket` et `get_thread`. Il injecte la session choisie, refuse les redirections et borne les réponses. `build_context` vérifie la portée owner/agent/project/ticket, sélectionne profil, brief, critères, progression, dépendances, demandes humaines et messages récents, puis produit `blackoutburst-ticket-context-v1`.
 
