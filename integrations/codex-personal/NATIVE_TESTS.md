@@ -11,7 +11,10 @@ This first backend supports **standalone, single-process Python scripts on a
 qualified Darwin host**. Tests needing child processes, package installation,
 network, writable temporary directories outside the checkout, or an additional
 toolchain are unsupported. Linux and Windows are refused; a successful Mac
-canary is not evidence for another operating system.
+canary is not evidence for another operating system. The separate
+[Linux feasibility probe](LINUX_FEASIBILITY.md) records real namespace and
+sandbox measurements with unresolved write/cleanup guards; Linux remains
+refused.
 
 ## Controller plan and execution
 
