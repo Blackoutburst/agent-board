@@ -2,7 +2,9 @@
 
 `DevelopmentPlanner` is an explicit controller API over the development broker.
 It has no CLI entrypoint, listener, task picker, account fallback, board write,
-publication or merge operation. The existing PersonalRunner behavior is unchanged.
+publication or merge operation. The existing PersonalRunner behavior is unchanged. A disabled constructor refuses
+before creating a work, journal or canonical fence; probing the default cannot
+strand a checkout.
 This lot has been exercised with simulated model/test work and a temporary Board;
 no actual model turn or production project was used.
 
@@ -41,12 +43,17 @@ next model. No reservation is nested and no refusal causes waiting, API fallback
 automatic rekeying or a quota observation inferred from local output.
 
 RuntimeJournal remains format 1 for model-only records. Its first `local_broker`
-record commits local format 2, so older readers refuse explicitly. The server
+record commits local format 2, so older readers refuse on a new opening. Stop
+older coordinators sharing this journal before that first record: a process
+already holding the database does not rerun its opening version check. The server
 already accepts opaque provider labels; no server database migration is needed.
 
 A trusted fresh `authorization()` callback supplies an exact manifest scope,
 claim ID, four current permission assertions (owner/profile/project/claim), and
-explicit action/resource grants. Scope includes device, session and profile
+explicit action/resource grants. A model turn always requires `repo.read_file`
+for the manifest resource, because its prompt contains source metadata and
+possibly prior file content; removing this grant stops before/during inference.
+Scope includes device, session and profile
 version. The controller cross-checks it before admission and each broker effect,
 alongside stop/budget and Runtime cancellation. The adapter implementing this
 callback must read authoritative current state and validate the exact claim
@@ -61,7 +68,10 @@ context descriptor; that separate integration is required before a live pilot.
 `planner.json`, `planner.lock` and an irreversible `planner-stop.json` are fixed
 names in the broker's private directory. Every step receives one UUID and stable
 model request/action keys before any effect. Total turn/action/byte budgets and
-an absolute wall deadline survive reopening; invalid/backwards clocks refuse.
+an absolute wall deadline according to the trusted system clock survive reopening;
+nonfinite clocks or a time before the operation start refuse. This is not an
+anti-manipulation guarantee for the OS clock, and a smaller backwards adjustment
+that remains after the start is not detected.
 Reads and source-proof snapshots also consume the broker's existing budgets.
 Oversized prompts/results refuse rather than silently truncate.
 
@@ -97,12 +107,16 @@ explicit `run()` call. Missing intent/receipt, an unapplied patch or stale final
 inspection remains review. Stops/deadlines do not prevent receipt-only cleanup
 confirmation, and reconciliation cannot clear a durable stop.
 
-`review_ready` requires an actual current diff, hashes for all allowlisted files,
+`review_ready` is a dated audit receipt for the last authorized inspection, with
+`evidence_kind=inspected_snapshot`, `inspected_at`, base SHA and snapshot hash. It
+requires an actual diff and hashes for all allowlisted files at that inspection,
 all manifest test suites passed against that exact snapshot, and rechecked durable
 broker test receipts. A patch or source mutation invalidates prior test proof.
 The public result contains hashes, bounded metadata and test evidence, never source,
-prompts, model summary or captured stdout. The model's final declaration cannot
-mark a ticket done. Human review/publication/claim release remain outside this API.
+prompts, model summary or captured stdout. Returning a cached receipt performs no fresh source validation. External writes
+during/after Runtime finish can age the inspected snapshot; an eventual
+acceptance/application must revalidate current hashes in its own authorized
+effect. The model's final declaration cannot mark a ticket done. Human review/publication/claim release remain outside this API.
 
 The existing native supervisor qualification covers its measured Darwin fixture
 and controller-crash scenario only; it does not establish every failure window,

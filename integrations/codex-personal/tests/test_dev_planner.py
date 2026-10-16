@@ -308,9 +308,28 @@ class PlannerTests(unittest.TestCase):
             self.create(instruction='Different instruction')
         self.assertEqual(caught.exception.code, 'canonical_operation_conflict')
 
+    def test_canonical_anchor_must_be_outside_both_checkout_and_planner(self):
+        for directory in (self.root, self.planner_root):
+            anchor = directory / 'nested-anchor'
+            with self.subTest(directory=directory), self.assertRaises(DevelopmentError) as caught:
+                self.create(_test_anchor=anchor)
+            self.assertEqual(caught.exception.code, 'planner_fence_overlap')
+            self.assertFalse(anchor.exists())
+
+    def test_unsupervised_backend_refuses_without_fixture_opt_in(self):
+        with self.assertRaises(DevelopmentError) as caught:
+            self.create(_allow_fixture_backend=False)
+        self.assertEqual(caught.exception.code, 'planner_supervised_backend_required')
+        self.assertFalse(self.transports)
+        self.assertFalse(self.control.calls)
+
     def test_disabled_planner_refuses_without_model_or_reservation(self):
-        result = self.create(enabled=False).run()
-        self.assertEqual(result['reason'], 'planner_disabled')
+        with self.assertRaises(DevelopmentError) as caught:
+            self.create(enabled=False)
+        self.assertEqual(caught.exception.code, 'planner_disabled')
+        self.assertFalse((self.base / 'anchor').exists())
+        self.assertFalse((self.private / 'planner.json').exists())
+        self.assertEqual(self.policy.validations, 0)
         self.assertFalse(self.transports)
         self.assertFalse(self.control.calls)
 

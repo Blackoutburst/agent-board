@@ -12,7 +12,7 @@ import time
 import uuid
 
 from .codex_turn import execute_turn
-from .dev_fence import DevelopmentFence
+from .dev_fence import DevelopmentFence, canonical_anchor
 from .dev_journal import decode
 from .dev_manifest import (DevelopmentError, absolute_directory, canonical, check_content,
                            digest, identity, opaque, relative_path, sha256)
@@ -101,8 +101,12 @@ class DevelopmentPlanner:
         self.authorization, self.claim_id, self.clock = authorization, opaque(claim_id), _clock
         self.enabled, self.active_guard, self.journal, self.fence = enabled, None, None, None
         self._base_authorize = broker.authorize_scope
-        if type(enabled) is not bool or not callable(authorization):
+        if (type(enabled) is not bool or type(_allow_fixture_backend) is not bool
+                or not callable(authorization)):
             raise DevelopmentError('invalid_planner_controller')
+        if not enabled:
+            # A disabled probe must not reserve a checkout indefinitely.
+            raise DevelopmentError('planner_disabled')
         manifest = broker.manifest
         if enabled and not _allow_fixture_backend:
             if (not isinstance(broker.test_backend, SupervisedNativeNamedPythonBackend)
@@ -148,6 +152,14 @@ class DevelopmentPlanner:
         self.binding = {'scope': self.scope, 'root_identity': manifest['root_identity'],
             'journal': pins['broker'], 'configuration_hash': digest(canonical(self.configuration)),
             'child_scope': {'work_id': self.work['id'], 'runs': pins['runs'], 'runtime': pins['runtime']}}
+        anchor = canonical_anchor() if _test_anchor is None else Path(_test_anchor).absolute()
+        anchor_ancestors = _ancestor_identities(anchor, allow_missing=True)
+        for name, root_pin in (('checkout', {'path': manifest['root'], 'identity': manifest['root_identity']}),
+                               ('planner', pins['planner'])):
+            ancestry = _ancestor_identities(root_pin['path'])
+            if (tuple(root_pin['identity']) in anchor_ancestors or
+                    (anchor.exists() and anchor_ancestors[0] in ancestry)):
+                raise DevelopmentError('planner_fence_overlap')
         try:
             self.fence = DevelopmentFence(_test_anchor=_test_anchor)
             self.operation_id, created = self.fence.bind(self.binding, str(uuid.uuid4()))
@@ -181,6 +193,9 @@ class DevelopmentPlanner:
         return now
 
     def _grant(self, action=None):
+        # Model prompts carry allowlisted source metadata/previous read data.
+        # Their permission floor is explicit read access to this resource.
+        action = 'repo.read_file' if action is None else action
         try:
             grant = self.authorization()
             if (type(grant) is not dict or set(grant) != {'scope', 'claim_id', 'owner_enabled',
@@ -192,8 +207,8 @@ class DevelopmentPlanner:
                     or any(grant[field] is not True for field in
                         ('owner_enabled', 'profile_enabled', 'project_allowed', 'claim_current'))
                     or type(grant['actions']) is not list or type(grant['resources']) is not list
-                    or (action is not None and (action not in grant['actions']
-                        or self.broker.manifest['resource'] not in grant['resources']))):
+                    or action not in self.broker.manifest['actions'] or action not in grant['actions']
+                    or self.broker.manifest['resource'] not in grant['resources']):
                 raise ValueError
         except Exception:
             raise DevelopmentError('planner_authorization_changed') from None
@@ -336,7 +351,8 @@ class DevelopmentPlanner:
                     or receipt.get('operation_id') != proof['operation_id']
                     or digest(canonical(receipt)) != proof['receipt_sha256']):
                 raise DevelopmentError('final_test_receipt_changed')
-        return {'diff': diff, 'snapshot_sha256': snapshot['sha256'], 'tests': state['tests'],
+        return {'evidence_kind': 'inspected_snapshot', 'inspected_at': self._time(state),
+                'diff': diff, 'snapshot_sha256': snapshot['sha256'], 'tests': state['tests'],
                 'model_summary_sha256': digest(action['summary'].encode('utf-8'))}, True
 
     def _tool(self, state):
