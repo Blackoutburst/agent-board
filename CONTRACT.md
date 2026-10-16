@@ -1,6 +1,12 @@
-# Board interface contract — 2.7.0
+# Board interface contract — 2.8.0
 
-The browser REST API and MCP act on one database. Application version is `2.7.0`; schema version is `9`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+MCP data pages default to compact views with an 6,000-byte encoded-data budget;
+the complete tool result is tested below 20,000 bytes. Explicit `view="full"`
+restores original shapes/text. Clients must not treat previews as source. See
+[MCP-READS.md](docs/MCP-READS.md) for cursors, `get_text`, attachment chunking,
+confirmed-feed compatibility, assignment notices and bundled worker migration.
+
+The browser REST API and MCP act on one database. Application version is `2.8.0`; schema version is `10`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 

@@ -285,6 +285,14 @@ class BoardReader:
         self._initialized = True
 
     def _tool(self, name, args):
+        # These callers seal full source text and validate claim/dependency
+        # fields. Explicitly opt into the legacy full representation; never
+        # mistake an MCP preview for the original source. The strict caller
+        # argument allowlists still run before this trusted injection.
+        if name in {'get_ticket','get_thread','get_project','get_work','claim_ticket',
+                    'claim_next_ticket','lookup_ticket_selection','renew_ticket',
+                    'update_ticket','release_ticket','request_human_input','lookup_human_request','register_agent'}:
+            args={**args,'view':'full'}
         result = self._rpc("tools/call", {"name": name, "arguments": args})
         if not isinstance(result, dict) or ("isError" in result and type(result["isError"]) is not bool):
             raise BoardReadError("invalid_response")

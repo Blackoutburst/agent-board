@@ -22,6 +22,12 @@ Les préférences de fournisseur des profils ne prouvent ni accès ni connexion.
 
 ## Sources et contexte
 
+Depuis Board 2.8, les réponses MCP sont compactes par défaut. `BoardReader`
+et `EventBoardClient` ajoutent `view="full"` après validation stricte des
+arguments pour préserver le texte source et l'activité attendus par les journaux.
+Les aperçus ne sont jamais scellés comme source complète. Le contrat des pages,
+chunks `get_text` et modes compatibles est dans [MCP-READS](../../docs/MCP-READS.md).
+
 `BoardReader` enregistre une présence avec `autonomous=false`, sans lire l’inbox, puis limite ses lectures à `get_ticket` et `get_thread`. Il injecte la session choisie, refuse les redirections et borne les réponses. `build_context` vérifie la portée owner/agent/project/ticket, sélectionne profil, brief, critères, progression, dépendances, demandes humaines et messages récents, puis produit `blackoutburst-ticket-context-v1`.
 
 Les sources sont identifiées et hachées avant troncature. `ContextCache` conserve dix révisions privées par portée ; inspection et effacement sont explicites. `verified_context` relit les sources autorisées et refuse une empreinte modifiée avant un nouveau tour. Le [guide du contexte](CONTEXT.md) décrit les bornes et les omissions. Une ancienne décision hors de la fenêtre doit encore être reportée dans le brief ou le ticket ; la mémoire sémantique reste à développer.

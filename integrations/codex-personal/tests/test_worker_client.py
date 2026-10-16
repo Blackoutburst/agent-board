@@ -48,7 +48,7 @@ class WorkerClientTests(unittest.TestCase):
         self.assertEqual(registration['skills'], [])
         for index, (name, args) in enumerate(calls, 2):
             self.assertEqual(requests[index]['params'], {'name': name,
-                'arguments': {**args, 'session_id': 'explicit-worker'}})
+                'arguments': {**args, 'session_id': 'explicit-worker', 'view':'full'}})
 
     def test_explicit_registration_rechecks_policy_without_enabling_queue(self):
         self.client.register()

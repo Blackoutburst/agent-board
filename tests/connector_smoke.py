@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,7 +12,9 @@ from unittest.mock import patch
 
 import httpx
 
-url='http://127.0.0.1:18765'
+url=os.environ.get('BOARD_TEST_URL','http://127.0.0.1:18765')
+if not url.startswith('http://127.0.0.1:'):
+    raise RuntimeError('Connector smoke uses loopback fixtures only')
 script=Path(__file__).resolve().parents[1]/'connect.py'
 spec=importlib.util.spec_from_file_location('connector_smoke',script)
 module=importlib.util.module_from_spec(spec)
@@ -27,7 +30,7 @@ with httpx.Client(base_url=url) as client, tempfile.TemporaryDirectory(prefix='b
             '--codex-config',str(folder/'codex.toml'),'--claude-config',str(folder/'claude.json')]
         with patch.object(sys,'argv',args),patch.object(module.getpass,'getpass',return_value=pairing['code']),contextlib.redirect_stdout(io.StringIO()) as output:
             module.main()
-        assert 'Verified 45 MCP tools' in output.getvalue()
+        assert 'Verified 47 MCP tools' in output.getvalue()
         requests=[{'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-03-26','capabilities':{},'clientInfo':{'name':'connector-smoke','version':'1'}}},
             {'jsonrpc':'2.0','method':'notifications/initialized'},
             {'jsonrpc':'2.0','id':2,'method':'tools/list','params':{}},
@@ -35,7 +38,7 @@ with httpx.Client(base_url=url) as client, tempfile.TemporaryDirectory(prefix='b
         process=subprocess.run([sys.executable,str(folder/'connect.py'),'--stdio','--client',client_kind,'--config-dir',str(folder)],
             input='\n'.join(json.dumps(r) for r in requests)+'\n',text=True,capture_output=True,timeout=45,check=True)
         responses={item['id']:item for item in map(json.loads,process.stdout.splitlines())}
-        assert len(responses[2]['result']['tools'])==45
+        assert len(responses[2]['result']['tools'])==47
         inbox=responses[3]['result']
         assert not inbox.get('isError'),inbox
         data=inbox.get('structuredContent') or json.loads(inbox['content'][0]['text'])
@@ -66,5 +69,5 @@ with httpx.Client(base_url=url) as client, tempfile.TemporaryDirectory(prefix='b
         selected_data=result.get('structuredContent') or json.loads(result['content'][0]['text'])
         assert selected_data['session']['agent_id']==profile['id']
     assert ids[0]!=ids[1]
-print(json.dumps({'connector_clients':['codex','claude-code'],'verified_tools':45,'distinct_persistent_agent_ids':True,
+print(json.dumps({'connector_clients':['codex','claude-code'],'verified_tools':47,'distinct_persistent_agent_ids':True,
     'profile_selection_and_stale_session_fencing':True,'private_temp_configuration_removed':True}))

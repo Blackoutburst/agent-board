@@ -67,7 +67,8 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Version: `2.7.0`; database schema: `9`
+- Version: `2.8.0`; database schema: `10`
+- MCP data reads use bounded compact pages and explicit text retrieval. See [MCP read and client compatibility contract](docs/MCP-READS.md); clients needing original bodies must request `view="full"` or follow `get_text` chunks.
 
 Schema migration is additive and transactional. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Older code cannot run against schema 9: rollback requires both the previous source and its matching database backup.
 

@@ -199,7 +199,7 @@ def test_mcp_inbox_defaults_to_messages_and_work_requires_opt_in(application):
         assert set(default)=={'messages','cursor','session'}
         explicit=tool_data(call_tool(client,device['token'],'read_inbox',{**args,'include_work':False,'cursor':default['cursor']}))
         assert set(explicit)==set(default) and explicit['messages']==[]
-        combined=tool_data(call_tool(client,device['token'],'read_inbox',{**args,'include_work':True,'cursor':explicit['cursor']}))
+        combined=tool_data(call_tool(client,device['token'],'read_inbox',{**args,'include_work':True,'cursor':explicit['cursor'],'view':'full'}))
         assert set(combined)==set(default)|{'tasks','work'}
         assert [t['id'] for t in combined['work']['ready']]==[ticket['id']]
         work=tool_data(call_tool(client,device['token'],'get_work',{'session_id':'monitor'}))

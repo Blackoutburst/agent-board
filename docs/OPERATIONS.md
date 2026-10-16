@@ -1,5 +1,11 @@
 # Operations and release procedure
 
+Board 2.8/schema 10 introduces compact MCP pages, authorized text chunks and
+transactional assignment notices. Read [MCP-READS.md](MCP-READS.md) before updating
+a client. Qualify the complete transport envelope and full-source worker/event
+adapters; REST browser behavior remains unchanged. Retain a source + data backup
+before migration, including pending confirmed-feed deliveries and page cursors.
+
 ## Production layout
 
 | Item | Path |

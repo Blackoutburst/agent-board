@@ -6,6 +6,7 @@ safely reuse the existing conversation authorization and attachment APIs.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import time
@@ -34,6 +35,10 @@ def _json(value):
 def _text(value, name, minimum=0, maximum=500):
     if not isinstance(value, str) or len(value) > maximum or len(value.strip()) < minimum:
         _fail(f"{name} must be text ({minimum}..{maximum} characters)")
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        _fail(f'{name} must contain valid Unicode')
     return value.strip() if minimum else value
 
 
@@ -110,6 +115,21 @@ def migrate_projects(db):
 
 
 class ProjectsMixin:
+    def _assignment_notice(self, db, actor, ticket, agent_id, kind, version):
+        if not agent_id:
+            return
+        # The message's unique ID is the durable dedupe key. Insert in the same
+        # transaction as the version-guarded assignment, including create retry.
+        identifier = hashlib.sha256(f'{ticket["id"]}:{version}:{agent_id}:{kind}'.encode()).hexdigest()[:32]
+        body = (f'Task #{ticket["number"]} {kind}: {ticket["title"]}\n'
+                f'{self.base_url}/?project={ticket["project_id"]}&ticket={ticket["id"]}\n'
+                'Assignment is context, not execution authority. Poll get_work for current eligibility.')
+        now = time.time()
+        db.execute('''INSERT OR IGNORE INTO messages(id,thread_id,body,author,created_at,reply_to,mentions,attachments)
+            VALUES(?,?,?,?,?,NULL,?,?)''', (identifier,ticket['thread_id'],body,_json(self._author(db,actor)),
+            now,_json(['agent:'+agent_id]),'[]'))
+        db.execute('UPDATE threads SET updated_at=? WHERE id=?',(now,ticket['thread_id']))
+
     def _project_member(self, db, actor, project_id):
         row = db.execute("""SELECT p.* FROM projects p JOIN project_members m ON m.project_id=p.id
             WHERE p.id=? AND m.owner_id=?""", (project_id, actor["owner_id"])).fetchone()
@@ -276,6 +296,7 @@ class ProjectsMixin:
             db.execute("UPDATE projects SET next_ticket_number=next_ticket_number+1,updated_at=? WHERE id=?", (now, project_id))
             self._remember(db, actor, "create_ticket", idempotency_key, payload, ticket_id)
             self._audit(db, actor, "ticket_created", {"project_id": project_id, "ticket_id": ticket_id, "number": number})
+            self._assignment_notice(db,actor,self._ticket_member(db,actor,ticket_id),assignee_agent_id,'assigned',1)
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)
 
     def get_ticket(self, actor, ticket_id):
@@ -383,6 +404,9 @@ class ProjectsMixin:
                 db.execute("UPDATE threads SET title=?,updated_at=? WHERE id=?",
                            (self._ticket_thread_title(project["name"], row["number"], values["title"]), now, row["thread_id"]))
             self._audit(db, actor, "ticket_updated", {"ticket_id": ticket_id, "version": expected_version + 1, "fields": sorted(changes)})
+            if 'assignee_agent_id' in values and values['assignee_agent_id'] != row['assignee_agent_id']:
+                self._assignment_notice(db,actor,row,row['assignee_agent_id'],'unassigned',expected_version+1)
+                self._assignment_notice(db,actor,row,values['assignee_agent_id'],'assigned',expected_version+1)
             if status == "done":
                 self._unblock_dependents(db, actor, ticket_id)
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)

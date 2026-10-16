@@ -62,7 +62,7 @@ class MessageFeedMixin:
             _fail('Message feed not found', 404)
         return row
 
-    def _feed_pending_messages(self, db, actor, row):
+    def _feed_pending_messages(self, db, actor, row, *, mcp_compact=False):
         # Do not expose a partial replay when any formerly permitted content is
         # withdrawn. Reconciliation must never silently checkpoint past it.
         ids = json.loads(row['pending_ids'])
@@ -76,8 +76,15 @@ class MessageFeedMixin:
                     or not targets.intersection(json.loads(message['mentions']))):
                 _fail('Message feed delivery is no longer permitted; reconcile its access', 403)
             rendered = self._message(db, message)
-            byte_count += self._feed_message_size(rendered)+(1 if current else 0)
-            if byte_count > MAX_MESSAGE_BYTES:
+            if mcp_compact:
+                from mcp_views import compact
+                rendered = compact(rendered)
+            if mcp_compact:
+                from mcp_views import size
+                byte_count += size(rendered)+(1 if current else 0)
+            else:
+                byte_count += self._feed_message_size(rendered)+(1 if current else 0)
+            if byte_count > (5500 if mcp_compact else MAX_MESSAGE_BYTES):
                 _fail('Message feed delivery exceeds the byte limit; reconcile its content', 413)
             current.append(rendered)
         return current
@@ -118,7 +125,7 @@ class MessageFeedMixin:
                  payload,profile['id'],start_at,limit,initial,initial,now))
             return self._feed_metadata(db.execute('SELECT * FROM message_feeds WHERE id=?',(identifier,)).fetchone())
 
-    def read_message_feed(self, actor, feed_id):
+    def read_message_feed(self, actor, feed_id, *, mcp_compact=False):
         with self._tx() as db:
             actor = self._feed_actor(db, actor)
             row = self._feed_row(db, actor, feed_id)
@@ -141,11 +148,19 @@ class MessageFeedMixin:
                     if permitted:
                         full = db.execute('SELECT * FROM messages WHERE id=?',(message['id'],)).fetchone()
                         rendered = self._message(db,full)
-                        size = self._feed_message_size(rendered)
-                        if size+2 > MAX_MESSAGE_BYTES:
+                        if mcp_compact:
+                            from mcp_views import compact
+                            rendered = compact(rendered)
+                        if mcp_compact:
+                            from mcp_views import size as compact_size
+                            size = compact_size(rendered)
+                        else:
+                            size = self._feed_message_size(rendered)
+                        maximum = 5000 if mcp_compact else MAX_MESSAGE_BYTES
+                        if size+2 > maximum:
                             _fail('One addressed message exceeds the feed byte limit; reconcile its content',413)
                         addition = size+(1 if selected else 0)
-                        if byte_count+addition > MAX_MESSAGE_BYTES:
+                        if byte_count+addition > maximum:
                             # This candidate remains after the confirmed bound.
                             break
                         selected.append(message['id']);byte_count += addition
@@ -155,10 +170,10 @@ class MessageFeedMixin:
                     if scanned < MAX_SCAN_ROWS:
                         end = max(row['confirmed_seq'],high)
                 db.execute('''UPDATE message_feeds SET pending_id=?,pending_ids=?,pending_end_seq=?,
-                    pending_high_watermark=? WHERE id=?''',
-                    (secrets.token_hex(16),json.dumps(selected),end,high,feed_id))
+                    pending_high_watermark=?,pending_view=? WHERE id=?''',
+                    (secrets.token_hex(16),json.dumps(selected),end,high,'compact' if mcp_compact else 'full',feed_id))
                 row = db.execute('SELECT * FROM message_feeds WHERE id=?',(feed_id,)).fetchone()
-            messages = self._feed_pending_messages(db, actor, row)
+            messages = self._feed_pending_messages(db, actor, row,mcp_compact=mcp_compact)
             db.execute('UPDATE sessions SET last_seen_at=? WHERE id=?',(time.time(),actor['session_id']))
             return {'feed_id':feed_id, 'checkpoint':row['checkpoint'], 'delivery_id':row['pending_id'],
                     'messages':messages, 'human_only':True}
@@ -175,7 +190,7 @@ class MessageFeedMixin:
                 return {'feed_id':feed_id,'delivery_id':delivery_id,'checkpoint':expected_checkpoint+1,'acknowledged':True}
             if row['checkpoint'] != expected_checkpoint or row['pending_id'] != delivery_id:
                 _fail('Message feed checkpoint or delivery changed; reload without skipping pending delivery',409)
-            self._feed_pending_messages(db,actor,row)
+            self._feed_pending_messages(db,actor,row,mcp_compact=row['pending_view']=='compact')
             db.execute('''UPDATE message_feeds SET confirmed_seq=pending_end_seq,checkpoint=checkpoint+1,
                 last_ack_id=pending_id,last_ack_checkpoint=checkpoint+1,pending_id=NULL,pending_ids=NULL,
                 pending_end_seq=NULL,pending_high_watermark=NULL WHERE id=?''',
