@@ -41,6 +41,34 @@ def reject(function,*args,expected_status=None,**kwargs):
         assert error.value.status==expected_status
 
 
+def test_human_request_links_exact_discussion_message_and_legacy_fails_open(space):
+    board,human,other,_,first,*_=space
+    task=new(space)
+    board.claim_ticket(first,task['id'],task['version'])
+    request=board.request_human_input(first,task['id'],'thescreamer','Which value?','request-link')
+    ticket=board.get_ticket(human,task['id'])['ticket']
+    linked=ticket['human_requests'][0]['discussion_message_id']
+    assert linked
+    message=board.get_message(human,task['thread_id'],linked)['message']
+    assert message['body']=='Human question requested: Which value?'
+    # The persisted ID remains exact even if an ordinary lookalike is posted later.
+    with board._tx() as db:
+        board._discussion_event(db,first,task['thread_id'],message['body'],[])
+    assert board.get_ticket(human,task['id'])['ticket']['human_requests'][0]['discussion_message_id']==linked
+    # Pre-release events had no message ID: unique exact matches are supported,
+    # but ambiguity must leave ordinary messages visible rather than guess.
+    with board._tx() as db:
+        db.execute("UPDATE ticket_events SET detail=json_remove(detail,'$.message_id') WHERE event='human_input_requested'")
+    assert board.get_ticket(human,task['id'])['ticket']['human_requests'][0]['discussion_message_id'] is None
+    with board._tx() as db:
+        db.execute('DELETE FROM messages WHERE thread_id=? AND id!=?',(task['thread_id'],linked))
+    assert board.get_ticket(human,task['id'])['ticket']['human_requests'][0]['discussion_message_id']==linked
+    reject(board.resolve_human_request,human,request['id'],'Not the recipient',expected_status=403)
+    board.resolve_human_request(other,request['id'],'Chosen value')
+    ticket=board.get_ticket(human,task['id'])['ticket']
+    assert ticket['human_requests'][0]['status']=='resolved' and ticket['waiting_on_human'] is False
+
+
 def test_identity_persists_across_chats_restart_and_distinguishes_clients_and_devices(space):
     board,human,_,project,first,second,device=space
     identities=board.list_agents(human,project['id'])

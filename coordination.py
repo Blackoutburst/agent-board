@@ -152,6 +152,9 @@ class CoordinationMixin(ProjectsMixin):
             WHERE d.depends_on_id=? ORDER BY t.number""", (row['id'],))]
         result['human_requests'] = [self._request(item) for item in db.execute(
             'SELECT * FROM human_requests WHERE ticket_id=? ORDER BY created_at', (row['id'],))]
+        for request in result['human_requests']:
+            if request['status'] == 'open':
+                request['discussion_message_id'] = self._human_request_message(db, row['thread_id'], request)
         result['waiting_on_human'] = any(item['status'] == 'open' for item in result['human_requests'])
         result['claim_expired'] = bool(row['status'] != 'done' and result['claimant'] and result['claimant']['kind'] == 'agent'
             and (row['lease_expires_at'] or 0) <= time.time())
@@ -591,6 +594,22 @@ class CoordinationMixin(ProjectsMixin):
         result['requested_by'] = json.loads(result['requested_by'])
         return result
 
+    def _human_request_message(self, db, thread_id, request):
+        event = db.execute("""SELECT detail FROM ticket_events WHERE ticket_id=? AND event='human_input_requested'
+            AND json_extract(detail,'$.request_id')=? ORDER BY id LIMIT 1""",
+            (request['ticket_id'], request['id'])).fetchone()
+        message_id = json.loads(event['detail']).get('message_id') if event else None
+        if message_id:
+            return message_id
+        # Old requests did not record the message ID. Only hide an exact, unique
+        # author/text match; ambiguous legacy messages remain visible.
+        prefix = f"Human {request['kind']} requested: "
+        matches = [row['id'] for row in db.execute(
+            'SELECT id,body FROM messages WHERE thread_id=? AND author=? AND created_at>=?',
+            (thread_id, _json(request['requested_by']), request['created_at']))
+            if row['body'].startswith(prefix) and row['body'][len(prefix):].strip() == request['question']]
+        return matches[0] if len(matches) == 1 else None
+
     def _list_requests_tx(self, db, actor, project_id='', include_resolved=False):
         rows = db.execute("""SELECT r.*,t.number,t.title,t.project_id FROM human_requests r
             JOIN tickets t ON t.id=r.ticket_id JOIN project_members m ON m.project_id=t.project_id
@@ -650,7 +669,7 @@ class CoordinationMixin(ProjectsMixin):
             author = self._author(db, actor)
             db.execute('INSERT INTO human_requests(id,ticket_id,owner_id,question,kind,requested_by,created_at) VALUES(?,?,?,?,?,?,?)',
                 (request_id, ticket_id, owner_id, question.strip(), kind, _json(author), now))
-            self._discussion_event(db, actor, row['thread_id'], f'Human {kind} requested: {question}', [owner_id])
+            message_id = self._discussion_event(db, actor, row['thread_id'], f'Human {kind} requested: {question}', [owner_id])
             # Release the precise session's lease but retain the persistent
             # worker as the resumption target. Later human reassignment wins;
             # resolving/retrying the request never restores this assignment.
@@ -659,15 +678,17 @@ class CoordinationMixin(ProjectsMixin):
                 assignee_agent_id=COALESCE(assignee_agent_id,?),
                 lease_expires_at=NULL,version=version+1,updated_at=? WHERE id=?""", (agent_id, now, ticket_id))
             self._remember(db, actor, 'request_human_input', idempotency_key, payload, request_id)
-            self._audit(db, actor, 'human_input_requested', {'ticket_id': ticket_id, 'request_id': request_id, 'owner_id': owner_id})
+            self._audit(db, actor, 'human_input_requested', {'ticket_id': ticket_id, 'request_id': request_id, 'owner_id': owner_id, 'message_id': message_id})
             self._queue_notification(db, row['thread_id'], 'needs_input', 'human-request:'+request_id, [owner_id], row['title'])
             return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone())
 
     def _discussion_event(self, db, actor, thread_id, body, mentions):
+        message_id = secrets.token_hex(16)
         db.execute("""INSERT INTO messages(id,thread_id,body,author,created_at,reply_to,mentions,attachments)
-            VALUES(?,?,?,?,?,NULL,?,'[]')""", (secrets.token_hex(16), thread_id, body,
+            VALUES(?,?,?,?,?,NULL,?,'[]')""", (message_id, thread_id, body,
             _json(self._author(db, actor)), time.time(), _json(mentions)))
         db.execute('UPDATE threads SET updated_at=? WHERE id=?', (time.time(), thread_id))
+        return message_id
 
     def resolve_human_request(self, actor, request_id, answer):
         _text(answer, 'answer', 1, 20000)

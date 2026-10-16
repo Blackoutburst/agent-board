@@ -206,7 +206,10 @@ function authorMeta(author = {}, createdAt) {
 }
 function renderMessages() {
   const data = state.threadData;
-  $("messages").replaceChildren(...(data.messages.length ? data.messages.map(messageCard) : [empty(data.thread.ticket ? "Posez une question, demandez une ressource ou une validation. Cet échange apparaîtra dans les conversations après le premier message." : "Ask a question, request a resource, or discuss a decision.")]));
+  const requestPrompts = new Set(state.ticket && state.ticket.id === data.thread.ticket?.id
+    ? state.ticket.human_requests.filter(request => request.status === "open").map(request => request.discussion_message_id).filter(Boolean) : []);
+  const messages = data.messages.filter(message => !requestPrompts.has(message.id));
+  $("messages").replaceChildren(...(messages.length ? messages.map(messageCard) : [empty(data.thread.ticket ? "Posez une question, demandez une ressource ou une validation. Cet échange apparaîtra dans les conversations après le premier message." : "Ask a question, request a resource, or discuss a decision.")]));
   $("older-messages").replaceChildren();
   if (data.next_before) $("older-messages").append(btn("Load older messages", async (event) => {
     event.currentTarget.disabled = true;
