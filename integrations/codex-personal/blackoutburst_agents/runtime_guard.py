@@ -40,13 +40,21 @@ class RuntimeGuard:
             raise RuntimeControlError('runtime_scope_mismatch')
         return RuntimeJournal.configuration(self.scope, work['id'], turn_id, work['model'])
 
+    def expected(self, config):
+        return {**{key:config['scope'][key] for key in ('owner_id','agent_id','project_id','ticket_id')},
+            'session_id':config['scope']['board_session_id'],
+            **{key:config[key] for key in ('work_id','turn_id','provider','model')}}
+
+    def reservation(self, config):
+        return 'reserve_execution', {'idempotency_key':self.operation['key'],
+            **{key:config['scope'][key] for key in ('project_id','ticket_id')},
+            **{key:config[key] for key in ('work_id','turn_id','provider','model')}}
+
     def metadata(self, value):
         if not isinstance(value, dict) or self.operation is None:
             raise RuntimeControlError('runtime_receipt_invalid')
         config = self.operation['configuration']
-        expected = {**{key:config['scope'][key] for key in ('owner_id','agent_id','project_id','ticket_id')},
-            'session_id':config['scope']['board_session_id'],
-            **{key:config[key] for key in ('work_id','turn_id','provider','model')}}
+        expected = self.expected(config)
         if any(value.get(key) != item for key,item in expected.items()):
             raise RuntimeControlError('runtime_scope_mismatch')
         if (not isinstance(value.get('id'),str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',value['id'])
@@ -87,9 +95,8 @@ class RuntimeGuard:
             raise RuntimeControlError('runtime_existing_turn_requires_review')
         try:
             config=self.operation['configuration']
-            result=self.client.call('reserve_execution',{'idempotency_key':self.operation['key'],
-                **{key:config['scope'][key] for key in ('project_id','ticket_id')},
-                **{key:config[key] for key in ('work_id','turn_id','provider','model')}})
+            name, arguments = self.reservation(config)
+            result=self.client.call(name,arguments)
             if not isinstance(result,dict) or result.get('reserved') is not True or type(result.get('retried')) is not bool:
                 raise RuntimeControlError('runtime_reservation_unconfirmed')
             receipt=self.metadata(result.get('execution'))

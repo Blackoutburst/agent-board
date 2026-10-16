@@ -14,6 +14,8 @@ L’adaptateur 0.13 ajoute les [primitives du broker de développement](DEVELOPM
 
 L’adaptateur 0.14 ajoute un [backend natif de tests Python nommés](NATIVE_TESTS.md) et sa [supervision séparée](SUPERVISED_TESTS.md), sur option et après qualification locale. Le backend supervisé a été vérifié sur Mac avec des fichiers synthétiques, dont un crash du contrôleur suivi d’un nettoyage et d’un rapprochement sans réexécution. Linux reste non qualifié. Les workers existants n’exposent pas ce backend au modèle et aucune installation ne l’active.
 
+Un [mode de réponse aux messages](MESSAGE_HOST.md) est disponible sur configuration explicite `schema_version: 2`, avec le flux confirmé et une portée Runtime de conversation. Le mode activité `schema_version: 1` reste distinct. Aucun listener permanent n’est installé ou activé.
+
 ## Utilisation
 
 Python **3.10 ou supérieur**, sur macOS ou Linux/POSIX ; aucune bibliothèque Python externe n’est nécessaire à l’exécution. Codex doit être installé et connecté par son propriétaire au moyen de son interface ou de sa CLI officielle. L’authentification reste gérée par Codex. [Documentation officielle de connexion](https://learn.chatgpt.com/docs/auth)

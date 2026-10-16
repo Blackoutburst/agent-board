@@ -96,6 +96,7 @@ def default_resources(host, target, scope, cancelled):
 class HostSupervisor:
     def __init__(self, journal, *, resource_factory=default_resources, clock=time.monotonic):
         self.journal, self.resource_factory, self.clock = journal, resource_factory, clock
+        self.message_resource_factory = None
 
     def _receipt(self, status, reason, **values):
         return {'status':status, 'reason':reason, **values,
@@ -122,6 +123,9 @@ class HostSupervisor:
         value = self.journal.control()
         if not value['enabled']:
             return self._receipt('disabled', value['reason'])
+        if value['configuration']['schema_version']==2:
+            from .message_host import MessageHostSupervisor, default_message_resources
+            return MessageHostSupervisor(self.journal,resource_factory=self.message_resource_factory or default_message_resources).tick(should_cancel=should_cancel)
         activation, config = value['activation'], value['configuration']
 
         def cancelled():
@@ -243,6 +247,9 @@ class HostSupervisor:
         control = self.journal.control()
         if control['enabled']:
             raise HostError('host_must_be_stopped')
+        if control['configuration']['schema_version']==2:
+            from .message_host import MessageHostSupervisor
+            return MessageHostSupervisor(self.journal).reconcile(batch_id)
         dispatch = next((row for row in self.journal.dispatches() if row['batch_id'] == batch_id),None)
         if dispatch is None or not dispatch['worker_id']:
             raise HostError('host_reference_conflict')

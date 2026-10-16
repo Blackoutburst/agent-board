@@ -1,6 +1,6 @@
-# Hôte local explicite — adaptateur 0.12
+# Hôte local explicite
 
-L’hôte surveille uniquement les tickets choisis dans une configuration locale privée. Il collecte leur activité avec `EventDrainer`, puis utilise le worker textuel existant et le contrôle Runtime pour un lot éligible. Il ne choisit aucun nouveau ticket, ne lit pas les conversations générales et n’installe aucun service.
+Le mode activité `schema_version: 1` décrit ici surveille uniquement les tickets choisis dans une configuration locale privée. Il collecte leur activité avec `EventDrainer`, puis utilise le worker textuel existant et le contrôle Runtime pour un lot éligible. Il ne choisit aucun nouveau ticket et n’installe aucun service. Le mode de réponse `schema_version: 2` suit séparément les [messages humains confirmés](MESSAGE_HOST.md), y compris les conversations générales ; aucun mode n’est activé par défaut.
 
 La création est désactivée par défaut. `enable` autorise un budget fini de nouveaux lots ; `run` est ensuite une commande distincte, au premier plan. Rien n’a été activé par l’installation de cette version. Le propriétaire doit lancer et conserver le processus sur son hôte personnel. Le fonctionnement sur un serveur permanent ou Mac éteint n’est pas démontré par les tests locaux.
 
@@ -85,4 +85,4 @@ Cette commande n’abandonne aucun travail, n’acquitte aucune réservation dis
 
 Les tests utilisent des journaux SQLite et le Board temporaires, des transports de modèle simulés et aucune connexion réseau. Ils couvrent notamment : 1 000 ticks vides sans claim/modèle/publication, budget et arrêt durables, verrou propriétaire, alias d’URL, journal remplacé, enfants indépendants, coupures entre préparation/liaison/publication, quotas Runtime, changement de profil et question/réponse sans troisième tour.
 
-Le host reste un worker de texte. Il n’exécute pas de développement de code, ne délègue pas vers d’autres modèles et ne réveille pas une conversation de l’application Codex. Les mentions hors tickets suivis nécessitent encore un flux de messages rejouable ; `read_inbox` n’est pas utilisé. Les mesures d’usage sont informatives : une remise à zéro ou un pourcentage disponible ne réactive jamais l’hôte. Les droits et l’admission Runtime sont vérifiés par leurs contrôles existants.
+Le host reste un worker de texte. Il n’exécute pas de développement de code, ne délègue pas vers d’autres modèles et ne réveille pas une conversation de l’application Codex. Les mentions hors tickets suivis relèvent du [mode réponses explicite](MESSAGE_HOST.md) ; `read_inbox` n’est utilisé par aucun des deux modes. Les mesures d’usage sont informatives : une remise à zéro ou un pourcentage disponible ne réactive jamais l’hôte. Les droits et l’admission Runtime sont vérifiés par leurs contrôles existants.

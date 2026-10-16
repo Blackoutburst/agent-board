@@ -31,7 +31,11 @@ def run(args):
             else:
                 operation=journal.get(args.operation)
                 config=operation['configuration'];scope=config['scope']
-                client=RuntimeBoardClient.from_connection_file(args.connection_file,
+                client_kind,guard_kind=RuntimeBoardClient,RuntimeGuard
+                if scope.get('scope_kind')=='message':
+                    from .message_runtime import MessageRuntimeClient,MessageRuntimeGuard
+                    client_kind,guard_kind=MessageRuntimeClient,MessageRuntimeGuard
+                client=client_kind.from_connection_file(args.connection_file,
                     session_id=scope['board_session_id'],timeout=3)
                 store=RunStore(args.state);stack.callback(store.close)
                 # Hold the model-work lock: a cached result cannot be reconciled
@@ -44,7 +48,7 @@ def run(args):
                     work=status['work']
                     binding=store.get_context_guard(config['work_id'])
                     if binding is not None:work={**work,'decision_memory':binding}
-                    RuntimeGuard(journal,client,scope).confirm_cached(work,config['turn_id'],
+                    guard_kind(journal,client,scope).confirm_cached(work,config['turn_id'],
                         store.turn_result(config['turn_id']))
                 output=journal.status(operation['id'])
         print(json.dumps(output,ensure_ascii=False,indent=2));return 0

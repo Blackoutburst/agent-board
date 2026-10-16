@@ -78,7 +78,11 @@ class RuntimeJournal:
 
     @staticmethod
     def configuration(scope, work_id, turn_id, model, *, provider='codex_chatgpt'):
-        _scope(scope)
+        if isinstance(scope,dict) and scope.get('scope_kind')=='message':
+            from .message_scope import validate_scope
+            validate_scope(scope)
+        else:
+            _scope(scope)
         try:
             for value in (work_id, turn_id):
                 if not isinstance(value, str) or str(uuid.UUID(value)) != value:
