@@ -1,0 +1,76 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "backend_source_sha256": "ecb57e882ac7340cf03ffd2872c45a8977bda9ce8d93193772a98d2d915406a1",
+  "checks": {
+    "controller_hard_killed": true,
+    "crash_recovery": {
+      "cleanup_confirmed": true,
+      "result": "cancelled"
+    },
+    "crash_replay_no_execution": true,
+    "durable_helper_completion": true,
+    "passed": {
+      "cleanup_confirmed": true,
+      "result": "passed"
+    },
+    "scripts_outside_patch_caps": true,
+    "test_and_helper_gone": true,
+    "timeout": {
+      "cleanup_confirmed": true,
+      "result": "failed"
+    },
+    "trusted_script_patch_refused": true
+  },
+  "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
+  "cli_version": "codex-cli 0.162.0-alpha.17.2",
+  "controller_authentication_files_read": false,
+  "host": {
+    "machine": "arm64",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "model_calls": 0,
+  "observed_on": "2026-10-16",
+  "production_enabled": false,
+  "profile_version": 2,
+  "qualification": {
+    "checks": {
+      "fork": true,
+      "inside_read": true,
+      "inside_write": true,
+      "network_loopback": true,
+      "nproc_raise": true,
+      "outside_read": true,
+      "outside_signal": true,
+      "outside_write": true,
+      "process_group": true,
+      "session": true,
+      "spawn": true
+    },
+    "cleanup_confirmed": true,
+    "plan_hash": "8ff54db50d325e8398f035833b252c0960ed9e8182505b33b178f2870b6bb1ca",
+    "result": "qualified_supervised_fixture",
+    "schema": 1,
+    "supervision_hash": "2f533e18ff867f8d91fa47fb42874c8e84fe0e929fa8a17a573edca086f3a351"
+  },
+  "result": "passed_supervisor_fixture",
+  "schema": 1,
+  "supervisor_source_sha256": "e3178252fcb3911eddc8d4ece47d2199a233174e61f4dac10473517cda426bf1",
+  "synthetic_files_removed": true,
+  "test_plan_schema": 2,
+  "trusted_script_pins": {
+    "crash": {
+      "bytes": 228,
+      "sha256": "68e383e6dd5510ecd08cec7b22fc2dc4ffe46dadd00548bfff0d1b3b6d0e8ac0"
+    },
+    "passed": {
+      "bytes": 110,
+      "sha256": "f6454a39c128e7133b87a692eb396cdffe6ebde058d7ba6f1e8723ceb6b201aa"
+    },
+    "timeout": {
+      "bytes": 79,
+      "sha256": "ff61bfd488de5907a53c7fdf6281c0ed88351409def653871cdbc96b9777e53f"
+    }
+  },
+  "wrapper_sha256": "2b91f173d74b2dc63693d6b4405b757f43fd6f86b684f2f02d1703f2f30e20a9"
+}
