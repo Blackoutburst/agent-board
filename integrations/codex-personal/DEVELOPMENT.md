@@ -124,11 +124,11 @@ broker does not invent success or silently start another operation.
 ## Named tests and missing integration
 
 `NamedTest` contains only a name, backend ID and budgets, never model-provided
-argv, environment, shell command or executable path. No real backend ships.
+argv, environment, shell command or executable path. The separately opt-in [native Python backend](NATIVE_TESTS.md) and [supervised variant](SUPERVISED_TESTS.md) provide a locally qualified Darwin implementation; existing workers do not invoke them.
 Without a matching backend whose `qualified_for(manifest_hash, suite)` returns
 literal `True`, `run_test` is refused before creating an execution intent.
 
-A future qualified backend must enforce filesystem/network/environment limits,
+Every qualified backend must enforce filesystem/network/environment limits,
 the named test's deadline and output bounds, descendant cleanup, and durable
 idempotent lookup across restarts. Repository tests execute repository-controlled
 code, so a fixed test name alone is not isolation. Qualification is a trusted
@@ -143,7 +143,7 @@ are never accepted. Failed/unknown cleanup blocks new effects. Backend exception
 leave an uncertain intent and expose only a fixed error code.
 
 Before an actual development executor is usable, it still needs a bounded model
-transport, server policy/Runtime integration, a qualified test backend, scoped
+transport, server policy/Runtime integration, remote/Linux backend qualification, scoped
 worktree preparation, cancellation and cleanup, a reviewable artifact flow and
 an explicitly authorized end-to-end pilot. This lot does not change existing
 text workers or claim that these missing components are complete.
