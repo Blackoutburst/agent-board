@@ -52,11 +52,7 @@ const Conversations = (() => {
     return draft.mentions.filter(id => draft.mentionNames?.[id] && draft.body.includes(`@${draft.mentionNames[id]}`));
   }
   function messageBody(message) {
-    const names = (message.mention_targets || []).map(item => `@${item.name}`).sort((a,b) => b.length - a.length);
-    if (!names.length) return message.body;
-    const escaped = names.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
-    return message.body.split(pattern).map(part => names.some(name => name.toLowerCase() === part.toLowerCase()) ? el("span", { class: "mention" }, part) : part);
+    return Markdown.block(message.body, "", message.mention_targets);
   }
   function attachment(item) {
     const url = safeUrl(item.url || `/api/attachments/${encodeURIComponent(item.id)}`);

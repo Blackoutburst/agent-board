@@ -89,7 +89,7 @@ function openModal(title, content) {
 function closeModal() { $("modal").close(); $("modal-content").replaceChildren(); }
 function formButtons(label) { return el("div", { class: "button-row" }, btn("Cancel", closeModal, "quiet"), el("button", { type: "submit", class: "primary" }, label)); }
 function head(title, subtitle, ...actions) {
-  return el("header", { class: "page-head" }, el("div", {}, el("h1", {}, title), el("p", {}, subtitle)), el("div", { class: "button-row" }, actions));
+  return el("header", { class: "page-head" }, el("div", {}, el("h1", {}, title), Markdown.block(subtitle, "page-subtitle")), el("div", { class: "button-row" }, actions));
 }
 function setView(view) {
   state.view = view;
@@ -224,7 +224,7 @@ function messageCard(message) {
   const reply = message.reply_to ? state.threadData.messages.find((item) => String(item.id) === String(message.reply_to)) : null;
   return el("article", { class: `message${new URLSearchParams(location.search).get("message") === String(message.id) ? " highlight" : ""}`, id: `message-${message.id}` }, el("div", { class: `avatar${author.kind === "agent" ? " agent" : ""}`, "aria-hidden": "true" }, author.kind === "agent" ? "CX" : authorLabel(author).slice(0, 2).toUpperCase()),
     el("div", { class: "message-content" }, authorMeta(author, message.created_at), message.reply_to ? el("div", { class: "reply-reference" }, reply ? `Reply to ${authorLabel(reply.author)}: ${reply.body.slice(0, 100)}` : `Reply to message ${message.reply_to}`) : null,
-      el("p", { class: "message-body" }, Conversations.messageBody(message)),
+      el("div", { class: "message-body" }, Conversations.messageBody(message)),
       extraMentions.length ? el("p", { class: "mention-line" }, extraMentions.map(target => el("span", { class: "mention" }, `@${target.name}`))) : null,
       message.attachments?.length ? el("div", { class: "attachments" }, message.attachments.map(Conversations.attachment)) : null,
       el("div", { class: "message-actions" }, btn("Reply", () => { const draft = getDraft(); draft.reply = message; renderComposer(); $("message-body").focus(); }))));
@@ -305,14 +305,14 @@ function taskCard(task) {
   const ownHuman = task.destination_kind === "human" && task.destination_id === state.actor.owner_id;
   const ownClaim = ownHuman && task.claimant && (typeof task.claimant !== "object" || (!task.claimant.session_id || task.claimant.session_id === state.actor.session_id));
   const pending = ["pending", "recovery"].includes(task.status);
-  const details = el("details", {}, el("summary", {}, "Instructions & evidence"), el("p", { class: "detail-text" }, task.instructions || "No additional instructions."));
+  const details = el("details", {}, el("summary", {}, "Instructions & evidence"), Markdown.block(task.instructions || "No additional instructions.", "detail-text"));
   for (const [label, value] of [["Requirements", task.requirements], ["Required capabilities", task.required_capabilities], ["Prerequisite tasks", task.prerequisites], ["Action", task.action], ["Resource", task.resource], ["Outcome", task.outcome], ["Verification evidence", task.evidence]]) {
-    if (readable(value)) details.append(el("strong", { class: "small" }, label), el("p", { class: "detail-text" }, readable(value)));
+    if (readable(value)) details.append(el("strong", { class: "small" }, label), ["Requirements", "Outcome", "Verification evidence"].includes(label) ? Markdown.block(readable(value), "detail-text") : el("p", { class: "detail-text" }, readable(value)));
   }
   if (task.verified) details.append(el("p", { class: "small", style: "color:var(--accent)" }, "✓ Verified completion recorded"));
   if (task.claimant) details.append(el("p", { class: "small muted" }, `Claimed by ${typeof task.claimant === "object" ? authorLabel(task.claimant) : String(task.claimant)}`, task.lease_expires_at ? ` · Claim expires ${date(task.lease_expires_at)}` : ""));
   const notes = Array.isArray(task.progress) ? task.progress : [];
-  if (notes.length) details.append(el("strong", { class: "small" }, "Progress"), notes.map((item) => el("div", { class: "progress-note" }, el("span", { class: "muted" }, `${date(item.timestamp || item.created_at)}${item.author ? ` · ${typeof item.author === "object" ? authorLabel(item.author) : item.author}` : ""}`), el("p", {}, item.note || item.progress || ""))));
+  if (notes.length) details.append(el("strong", { class: "small" }, "Progress"), notes.map((item) => el("div", { class: "progress-note" }, el("span", { class: "muted" }, `${date(item.timestamp || item.created_at)}${item.author ? ` · ${typeof item.author === "object" ? authorLabel(item.author) : item.author}` : ""}`), Markdown.block(item.note || item.progress || ""))));
   const actions = el("div", { class: "button-row" });
   if (ownHuman && pending) actions.append(btn(task.status === "recovery" ? "Check & take over" : "Take responsibility", () => claimTask(task), "primary"));
   if (ownClaim && !pending && task.status !== "complete") {
@@ -457,7 +457,7 @@ function workBack(project, ticket = null) {
   return el("nav", { class: "work-breadcrumb", "aria-label": "Breadcrumb" }, workLink("Projects", { page: "projects" }), project ? el("span", { "aria-hidden": "true" }, " / ") : null, project ? workLink(project.name, { project: project.id }) : null, ticket ? el("span", {}, ` / Task #${ticket.number}`) : null);
 }
 function workText(title, value, fallback = "Non renseigné.") {
-  return el("section", { class: "work-section" }, el("h2", {}, title), el("p", { class: `work-text${value ? "" : " muted"}` }, value || fallback));
+  return el("section", { class: "work-section" }, el("h2", {}, title), Markdown.block(value || fallback, value ? "work-text" : "work-text muted"));
 }
 function repositoryLink(value) {
   try {

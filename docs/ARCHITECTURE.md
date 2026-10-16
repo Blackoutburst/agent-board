@@ -75,3 +75,7 @@ SQLite is appropriate for the current small shared installation. The first scale
 ## Task files
 
 Schema 8 stores ordered task/file associations in `ticket_attachments`, referencing the existing immutable attachment records. Files must belong to the task conversation, so downloads retain the existing membership/profile checks. Versioned ticket updates replace the association within the same transaction as metadata changes. Discussion messages keep their independent attachment lists. Migration preserves historical comments and does not infer task files from unposted uploads.
+
+## Browser Markdown
+
+User-authored prose is stored as source text. `web/markdown.js` renders it through the locally vendored markdown-it parser with HTML disabled and an explicit URL protocol allowlist. The same helper renders project/task fields, discussion messages, legacy task prose and human request/answer text. Editors, exact conflict comparisons, identifiers and raw configuration retain their plain-text representation. Mention highlighting operates on resulting text nodes outside links/code; it never creates authorization or alters notification targets.

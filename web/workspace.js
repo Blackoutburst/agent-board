@@ -51,7 +51,7 @@ const Workspace = (() => {
         const total = p.ticket_counts.total || 0, done = p.ticket_counts.done || 0;
         const article = el("article", { class: "project-list-item" },
           el("div", { class: "project-list-title" }, el("h2", {}, workLink(p.name, { project: p.id })), p.archived ? badge("Archived") : badge("Private"), memberPills(p.participants)),
-          el("p", { class: "muted" }, p.description || "Add a short description to give your team a clear goal."),
+          Markdown.block(p.description || "Add a short description to give your team a clear goal.", "muted"),
           el("div", { class: "project-list-footer" }, el("span", {}, `${done} of ${total} tasks complete`),
             p.open_human_requests ? workLink(`${p.open_human_requests} needs input`, { page: "requests", project_filter: p.id }, "needs-input-link") : null,
             el("span", { class: "muted" }, `Updated ${date(p.updated_at)}`)),
@@ -91,8 +91,8 @@ const Workspace = (() => {
       if (p.archived) section.prepend(el("p", { class: "callout" }, "This project is archived. Restore it in project settings to add work."));
       if (projectTab === "overview") {
         const main = el("div", {},
-          panel("Goal and shared context", el("div", { class: "panel-body prose" }, p.context || "Write down the goal, constraints, and decisions here.")),
-          panel("Environment", el("div", { class: "panel-body prose" }, p.environment || "No environment details yet.")));
+          panel("Goal and shared context", Markdown.block(p.context || "Write down the goal, constraints, and decisions here.", "panel-body")),
+          panel("Environment", Markdown.block(p.environment || "No environment details yet.", "panel-body")));
         const details = el("div", { class: "panel-body" },
           el("h3", {}, "Repository"), repositoryLink(p.repository_url),
           el("h3", {}, "People"), el("p", {}, p.participants.map(ownerName).join(", ")),
@@ -188,11 +188,11 @@ const Workspace = (() => {
       }), "full-width"));
     }
     const discussion = panel("Discussion", el("div", { id: "older-messages" }), el("div", { id: "messages", class: "messages" }), composer());
-    const main = el("div", {}, panel("Description", el("div", { class: "panel-body" }, el("div", { class: "prose" }, t.description || "No description provided."), el("div", { class: "attachments task-attachments", "aria-label": "Task attachments" }, (t.attachments || []).map(Conversations.attachment)))),
-      t.acceptance_criteria ? panel("Acceptance criteria", el("div", { class: "panel-body prose" }, t.acceptance_criteria)) : null,
-      t.progress ? el("div", { class: "callout" }, el("strong", {}, "Latest progress"), el("p", {}, t.progress)) : null,
+    const main = el("div", {}, panel("Description", el("div", { class: "panel-body" }, Markdown.block(t.description || "No description provided."), el("div", { class: "attachments task-attachments", "aria-label": "Task attachments" }, (t.attachments || []).map(Conversations.attachment)))),
+      t.acceptance_criteria ? panel("Acceptance criteria", Markdown.block(t.acceptance_criteria, "panel-body")) : null,
+      t.progress ? el("div", { class: "callout" }, el("strong", {}, "Latest progress"), Markdown.block(t.progress)) : null,
       t.human_requests.filter(r => r.status === "open").map(r => requestCard(r, t)),
-      t.outcome || t.evidence ? panel("Outcome & verification", el("div", { class: "panel-body" }, el("p", { class: "prose" }, t.outcome), el("p", { class: "prose muted" }, t.evidence))) : null,
+      t.outcome || t.evidence ? panel("Outcome & verification", el("div", { class: "panel-body" }, Markdown.block(t.outcome), Markdown.block(t.evidence, "muted"))) : null,
       discussion, el("details", { class: "activity-details" }, el("summary", {}, "Task activity"), activityList(events)));
     body.append(el("div", { class: "task-detail-layout" }, main, sidebar));
     renderMessages();
@@ -326,8 +326,8 @@ const Workspace = (() => {
   }
   function requestCard(r, t = null) {
     const card = el("article", { class: "human-request" }, el("div", { class: "work-card-heading" }, badge(r.kind === "question" ? "Information needed" : r.kind === "action" ? "Action needed" : "Approval needed", "status-waiting_on_human"), el("span", { class: "small muted" }, `For ${ownerName(r.owner_id)}`)),
-      t ? null : workLink(`#${r.number} ${r.title}`, { ticket: r.ticket_id }), el("p", { class: "prose" }, r.question));
-    if (r.status === "resolved") card.append(el("p", { class: "prose" }, r.answer));
+      t ? null : workLink(`#${r.number} ${r.title}`, { ticket: r.ticket_id }), Markdown.block(r.question));
+    if (r.status === "resolved") card.append(Markdown.block(r.answer));
     else if (r.owner_id === state.actor.owner_id) {
       const form = el("form", {}, field("Your response", "answer", { type: "textarea", required: true, placeholder: "Provide the answer or describe the action you completed." }), el("button", { type: "submit", class: "primary" }, "Answer & unblock"));
       bindForm(form, async data => { await api(`/human-requests/${workPath(r.id)}/resolve`, { method: "POST", data: { answer: data.get("answer") } }); await refreshRequestCount(); if (t) await ticket(t.id, false); else await requests(); notify("Response saved. The task can continue when its other prerequisites are complete."); });
@@ -359,7 +359,7 @@ const Workspace = (() => {
         el("p", {}, el("strong", {}, event.actor.agent_name || authorLabel(event.actor)),
           ` ${descriptions[event.event] || event.event.replaceAll("_", " ")}`,
           workLink(` #${event.number}`, { ticket: event.ticket_id })),
-        event.detail.progress ? el("p", { class: "prose muted" }, event.detail.progress) : null,
+        event.detail.progress ? Markdown.block(event.detail.progress, "muted") : null,
         el("time", { class: "small muted" }, date(event.created_at)));
       return el("li", {}, el("span", { class: "activity-dot" }), detail);
     });
@@ -719,13 +719,13 @@ const Workspace = (() => {
       const saved = await api(`/agent-profiles/${workPath(id)}/versions/${selected}`);
       if (current !== sequence || !form.isConnected) return;
       content.replaceChildren(el("div", { class: "profile-heading" }, profileAvatar(saved), el("div", { class: "profile-identity" }, el("h3", {}, saved.name), el("p", { class: "small muted" }, `Version ${saved.version} · ${date(saved.updated_at)}`)), profileStatus(saved)),
-        el("p", { class: "prose" }, saved.description || "No description"),
+        Markdown.block(saved.description || "No description"),
         el("dl", { class: "profile-version-facts" }, ...[
           ["Owner", ownerName(saved.owner_id)], ["Role", saved.role || "General purpose"], ["Language", saved.language || "auto"],
           ["Response style", saved.response_style || "Executor default"], ["Preferred provider", saved.preferred_provider || "Executor default"], ["Preferred model", saved.preferred_model || "Executor default"],
           ["Project scope", saved.project_ids === null ? "Existing account project scope" : saved.project_ids.length ? saved.project_ids.join(", ") : "No projects"]
         ].flatMap(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
-        panel("Private instructions", el("pre", { class: "panel-body prose" }, saved.instructions || "No additional instructions")),
+        panel("Private instructions", Markdown.block(saved.instructions || "No additional instructions", "panel-body")),
         panel("Permission limits", el("div", { class: "panel-body" }, el("p", {}, `Read: ${saved.policy.allow_read ? "allowed" : "off"} · Messages: ${saved.policy.allow_messages ? "allowed" : "off"} · Work requests: ${saved.policy.allow_requests ? "allowed" : "off"}`),
           el("p", { class: "small muted" }, `Work selection: ${saved.policy.autonomy}`),
           el("p", { class: "prose small" }, `Actions: ${saved.policy.actions.join(", ") || "None"}`), el("p", { class: "prose small" }, `Resources: ${saved.policy.resources.join(", ") || "None"}`))));

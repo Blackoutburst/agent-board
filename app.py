@@ -788,7 +788,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.6.1", "schema_version": 8, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments"]}
+        return {"status": "ok", "version": "2.6.2", "schema_version": 8, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1116,6 +1116,14 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.get('/interaction.js')
     async def interaction_javascript():
         return FileResponse(ROOT/'web'/'interaction.js',media_type='text/javascript',headers={'Cache-Control':'no-cache'})
+
+    @app.get("/markdown.js")
+    async def markdown_javascript():
+        return FileResponse(ROOT / "web" / "markdown.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/vendor/markdown-it-15.0.2.min.js")
+    async def markdown_parser():
+        return FileResponse(ROOT / "web" / "vendor" / "markdown-it-15.0.2.min.js", media_type="text/javascript")
 
     @app.get("/onboarding.md")
     async def onboarding():

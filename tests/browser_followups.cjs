@@ -6,6 +6,7 @@ const origin='http://127.0.0.1:18766';
 const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','outputs');
 (async()=>{
  const browser=await chromium.launch({headless:true});
+ try {
  const context=await browser.newContext({viewport:{width:1512,height:1100}});
  const page=await context.newPage();const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
@@ -92,7 +93,7 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
  await page.getByLabel('Message',{exact:true}).fill('Draft must survive updates');
  const discussionFile=await (await other.request.post(origin+'/api/threads/'+task.ticket.thread_id+'/attachments',{headers,multipart:{file:{name:'discussion.txt',mimeType:'text/plain',buffer:Buffer.from('Discussion only')}}})).json();
  await other.request.post(origin+'/api/threads/'+task.ticket.thread_id+'/messages',{headers,data:{body:'New task discussion message',attachment_ids:[discussionFile.id],idempotency_key:'task-live-message'}});
- await page.getByText('New task discussion message',{exact:true}).waitFor({timeout:12000});
+ await page.locator('#messages').getByText('New task discussion message',{exact:true}).waitFor({timeout:12000});
  await page.locator('#messages').getByRole('link',{name:/discussion.txt/}).waitFor();
  assert.equal(await page.locator('.task-attachments .attachment').count(),4);
  assert.equal(await page.getByLabel('Message',{exact:true}).inputValue(),'Draft must survive updates');
@@ -105,7 +106,7 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
  await option.click();
  await page.getByLabel('Message',{exact:true}).pressSequentially('please acknowledge this browser test.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await page.getByText('please acknowledge this browser test.',{exact:false}).first().waitFor();
+ await page.locator('#messages').getByText('please acknowledge this browser test.',{exact:false}).first().waitFor();
  const messages=await (await context.request.get(origin+'/api/threads/'+task.ticket.thread_id)).json();
  const ping=messages.messages.find(message=>message.body.includes('please acknowledge'));
  assert.ok(ping.mentions.some(id=>id.startsWith('agent:')));
@@ -119,13 +120,13 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
  const live=threads.find(thread=>thread.title==='Live conversation');
  const before=Number(await page.locator('#inbox-count').textContent()||0);
  await other.request.post(origin+'/api/threads/'+live.id+'/messages',{headers,data:{body:'@Blackoutburst live mention notification',idempotency_key:'live-mention'}});
- await page.getByText('@Blackoutburst live mention notification',{exact:true}).waitFor({timeout:12000});
+ await page.locator('#inbox-content').getByText('@Blackoutburst live mention notification',{exact:true}).waitFor({timeout:12000});
  await page.waitForFunction(previous=>Number(document.querySelector('#inbox-count').textContent)>previous,before,{timeout:12000});
  await page.screenshot({path:path.join(output,'board-followups-inbox.png'),fullPage:true});
- await page.getByText('@Blackoutburst live mention notification',{exact:true}).click();
+ await page.locator('#inbox-content').getByText('@Blackoutburst live mention notification',{exact:true}).click();
  await page.getByLabel('Message',{exact:true}).fill('Conversation draft');
  await other.request.post(origin+'/api/threads/'+live.id+'/messages',{headers,data:{body:'New ordinary live reply',idempotency_key:'live-reply'}});
- await page.getByText('New ordinary live reply',{exact:true}).waitFor({timeout:12000});
+ await page.locator('#messages').getByText('New ordinary live reply',{exact:true}).waitFor({timeout:12000});
  assert.equal(await page.getByLabel('Message',{exact:true}).inputValue(),'Conversation draft');
  await page.getByRole('button',{name:'Agents',exact:false}).first().click();
  const work=page.locator('[data-profile-id]').filter({has:page.getByRole('heading',{name:'Codex · Mac Solem',exact:true})}).locator('details.profile-work');
@@ -138,5 +139,5 @@ const output=process.env.BOARD_TEST_OUTPUT||path.resolve(__dirname,'../../..','o
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
  await page.screenshot({path:path.join(output,'board-followups-mobile.png'),fullPage:true});
  console.log(JSON.stringify({flows:['dynamic project search','archived toggle','task description files without discussion comments','lost upload and link response retries','edit and reload attachment persistence','separate discussion files','image and playable video embeds','reusable tags','agent mention autocomplete','live conversation and task updates','draft preservation','focused inbox','live badge','collapsed agent work','mobile layout'],javascriptErrors:errors}));
- await browser.close();
+ } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});
