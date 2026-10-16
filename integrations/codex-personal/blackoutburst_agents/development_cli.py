@@ -11,6 +11,7 @@ from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import (DevelopmentError, RepositoryFiles, absolute_directory,
                            canonical, check_content, digest, relative_path)
 from .dev_planner_journal import PlannerBudgets
+from .dev_planner import _directory_pin
 from .dev_test_supervisor import _ancestor_identities
 from .run_store import RunStore, StoreError
 from .runtime_client import RuntimeBoardClient
@@ -64,11 +65,15 @@ def _inspect(journal,operation_id,path):
     op=journal.get(operation_id)
     pins=op['configuration']['pins']
     target=Path(path).absolute()
+    if _directory_pin(pins['planner_workspace']['path'])!=pins['planner_workspace']:
+        raise DevelopmentError('development_directory_changed')
     ancestors=_ancestor_identities(target.parent)
     if tuple(pins['planner_workspace']['identity']) in ancestors:
         raise DevelopmentError('development_output_inside_planner')
     with PrivateDirectory(pins['broker']['path']) as private:
         manifest=decode(private.read('manifest.json',128*1024))
+        files=RepositoryFiles(manifest['root'],manifest['root_identity'])
+        files.close()
         root_identity=tuple(manifest['root_identity'])
         if root_identity in ancestors:
             raise DevelopmentError('development_output_inside_checkout')

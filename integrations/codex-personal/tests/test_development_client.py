@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from blackoutburst_agents.development_client import DevelopmentBoardClient
 from blackoutburst_agents.board_reader import BoardReadError
@@ -50,6 +50,18 @@ class DevelopmentClientTests(unittest.TestCase):
         alias.unlink();alias.symlink_to(self.path)
         with self.assertRaises((DevelopmentError,BoardReadError)):
             DevelopmentBoardClient.from_connection_file(alias,session_id='session')
+
+    def test_credential_bytes_are_parsed_from_one_held_open(self):
+        original=os.open;opens=[]
+        def tracked(path,*args,**kwargs):
+            if str(path).endswith('connection.json'):opens.append((str(path),kwargs.get('dir_fd')))
+            return original(path,*args,**kwargs)
+        with patch('os.open',side_effect=tracked):
+            value=DevelopmentBoardClient.from_connection_file(self.path,session_id='session')
+        self.assertEqual(len(opens),1)
+        self.assertEqual(opens[0][0],'connection.json')
+        self.assertIsNotNone(opens[0][1])
+        self.assertEqual(value.endpoint,'https://board.test/mcp')
 
     def test_invalid_session_or_timeout_refuses_before_connection_read(self):
         for session,timeout in [('',3),('session',float('nan')),('session',True),('session',0)]:

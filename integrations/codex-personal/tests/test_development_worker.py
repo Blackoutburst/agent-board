@@ -12,6 +12,9 @@ from test_dev_planner import FakePolicy
 from test_development_broker import FakeTestBackend
 from blackoutburst_agents.development_worker import DevelopmentBoardWorker
 from blackoutburst_agents.dev_manifest import DevelopmentError, NamedTest, digest, prepare_manifest
+from blackoutburst_agents.dev_runtime import (DevelopmentRuntimeGuard, ScopePinnedModelRuntimeGuard, development_agent_id,
+                                               development_work_id)
+from blackoutburst_agents.runtime_guard import RuntimeControlError
 from blackoutburst_agents.run_store import RunStore
 from blackoutburst_agents.runtime_journal import RuntimeJournal
 from blackoutburst_agents.work_journal import WorkJournal
@@ -266,6 +269,17 @@ class DevelopmentWorkerTests(unittest.TestCase):
         self.assertEqual(result['status'],'review_ready',result)
         self.assertEqual([name for name,_ in self.client.calls].count('claim_ticket'),1)
 
+    def test_local_stop_allows_receipt_cleanup_but_never_next_action(self):
+        self.successful_actions();prepared=self.prepare();self.control.lost.add('finish_execution')
+        self.assertEqual(self.worker.run(prepared['operation_id'])['status'],'needs_review')
+        self.worker.stop(prepared['operation_id'])
+        recovered=self.worker.run(prepared['operation_id'],reconcile=True)
+        self.assertEqual(recovered['planner']['status'],'action_ready',recovered)
+        self.assertEqual(self.board.get_runtime(self.human)['active_count'],0)
+        self.assertEqual(self.worker.run(prepared['operation_id'])['reason'],'development_stop_requested')
+        self.assertEqual((self.root/'main.py').read_text(),'value = 1\n')
+        self.assertEqual(len(self.inferences),1)
+
     def test_profile_change_after_prepare_does_not_implicitly_register(self):
         prepared=self.prepare();profile=self.board.get_agent_profile(self.human,self.scope['agent_id'])
         self.board.update_agent_profile(self.human,profile['id'],profile['version'],description='New preference')
@@ -285,3 +299,112 @@ class DevelopmentWorkerTests(unittest.TestCase):
         self.assertIn('Dated audit only',ticket['evidence']);self.assertNotIn('value =',ticket['evidence'])
         self.assertEqual(self.worker.publish(prepared['operation_id']),published)
         self.assertEqual([name for name,_ in self.client.calls].count('update_ticket'),1)
+
+    def test_two_checkouts_same_ticket_have_new_work_and_provider_session(self):
+        observed=[];original=self.worker.transport
+        def track(*args,**kwargs):
+            observed.append(kwargs['resume_session_id'])
+            return original(*args,**kwargs)
+        self.worker.transport=track
+        self.successful_actions();first=self.prepare()
+        self.assertEqual(self.worker.run(first['operation_id'])['status'],'review_ready')
+        first_op=self.journal.get(first['operation_id'])
+        first_id=first_op['payload']['parent_binding']['child_scope']['work_id']
+        first_work=self.store.get_work(first_id)
+        self.assertEqual(first_id,development_work_id(first['operation_id']))
+        self.assertIsNone(observed[0]);self.assertTrue(first_work['provider_session_id'])
+        self.assertEqual(self.worker.publish(first['operation_id'])['status'],'complete')
+        ticket=self.read_ticket()
+        self.board.update_ticket(self.human,ticket['id'],ticket['version'],status='todo')
+        registration=self.client.registration
+        self.client.register_initial=lambda:registration
+        self.root=self.base/'second-checkout';self.root.mkdir(mode=0o700)
+        (self.root/'main.py').write_text('value = 1\n')
+        self.broker_dir=self.base/'second-broker'
+        prepare_manifest(self.broker_dir,root=self.root,base_sha='b'*40,scope=self.manifest_scope,
+            paths=['main.py'],resource='repo:fixture',authorize_scope=lambda *_:True,
+            tests=[NamedTest('unit',backend_id=self.backend.backend_id)])
+        self.successful_actions();before=len(observed)
+        second=self.prepare(request_id='second-checkout')
+        self.assertEqual(self.worker.run(second['operation_id'])['status'],'review_ready')
+        second_op=self.journal.get(second['operation_id'])
+        second_id=second_op['payload']['parent_binding']['child_scope']['work_id']
+        second_work=self.store.get_work(second_id)
+        self.assertIsNone(observed[before]);self.assertNotEqual(second_id,first_id)
+        self.assertNotEqual(second_work['agent_id'],first_work['agent_id'])
+        self.assertNotEqual(second_work['provider_session_id'],first_work['provider_session_id'])
+        self.assertEqual(self.store.get_work(first_id),first_work)
+        self.assertEqual(second_id,development_work_id(second['operation_id']))
+        executions=self.board.get_runtime(self.human)['executions']
+        self.assertTrue(executions)
+        self.assertTrue(all(row['work_id'] in (first_id,second_id) for row in executions))
+        self.assertTrue(all(row['agent_id']==self.scope['agent_id'] for row in executions))
+
+    def test_recovery_uses_same_preallocated_work_and_provider_session(self):
+        observed=[];original=self.worker.transport
+        def track(*args,**kwargs):
+            observed.append(kwargs['resume_session_id'])
+            return original(*args,**kwargs)
+        self.worker.transport=track
+        self.successful_actions();prepared=self.prepare();self.control.lost.add('finish_execution')
+        self.assertEqual(self.worker.run(prepared['operation_id'])['status'],'needs_review')
+        op=self.journal.get(prepared['operation_id'])
+        work_id=op['payload']['parent_binding']['child_scope']['work_id']
+        provider=self.store.get_work(work_id)['provider_session_id']
+        self.assertEqual(work_id,development_work_id(prepared['operation_id']))
+        self.assertIsNone(observed[0])
+        self.assertEqual(self.worker.run(prepared['operation_id'],reconcile=True)['planner']['status'],'action_ready')
+        self.assertEqual(self.worker.run(prepared['operation_id'])['status'],'review_ready')
+        self.assertEqual(self.journal.get(prepared['operation_id'])['payload']['parent_binding']['child_scope']['work_id'],work_id)
+        self.assertEqual(observed,[None,provider,provider])
+        self.assertEqual([name for name,_ in self.client.calls].count('claim_ticket'),1)
+
+    def test_development_runtime_guard_checks_alias_and_uuid_before_admission(self):
+        self.successful_actions();prepared=self.prepare()
+        self.assertEqual(self.worker.run(prepared['operation_id'])['status'],'review_ready')
+        work=self.store.get_work(development_work_id(prepared['operation_id']))
+        guard=ScopePinnedModelRuntimeGuard(self.runtime,self.control,self.scope,
+            operation_id=prepared['operation_id'],validate_reservation=lambda _:None)
+        other=str(uuid.uuid4())
+        bad_changes=[{'id':development_work_id(other)},
+            {'agent_id':development_agent_id(self.scope,other)},
+            {'id':development_work_id(other),'agent_id':development_agent_id(self.scope,other)},
+            {'owner_id':'another'},{'project_id':'another'},{'ticket_id':'another'},
+            {'decision_memory':{'unexpected':'context'}}]
+        before=len(self.control.calls)
+        for change in bad_changes:
+            with self.subTest(change=change):
+                with self.assertRaises(RuntimeControlError):guard.before({**work,**change},str(uuid.uuid4()))
+                self.assertEqual(len(self.control.calls),before)
+        config=guard.configuration(work,str(uuid.uuid4()))
+        self.assertEqual(config['scope'],self.scope)
+        self.assertEqual(config['work_id'],work['id'])
+
+    def test_identity_only_cleanup_rejects_foreign_scope_and_work_before_lookup(self):
+        self.successful_actions();prepared=self.prepare();original=self.control.call;failed=[False]
+        def before_finish(name,args):
+            if name=='finish_execution' and not failed[0]:
+                failed[0]=True;raise TimeoutError('ordinary lost request')
+            return original(name,args)
+        self.control.call=before_finish
+        self.assertEqual(self.worker.run(prepared['operation_id'])['status'],'needs_review')
+        self.control.call=original
+        operation=self.runtime.get(self.runtime.list_status()[0]['id'])
+        config=operation['configuration'];work=self.store.get_work(config['work_id'])
+        receipt=self.store.turn_result(config['turn_id'])
+        self.board.set_policy(self.human,False,False,False,False,[],[])
+        before=len(self.control.calls)
+        for change in ({'owner_id':'foreign'},{'project_id':'foreign'},{'ticket_id':'foreign'},
+                       {'id':str(uuid.uuid4())},{'agent_id':'foreign'}):
+            with self.subTest(change=change):
+                guard=DevelopmentRuntimeGuard(self.runtime,self.control,self.scope,
+                    operation_id=prepared['operation_id'])
+                with self.assertRaises(RuntimeControlError):
+                    guard.confirm_cached({**work,**change},config['turn_id'],receipt)
+                self.assertEqual(len(self.control.calls),before)
+        self.assertEqual(self.board.get_runtime(self.human)['active_count'],1)
+        guard=DevelopmentRuntimeGuard(self.runtime,self.control,self.scope,
+            operation_id=prepared['operation_id'])
+        guard.confirm_cached(work,config['turn_id'],receipt)
+        self.assertEqual(self.control.calls[before:],['lookup_execution','finish_execution'])
+        self.assertEqual(self.board.get_runtime(self.human)['active_count'],0)

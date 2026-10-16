@@ -47,7 +47,9 @@ the canonical fence; renaming it cannot create another execution for this checko
   lease minus cleanup margin before it is sealed. Later execution does not silently
   renew/rebase its context; an expired/changed lease stops.
 - `reconcile --operation UUID --connection-file CONNECTION` confirms exact cached
-  model/broker/Runtime receipts. It never infers, patches or reruns a test. A recovered
+  model/broker/Runtime receipts. It never takes or renews a claim, infers, patches
+  or reruns a test. A merely prepared operation or unexecuted claim intent remains
+  pending without any MCP call. A recovered
   ready state requires a separate explicit `run`. A missing receipt, changed
   authority/context or uncertain effect remains for review.
 - `publish --operation UUID --connection-file CONNECTION` explicitly publishes the
@@ -60,7 +62,8 @@ the canonical fence; renaming it cannot create another execution for this checko
   --output PRIVATE_FILE` are offline. Stop uses an irreversible private marker
   independent of the work lock, so it remains available during a model/test.
   Inspection writes a new 0600 file in a private 0700 directory, never the checkout
-  or empty planner workspace. It may include private instruction/context/model
+  or empty planner workspace. Both directory identities are revalidated before
+  export; a renamed/replaced directory refuses. It may include private instruction/context/model
   material; stdout contains only bounded metadata, hashes and selected relative
   source paths.
 
@@ -88,6 +91,14 @@ fail closed and may cancel the supervised test. Revoked authority can prevent
 normal context-sensitive reconciliation/publication. The operator must then use
 the existing private/Runtime inspection and human reconciliation workflow; this
 release never refreshes the old profile or asserts cleanup from lease expiry.
+For an exact cached **model** result, identity-only Runtime reconciliation accepts
+`runtime --journal RUNTIME reconcile --operation RUNTIME_UUID --state RUNS
+--connection-file CONNECTION --development-operation WORKJOURNAL_UUID`. It verifies
+the persisted real scope and derived work UUID/private alias, then confirms only
+the existing cleanup receipt. Another parent UUID refuses. This path does not
+register, claim, admit execution, infer, or use revoked source grants. It is not a
+local-broker test/patch replay or a way to resume the development operation. Local
+broker ambiguity still requires its exact private receipt and operator workflow.
 
 ## Parent fence and interruption
 
@@ -97,7 +108,20 @@ child scope. A conflicting existing parent is rejected locally before any MCP ca
 in run. After confirmed claim and actual context capture, the planner attaches its
 configuration to exactly that parent UUID. There is no adoption, release, expiry
 or replacement-key shortcut. Cuts after linkage, claim or context capture reuse
-that exact operation and optimistic transition. An uncertainty between final
+that exact operation and optimistic transition.
+
+Each operation preallocates a deterministic model-work UUID from its WorkJournal
+UUID and a distinct private local alias. A new operation never adopts the provider
+session or turns of older work, even for the same ticket, empty planner workspace
+and runs directory. Runtime guards verify the operation/alias/work correspondence
+before admission; server scope still uses the real Board agent/session. Reopening
+the same operation reuses exactly its existing UUID/session. The optional
+`RunStore.create_work(work_id=...)` extension refuses any scope/ID collision;
+callers that omit it retain their existing behavior. Production `DevelopmentPlanner`
+construction requires this parent operation; parentless legacy behavior is only
+an internal fixture path.
+
+An uncertainty between final
 attachment and planner-journal creation remains for explicit review.
 
 The first parent linkage marks local fence format 2 transactionally. New readers

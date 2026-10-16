@@ -6,19 +6,33 @@
     "conflicting_journal_refuses_locally_before_mcp": true,
     "connection_hardlink_symlink_refused": true,
     "crash_after_parent_claim_context_resume_exact": true,
+    "credential_read_uses_one_held_descriptor": true,
+    "development_guard_rejects_scope_alias_uuid_before_admission": true,
     "explicit_review_publication_exact_lost_reply_reconciliation": true,
     "external_change_not_silently_adopted": true,
+    "foreign_parent_owner_ticket_work_cleanup_refuses_before_rpc": true,
+    "identity_only_model_cleanup_after_permission_withdrawal": true,
     "inspection_output_outside_checkout_and_planner": true,
+    "inspection_revalidates_root_and_planner_identity": true,
+    "local_stop_allows_only_receipt_cleanup": true,
     "lost_claim_reply_exact_reconciliation": true,
+    "new_operation_never_adopts_prior_provider_dialogue": true,
     "no_implicit_profile_registration": true,
     "offline_status_stop_inspect": true,
     "post_claim_renew_context_sealed": true,
     "prepare_read_plan_without_claim_runtime_model_or_test": true,
     "real_empty_board_grants_refuse": true,
+    "receipt_only_reconcile_never_claims_or_renews": true,
+    "same_operation_recovery_retains_exact_work_and_session": true,
     "same_uuid_parent_fence_before_mutating_mcp": true,
-    "stop_available_while_model_holds_work_lock": true
+    "stop_available_while_model_holds_work_lock": true,
+    "two_checkouts_same_ticket_share_no_provider_session": true
   },
   "date": "2026-10-16",
+  "independent_review": {
+    "scope": "Explicit development coordinator, receipt-only recovery, private output, operation work identity, identity-only model cleanup.",
+    "status": "no_open_findings_in_measured_scope"
+  },
   "kind": "explicit_development_cli_fixture_validation",
   "limits": [
     "Existing controller-prepared manifest and already qualified policy/backend required; prepare never qualifies.",
@@ -29,27 +43,38 @@
     "Dated review snapshot is not fresh validation of later file state or code acceptance.",
     "Canonical fence local format2 is same-user/same-machine, not administrator-erasure resistance or multi-host HA.",
     "An uncertainty between final fence attachment and planner-journal creation remains review.",
-    "No automatic fence release, listener, queue selection, API fallback or ticket-done operation."
+    "No automatic fence release, listener, queue selection, API fallback or ticket-done operation.",
+    "Identity-only Runtime CLI cleanup covers exact cached model receipts; no local_broker patch/test replay or automatic cleanup claim.",
+    "Production planner requires its exact parent WorkJournal UUID; parentless behavior remains internal fixture-only."
   ],
   "native_qualifications_in_this_lot": 0,
   "production_calls": 0,
   "schema": 1,
   "source_sha256": {
+    "board_reader.py": "12a97d215395e6393ff461211054f139f98b5d51248aaa8b74c1461065b64670",
     "cli.py": "8fdd2346285ccf820a03b4a8accb4f7d093982338458023ff1fb7c2a67cf83f5",
     "dev_fence.py": "ac21b2b184043b7083403c8182245c22ee83a8055bc66d586882149dd9ba2244",
-    "dev_planner.py": "46272e749e9594fc1e7dc5d8ec8de53b3137d3acd8e0322cf9b658b0ba65396c",
+    "dev_planner.py": "a188d3f1e388c09ce113297a805b28cbf1e797b26a27328b1569404aded5568c",
+    "dev_runtime.py": "bb224b31e044a254797a9a60ad04a9ba7af1bc402eb31feb1861e30a8d0f9a26",
     "development_authorization.py": "3063a379e3991f27e1da287d69056522ce9fcce735043ad2c16cadcd13faae66",
-    "development_cli.py": "4ed585b0a98122c8f3b9925c0d58a81b05273fc96708cd390b5e270d7f8f5f68",
-    "development_client.py": "977319ed68784f531b4b9af7e05b3e0c9b36550a55d154425c63dbaf0bcdf2bb",
-    "development_worker.py": "882993b43c9fbc5e460df90c8b2588728b296c7298e7942f788cff906ee92d4b"
+    "development_cli.py": "35f983e9e83bd5ba3f0998d8518664100e3ccf9687b3694aeae50bfc02b3104f",
+    "development_client.py": "47bdda70494b0c49cbf0900063b7d18311d4f6e98e1bfab5631e6b6bbd2296ca",
+    "development_worker.py": "c8a0ff34d2378e75187f34e46f882c75847dcc959a5f9c2a012efe1b1bfe1824",
+    "run_store.py": "9fab7ed3d4780e9e42dc28531a4b301508940f4b28a5c7d9177d941aee61d0a7",
+    "runtime_cli.py": "c040672138dc2e67435e224a26dc762ea7f57ce9f1291b7352b3411e8363e388"
+  },
+  "test_source_sha256": {
+    "test_development_cli.py": "d8d7510a511e3322ae399ae3e2ac3f991a4cda3b777c878b311ccf1dea087d5b",
+    "test_development_client.py": "fa78d2c86d9de85a6cdc45b0fe1689e2e6032a2a35c170d7ecd09e50ab3d2c0b",
+    "test_development_worker.py": "679ae76171f141ec63d5aa6167a3cc3aa4bef0c13879dda1e3d74be5ded29b17",
+    "test_development_worker_review.py": "502e80d122af546e082271e59079405a2c3489a9573ea087d6d978293e7c30e6"
   },
   "tests": {
-    "development_methods": 146,
-    "new_cli_methods": 3,
-    "new_client_methods": 4,
-    "new_parent_fence_methods": 1,
-    "new_workflow_methods": 15,
-    "runtime_methods": 56,
-    "targeted_passed": 202
+    "actual_model_native_mcp_or_production_effects": 0,
+    "adapter_full_passed": 835,
+    "adapter_full_warning": "Existing TestRequest dataclass cannot be collected as test class; ordinary warning only.",
+    "independent_regression_methods": 7,
+    "independent_targeted_passed": 154,
+    "workflow_and_independent_review_passed": 27
   }
 }

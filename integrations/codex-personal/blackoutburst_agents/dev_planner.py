@@ -2,7 +2,7 @@
 
 Every model and controller action has a separate Runtime reservation. Authority
 comes only from a fresh trusted snapshot callback, never model/board text. This
-module is deliberately not wired into the CLI or any automatic task selection.
+module is wired only through the explicit development CLI, never task selection.
 """
 from functools import partial
 import math
@@ -18,7 +18,8 @@ from .dev_journal import decode
 from .dev_manifest import (DevelopmentError, absolute_directory, canonical, check_content,
                            digest, identity, opaque, relative_path, sha256)
 from .dev_planner_journal import PlannerBudgets, PlannerJournal
-from .dev_runtime import ScopePinnedModelRuntimeGuard, ToolRuntimeGuard
+from .dev_runtime import (ScopePinnedModelRuntimeGuard, ToolRuntimeGuard,
+                          development_agent_id, development_work_id)
 from .dev_test_supervisor import SupervisedNativeNamedPythonBackend, _ancestor_identities
 from .runner import PersonalRunner
 
@@ -87,9 +88,8 @@ def _directory_pin(path):
         os.close(descriptor)
 
 
-def _agent_id(scope):
-    return 'board-agent-' + digest(canonical({key: scope[key] for key in
-        ('board_endpoint', 'board_session_id', 'agent_id')}))
+def _agent_id(scope, operation_id=None):
+    return development_agent_id(scope, operation_id)
 
 
 class DevelopmentPlanner:
@@ -114,6 +114,22 @@ class DevelopmentPlanner:
                     or not manifest['tests'] or any(not broker.test_backend.qualified_for(
                         broker.journal.manifest_hash, suite) for suite in manifest['tests'])):
                 raise DevelopmentError('planner_supervised_backend_required')
+        self.parent_operation_id = None
+        parent_scope = None
+        if parent_operation is not None:
+            try:
+                if type(parent_operation) is not dict or set(parent_operation) != {'binding', 'operation_id'}:
+                    raise ValueError
+                operation_id = parent_operation['operation_id']
+                development_work_id(operation_id)
+                parent_scope = parent_operation['binding']['parent_scope']
+                if parent_scope['operation_id'] != operation_id:
+                    raise ValueError
+                self.parent_operation_id = operation_id
+            except (KeyError, ValueError, TypeError):
+                raise DevelopmentError('invalid_planner_parent') from None
+        elif not _allow_fixture_backend:
+            raise DevelopmentError('planner_parent_operation_required')
         expected = {key: manifest['scope'][key] for key in ('owner_id', 'agent_id', 'project_id', 'ticket_id')}
         if (any(self.scope.get(key) != value for key, value in expected.items())
                 or self.scope.get('board_session_id') != manifest['scope']['session_id']
@@ -143,9 +159,12 @@ class DevelopmentPlanner:
                tuple(pins[key]['identity']) in _ancestor_identities(pins['planner']['path'])
                for key in ('broker', 'runs', 'runtime')):
             raise DevelopmentError('planner_boundary_overlap')
-        self.work = store.create_work(owner_id=self.scope['owner_id'], agent_id=_agent_id(self.scope),
+        work_identity = {} if self.parent_operation_id is None else {
+            'work_id': development_work_id(self.parent_operation_id)}
+        self.work = store.create_work(owner_id=self.scope['owner_id'],
+            agent_id=_agent_id(self.scope, self.parent_operation_id),
             project_id=self.scope['project_id'], ticket_id=self.scope['ticket_id'],
-            workspace=self.policy.workspace, executable=self.policy.executable, model=model)
+            workspace=self.policy.workspace, executable=self.policy.executable, model=model, **work_identity)
         self.configuration = {'schema': 1, 'manifest_hash': broker.journal.manifest_hash,
             'scope': self.scope, 'claim_id': self.claim_id, 'work_id': self.work['id'],
             'policy_hash': sha256(self.policy.fingerprint), 'policy_cli_hash': sha256(self.policy.cli_sha256),
@@ -168,16 +187,9 @@ class DevelopmentPlanner:
             'journal': pins['broker'], 'configuration_hash': digest(canonical(self.configuration)),
             'child_scope': {'work_id': self.work['id'], 'runs': pins['runs'], 'runtime': pins['runtime']}}
         if parent_operation is not None:
-            try:
-                if (type(parent_operation) is not dict or set(parent_operation) != {'binding', 'operation_id'}
-                        or str(uuid.UUID(parent_operation['operation_id'])) != parent_operation['operation_id']):
-                    raise ValueError
-                parent_scope = parent_operation['binding']['parent_scope']
-                self.configuration['parent_operation'] = decode(canonical(parent_scope))
-                self.binding['configuration_hash'] = digest(canonical(self.configuration))
-                self.binding['parent_scope'] = decode(canonical(parent_scope))
-            except (KeyError, ValueError, TypeError):
-                raise DevelopmentError('invalid_planner_parent') from None
+            self.configuration['parent_operation'] = decode(canonical(parent_scope))
+            self.binding['configuration_hash'] = digest(canonical(self.configuration))
+            self.binding['parent_scope'] = decode(canonical(parent_scope))
         anchor = canonical_anchor() if _test_anchor is None else Path(_test_anchor).absolute()
         anchor_ancestors = _ancestor_identities(anchor, allow_missing=True)
         for name, root_pin in (('checkout', {'path': manifest['root'], 'identity': manifest['root_identity']}),
@@ -202,7 +214,8 @@ class DevelopmentPlanner:
             self.close()
             raise
         self.model_guard = ScopePinnedModelRuntimeGuard(runtime_journal, control_client, self.scope,
-                                                        validate_reservation=self._validate_model_reservation)
+                                                        validate_reservation=self._validate_model_reservation,
+                                                        operation_id=self.parent_operation_id)
         self.transport = partial(execute_turn, planner_policy=self.policy) if _transport is None else _transport
         self.runner = PersonalRunner(store, self.transport, runtime_guard=self.model_guard)
 
@@ -395,7 +408,8 @@ class DevelopmentPlanner:
         self.journal.charge(state, actions=1)
         label = action['name'] if action['kind'] == 'test' else (
             'patch_file' if action['kind'] == 'patch' else 'read_file')
-        guard = ToolRuntimeGuard(self.runtime_journal, self.client, self.scope, action_label=label)
+        guard = ToolRuntimeGuard(self.runtime_journal, self.client, self.scope, action_label=label,
+                                             operation_id=self.parent_operation_id)
         work = {**self.work, 'model': label}
         state['phase'] = 'tool_intent'
         self.journal.save(state)  # UUID, exact action and intent precede admission/effect.
@@ -484,7 +498,8 @@ class DevelopmentPlanner:
                 self._fresh(state, ACTION_NAMES[action['kind']], inspection=True)
                 label = action['name'] if action['kind'] == 'test' else (
                     'patch_file' if action['kind'] == 'patch' else 'read_file')
-                guard = ToolRuntimeGuard(self.runtime_journal, self.client, self.scope, action_label=label)
+                guard = ToolRuntimeGuard(self.runtime_journal, self.client, self.scope, action_label=label,
+                                                     operation_id=self.parent_operation_id)
                 work = {**self.work, 'model': label}
                 guard.operation = self.runtime_journal.find(guard.configuration(work, step['id']))
                 if guard.operation is None or not guard.operation['start_confirmed']:

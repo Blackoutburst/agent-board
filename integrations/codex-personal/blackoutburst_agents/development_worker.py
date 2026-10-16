@@ -19,6 +19,7 @@ from .dev_fence import DevelopmentFence, canonical_anchor
 from .dev_journal import DevelopmentJournal
 from .dev_manifest import DevelopmentError, canonical, check_content, digest, opaque
 from .dev_planner import DevelopmentPlanner, _agent_id, _directory_pin
+from .dev_runtime import development_work_id
 from .dev_planner_journal import PlannerBudgets
 from .dev_test_supervisor import SupervisedNativeNamedPythonBackend, _ancestor_identities
 from .planner_policy import PlannerPolicy
@@ -147,9 +148,10 @@ class DevelopmentBoardWorker:
     def _parent_binding(self, op, manifest, policy):
         # Local work identity is allocated before MCP claim. No model turn is
         # begun by create_work, and every later constructor reuses this UUID.
-        work=self.store.create_work(owner_id=op['scope']['owner_id'], agent_id=_agent_id(op['scope']),
+        work=self.store.create_work(owner_id=op['scope']['owner_id'], agent_id=_agent_id(op['scope'], op['id']),
             project_id=op['scope']['project_id'],ticket_id=op['scope']['ticket_id'],
-            workspace=policy.workspace,executable=policy.executable,model=op['configuration']['model'])
+            workspace=policy.workspace,executable=policy.executable,model=op['configuration']['model'],
+            work_id=development_work_id(op['id']))
         config=op['configuration']
         parent={'operation_id':op['id'],'journal':config['pins']['journal'],
             'configuration_hash':digest(canonical({'configuration':config,
@@ -252,10 +254,25 @@ class DevelopmentBoardWorker:
                     raise DevelopmentError('canonical_parent_conflict')
             finally:policy.close()
 
+    def _has_execution_receipt(self, op):
+        if op['stage'] not in ('running','needs_review'):
+            return False
+        from .dev_journal import PrivateDirectory, decode
+        with PrivateDirectory(op['configuration']['pins']['broker']['path']) as private:
+            try:state=decode(private.read('planner.json',2*1024*1024))
+            except DevelopmentError as error:
+                if error.code!='private_read_failed':raise
+                return False
+        if type(state) is not dict or state.get('operation_id')!=op['id']:
+            raise DevelopmentError('development_planner_scope_mismatch')
+        return state.get('step') is not None or state.get('phase')=='review_ready'
+
     def run(self, operation_id, *, reconcile=False):
         op=self.journal.get(operation_id)
         with self.journal.lock(op['scope']):
             op=self.journal.get(operation_id)
+            if reconcile and op['stage'] not in ('result_ready','complete','abandoned') and not self._has_execution_receipt(op):
+                return {**self._public(op),'status':'pending','reason':'development_no_execution_receipt'}
             self.client.adopt_registration()
             connection=getattr(self.client,'connection_path',None)
             if connection is not None:
@@ -271,11 +288,11 @@ class DevelopmentBoardWorker:
             config=op['configuration'];pins=config['pins']
             try:
                 self._existing_fence_check(op)
-                if self._stopped(op['id']):
+                if not reconcile and self._stopped(op['id']):
                     raise DevelopmentError('development_stop_requested')
                 with closing(DevelopmentJournal(pins['broker']['path'])) as manifest:
                     authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
-                        registration=op['payload']['registration'],clock=self.clock,stop_requested=lambda:self._stopped(op['id']))
+                        registration=op['payload']['registration'],clock=self.clock,stop_requested=lambda:self._stopped(op['id']) and not reconcile)
                 if 'context' in op['payload']:
                     authorization.expected_context=deepcopy(op['payload']['context'])
                     authorization.claim_version=op['payload']['claim_version']
@@ -400,7 +417,7 @@ class DevelopmentBoardWorker:
                 if error.code!='private_read_failed':raise
                 state=None
         if state is not None:
-            if state.get('operation_id')!=op['id']:
+            if type(state) is not dict or state.get('operation_id')!=op['id']:
                 raise DevelopmentError('development_planner_scope_mismatch')
             planner=PlannerJournal(directory,state['configuration'],op['id'])
             try:planner.request_stop()

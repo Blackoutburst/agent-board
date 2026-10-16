@@ -3,7 +3,7 @@ import copy
 import os
 import math
 from pathlib import Path
-from .board_reader import BoardReadError, _connection_file, _text
+from .board_reader import BoardReadError, _connection_data, _json, _text, MAX_CONNECTION_BYTES
 from .dev_manifest import absolute_directory, identity, signature
 from .dev_journal import PrivateDirectory
 from .worker_client import WorkerBoardClient, _arguments
@@ -25,7 +25,16 @@ class DevelopmentBoardClient(WorkerBoardClient):
             descriptor=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
             PrivateDirectory.validate_file(descriptor)
             before=os.fstat(descriptor)
-            config=_connection_file(path)
+            if before.st_size>MAX_CONNECTION_BYTES:
+                raise BoardReadError('connection_too_large')
+            chunks=[];total=0
+            while True:
+                chunk=os.read(descriptor,min(8192,MAX_CONNECTION_BYTES+1-total))
+                if not chunk:break
+                total+=len(chunk)
+                if total>MAX_CONNECTION_BYTES:raise BoardReadError('connection_too_large')
+                chunks.append(chunk)
+            config=_connection_data(_json(b''.join(chunks),'invalid_connection'))
             current=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
             if signature(before)!=signature(os.fstat(descriptor)) or signature(before)!=signature(current):
                 raise BoardReadError('development_connection_changed')
