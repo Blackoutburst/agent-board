@@ -43,7 +43,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.6.2` and schema 8. Through the public MCP URL with an existing device credential, discover 42 tools including `release_ticket` and `reconcile_profile_claim`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.6.3` and schema 8. Through the public MCP URL with an existing device credential, discover 42 tools including `release_ticket` and `reconcile_profile_claim`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit `include_work=true` still returns work. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -84,3 +84,7 @@ After confirmed release, reuse the same retry key if the response was uncertain.
 The browser serves a pinned markdown-it 15.0.2 UMD bundle locally under the existing CSP. Its npm archive integrity is recorded in `web/vendor/README.md`; the MIT license is retained in the source tree and distributed bundle. The shared renderer disables raw HTML, active URL schemes and typographic rewriting. Mentions are highlighted only in rendered text outside links and code. Remote image syntax becomes a link, preserving the existing same-origin media policy. Source text is stored and edited verbatim. No database migration is required.
 
 Run `tests/browser_markdown.cjs` against the isolated follow-ups fixture on 18766. It covers project/task/message/request surfaces, source preservation, HTML/URL rejection, external-image requests, mentions and desktop/mobile layout. Also run the existing browser suites after shared rendering changes.
+
+### Desktop sidebar viewport (2.6.3)
+
+The desktop header and sidebar stay within the viewport; long conversation lists scroll independently so Settings, Connect agent and Documentation remain reachable on long pages. Window scrolling remains the content-scrolling model. The mobile navigation layout is unchanged. Verify `tests/browser_sidebar.cjs` against the synthetic follow-ups fixture, including long-page start/middle/end, expanded conversations and short desktop viewports.
