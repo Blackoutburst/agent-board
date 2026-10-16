@@ -28,7 +28,7 @@ def test_message_mcp_roundtrip_and_owner_view_share_existing_control_tools(brows
         'status':'completed','cleanup_confirmed':True,'reason':'completed'})
     assert done['state']=='finished' and client.get('/api/runtime').json()['active_count']==0
     assert rpc(browser,'lookup_execution',{'idempotency_key':'message-api'})['execution']==done
-    assert client.get('/health').json()['schema_version']==11
+    assert client.get('/health').json()['schema_version']==12
 
 
 @pytest.mark.parametrize('field,value',[('source_sha256',True),('source_sha256','0'*63),

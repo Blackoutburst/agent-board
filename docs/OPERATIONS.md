@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Board 2.8/schema 10 introduces compact MCP pages, authorized text chunks and
+Board 2.10/schema 12 introduces compact MCP pages, authorized text chunks and
 transactional assignment notices. Read [MCP-READS.md](MCP-READS.md) before updating
 a client. Qualify the complete transport envelope and full-source worker/event
 adapters; REST browser behavior remains unchanged. Retain a source + data backup
@@ -22,7 +22,7 @@ before migration, including pending confirmed-feed deliveries and page cursors.
 
 ## Before release
 
-Run the complete tests, syntax checks, synthetic browser acceptance and connector smoke tests. Validate migration on a restored schema-2 and schema-3 databases, including row counts, foreign keys and integrity. Preserve the source revision and a matching backup before touching production.
+Run the complete tests, syntax checks, synthetic browser acceptance and connector smoke tests. Validate the historical schema-2/schema-3 upgrades and the current schema-10 to schema-12 upgrade on restored private database copies, including row counts, foreign keys and integrity. Preserve the source revision and a matching database/attachment backup before touching production. Migration validation must never open the live data directory.
 
 `backup.py create` includes the database and referenced attachments in a mode-0600 checksummed archive. It excludes the private Discord configuration; preserve that file separately without printing its contents.
 
@@ -49,7 +49,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.9.0` and schema 11. Through the public MCP URL with an existing device credential, discover 49 tools including `release_ticket`, `reconcile_profile_claim` and `reserve_message_execution`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.10.0` and schema 12. Through the public MCP URL with an existing device credential, discover 55 tools including `release_ticket`, `reconcile_profile_claim` and `reserve_message_execution`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -61,7 +61,7 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.8 code against a schema-10 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the old source, then promote the restored directory and restart.
+Do not start any pre-2.9 code against a schema-12 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the source that matches that backup's schema, then promote the restored directory and restart.
 
 Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
 
@@ -114,3 +114,49 @@ Preparation launches no model/test and claims no ticket. Publication is a separa
 command that records a dated audit in review, never ticket done. Version changes
 invalidate native source pins and require explicit requalification of the final
 package before a pilot. Installation starts no listener or development work.
+
+### Coordinator-family migration (2.9)
+
+Schema 11 adds `delegation_families` and `delegation_members` transactionally.
+Keep the pre-release schema-10 backup and its exact source revision together.
+On a restored private copy, verify that migration preserves existing claims,
+messages, ticket and message Runtime rows, active capacity, foreign keys and
+attachments. An interrupted migration must leave schema 10 and its existing
+rows intact. Also restore a schema-12 backup containing a family, child claim
+and pending Runtime record; their identities, private plan and occupied capacity
+must survive. The fixtures in `tests/test_delegation_runtime_integration.py`
+exercise both cases with disposable accounts. Migration creates no family or
+child ticket and starts no model, test, host or listener.
+
+The local family controller separately introduces canonical development-fence
+format 3. Stop every older coordinator sharing that private anchor before
+opening it with the matching new adapter. Preserve the adapter revision and its
+private journals, stores and anchor as one recovery set. Format 3 atomically
+reserves three roots; transfers use only exact targets already recorded in the
+private family journal. Generic bind/attach cannot adopt a family reservation.
+An absent active reservation or a partial set requires review, never automatic
+reconstruction or release. Rollback requires matching code and private state;
+neither a database restore nor an anchor restore reverses external effects.
+This local fence is limited to one OS user and machine and cannot detect an
+administrator rolling back all state.
+
+Before an explicitly authorized development pilot, requalify the final adapter
+package on the actual supported host with disposable synthetic fixtures:
+`qualify_native_named_tests.py`, `qualify_native_supervisor.py` and
+`qualify_planner_policy.py` under `integrations/codex-personal/tests`.
+Use the explicitly pinned absolute Codex executable and fresh private plan
+directories; do not rewrite old pins to accept a new package. These fixtures
+exercise filesystem/network/process guards, bounded outcomes, controller-crash
+cleanup and exact replay without model inference, provider login or account RPC.
+Keep their new receipts tied to the final source revision, separate from dated
+historical receipts. Darwin qualification does not qualify Linux or Windows;
+unsupported backends remain refused. See [native tests](../integrations/codex-personal/NATIVE_TESTS.md)
+and [supervision](../integrations/codex-personal/SUPERVISED_TESTS.md).
+
+### Coordinated-work cards (2.9)
+
+Family-linked task pages show the coordinator and two temporary workers with their project-visible task links, roles, declared child models and current task states. The coordinator model remains unspecified when no public model is declared. Names and titles render as text; the private plan, file bounds, sessions, device details and digests stay out of the card.
+
+Only the exact owner can consult the private family endpoint or request a stop. Confirmation sends the revision just consulted. A 409 refreshes the current task and requires a new deliberate confirmation; no blind retry is made. Stop leaves active or uncertain Runtime reservations occupied until the executor confirms cleanup. Other project members see the public card and links without requesting the private endpoint.
+
+Validate `tests/browser_family.cjs` in Firefox against `tests/serve_family_preview.py` on loopback port 18770, with disposable accounts only. It covers desktop/mobile layout, text escaping, exact task links, owner isolation, confirmation, retained capacity, metadata updates without a task-version change and an actual revision conflict. The fixture records synthetic Runtime receipts and launches no model or provider. Stop it after the test.

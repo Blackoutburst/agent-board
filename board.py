@@ -18,6 +18,7 @@ from communication import CommunicationMixin, migrate_communication
 from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
 from message_feed import MessageFeedMixin, migrate_message_feed
+from delegation_families import DelegationFamiliesMixin, migrate_delegation_families
 
 
 class BoardError(Exception):
@@ -48,7 +49,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 11:
+            if version > 12:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -150,6 +151,9 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                 migrate_message_runtime(db)
                 db.execute("PRAGMA user_version=10")
             if version < 11:
+                migrate_delegation_families(db)
+                db.execute("PRAGMA user_version=11")
+            if version < 12:
                 db.execute('''CREATE TABLE mcp_page_cursors(token_hash TEXT PRIMARY KEY,
                     reader TEXT NOT NULL, scope TEXT NOT NULL, position TEXT NOT NULL,
                     created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
@@ -157,7 +161,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                 db.execute('CREATE INDEX mcp_page_cursor_reader ON mcp_page_cursors(reader,created_at)')
                 db.execute("ALTER TABLE message_feeds ADD COLUMN pending_view TEXT NOT NULL DEFAULT 'full'")
                 db.execute("ALTER TABLE message_feeds ADD COLUMN pending_compact_json TEXT")
-                db.execute("PRAGMA user_version=11")
+                db.execute("PRAGMA user_version=12")
 
     @contextmanager
     def _connection(self):
@@ -709,6 +713,10 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
     def _task_authorized(self, db, actor, row):
         if actor["kind"] == "human":
             return True
+        try:
+            self._delegation_claim_scope(db,actor,None)
+        except BoardError:
+            return False
         profile = self._profile_for_actor(db, actor)
         policy = self._effective_profile_policy(db, actor, profile) if profile else {}
         return policy.get("allow_requests", False) and bool(row["action"]) and row["action"] in policy["actions"] and bool(row["resource"]) and row["resource"] in policy["resources"]
@@ -718,6 +726,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             raise BoardError("Invalid recovery evidence")
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
+            self._delegation_claim_scope(db,actor,None)
             self._expire(db)
             row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not row:
@@ -735,6 +744,8 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             if row["status"] == "recovery" and not recovery_evidence.strip():
                 raise BoardError("Recovery requires evidence that existing external effects were checked", 409)
             if row["resource"]:
+                if self._delegation_resource_held(db,row['resource']):
+                    return {"claimed": False, "task": self._task(db,row), "reason": "Resource is held by a delegation family"}
                 lock = db.execute("SELECT task_id FROM resource_locks WHERE resource=?", (row["resource"],)).fetchone()
                 if lock:
                     return {"claimed": False, "task": self._task(db, row), "reason": "Resource is held by another task"}
@@ -821,9 +832,17 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                     db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader,boundary))
             rows = self._addressed_messages(db, actor, boundary=boundary, limit=limit)
             source_count = len(rows)
+            token = secrets.token_urlsafe(32)
+            session = None
+            if actor["kind"] == "agent":
+                db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (time.time(), actor["session_id"]))
+                session = self._session(db.execute("SELECT * FROM sessions WHERE id=?", (actor["session_id"],)).fetchone())
             if mcp_compact:
                 from mcp_views import compact, size, BUDGET
-                selected, used = [], 1200
+                metadata = {"messages":[], "cursor":token, "session":session}
+                if include_work:
+                    metadata['work']={'detail_tool':'get_work','legacy_tasks_detail':'list_thread_tasks','embedded':False}
+                selected, used = [], size(compact(metadata))
                 for row in rows:
                     used += size(compact(self._message(db,row)))+1
                     if used>BUDGET:
@@ -833,14 +852,9 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                     raise BoardError('One inbox summary exceeds budget; use an explicit full read',413)
                 rows = selected
             next_seq = rows[-1]["seq"] if rows and (len(rows)==limit or len(rows)<source_count) else db.execute('SELECT COALESCE(MAX(seq),0) FROM messages').fetchone()[0]
-            token = secrets.token_urlsafe(32)
             db.execute("INSERT INTO cursors VALUES(?,?,?)", (_hash(token), reader, next_seq))
             if not mcp_compact:
                 db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader, next_seq))
-            session = None
-            if actor["kind"] == "agent":
-                db.execute("UPDATE sessions SET last_seen_at=? WHERE id=?", (time.time(), actor["session_id"]))
-                session = self._session(db.execute("SELECT * FROM sessions WHERE id=?", (actor["session_id"],)).fetchone())
             result = {"messages": [self._message(db, row) for row in rows], "cursor": token, "session": session}
             if mcp_compact:
                 result = compact(result)

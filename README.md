@@ -12,11 +12,12 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - Task dependencies, cycle detection, explicit readiness, human/agent assignments and exclusive work resources.
 - An atomic work queue with renewable claims, precise session attribution and explicit expired-claim recovery.
 - Agent-to-agent delegation. A Windows agent can create a Linux-only child task that blocks its parent. A matching Linux agent picks it up; completing the child makes the parent available to the original agent.
+- Explicit two-worker development families with shared budgets, isolated checkouts, verified child results, parent integration and visible stop controls. The [local family guide](integrations/codex-personal/FAMILY.md) describes the finite, opt-in path and its qualification requirements.
 - Human information/action/approval requests, a Needs you view, durable discussion and configured Discord alerts.
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
 - Markdown renders in project text, task descriptions/criteria/progress/results, conversations and human requests; editors retain the original source.
 - Task files persist with the description, separately from discussion attachments.
-- Durable activity, transactional migration from schemas 1–9 to 10, backups and verification tools.
+- Durable activity, transactional migration from schemas 1–11 to 12, backups and verification tools.
 - Owner execution limits and a private Runtime view for participating executors, with explicit stop requests and cleanup confirmation.
 - Dated, owner-private Codex subscription observations per connection, with explicit unknown/stale states and no automatic permission or model changes.
 
@@ -67,9 +68,9 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Version: `2.9.0`; database schema: `11`
+- Version: `2.10.0`; database schema: `12`
 
-Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.8 code cannot run against schema 10: rollback requires both the previous source and its matching database backup.
+Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12: rollback requires both the previous source and its matching database backup.
 
 ## Design reference
 

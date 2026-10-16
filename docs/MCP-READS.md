@@ -1,4 +1,4 @@
-# Bounded MCP reads (Board 2.9 / schema 11)
+# Bounded MCP reads (Board 2.10 / schema 12)
 
 The browser REST API retains its original response shapes. MCP defaults to
 compact responses with a 6,000-byte ASCII-JSON data budget. This reserves room
@@ -16,12 +16,14 @@ longer answers use the same explicit preview/hash/chunk contract. Request status
 ticket version, claimant and lease fields are retained in normal compact detail.
 Use `get_text(session_id, kind, identifier, field, offset=0, limit=2048)` to read
 the original text. Kinds are `message`, `ticket`, `project`, `human_request`,
-`legacy_task` and the calling agent's own `profile`. The final chunk has
+`legacy_task`, `thread`, `attachment`, `activity`, visible public `agent`, and the calling agent's own `profile`, `session` and effective `policy`. Large session skills/capabilities and policy action/resource arrays have explicit counts plus canonical-JSON text locators; a policy locator resolves the caller's current effective intersection, never another profile's grant. The final chunk has
 `next_offset=null`; other offsets count Unicode code points. Persist chunks
 and the returned hash, pass `expected_sha256` on continuations, and verify the
 reassembled UTF-8 text's hash. An edit returns 409 instead of mixing versions.
 Each chunk rechecks live membership/profile scope; identifiers are not access
 tokens. Text limits budget JSON escaping, including non-BMP and control chars.
+
+Explicit full list responses retain their structuredContent wrapper; their text content is a single JSON array rather than one text item per entry. Clients should parse structuredContent. Family tools also accept explicit full views; the bundled FamilyBoardClient injects full only after its strict argument check.
 
 Existing tools accept explicit `view="full"` to restore their original data
 shape and complete prose. This is an intentional, potentially large response;

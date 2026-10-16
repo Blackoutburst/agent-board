@@ -142,3 +142,67 @@ def test_pending_compact_feed_replay_survives_display_rename(space):
     replay=b.read_message_feed(actor,feed['feed_id'],mcp_compact=True)
     assert replay==first
     assert b.checkpoint_message_feed(actor,feed['feed_id'],first['delivery_id'],0)['checkpoint']==1
+
+
+@pytest.mark.parametrize('field', ['skills', 'capabilities'])
+def test_large_session_metadata_does_not_poison_inbox(space, field):
+    b,h,o,t,reg,_,(actor,_),_=space
+    values=[str(i)+'x'*123 for i in range(50)]
+    with b._tx() as db:
+        db.execute('UPDATE sessions SET '+field+'=? WHERE id=?',(json.dumps(values),actor['session_id']))
+    expected=[b.post_message(o,t['id'],'Please read '+str(i),mentions=['agent:'+reg['identity']['id']],idempotency_key='session-meta'+str(i))['id'] for i in range(10)]
+    page=b.read_inbox(actor,mcp_compact=True,include_work=True);seen=[]
+    assert page['session'][field+'_count']==50 and field not in page['session']
+    locator=page['session'][field+'_detail'];v=MCPViews(b)
+    chunk=v.get_text(actor,locator['kind'],locator['identifier'],locator['field'],limit=4096)
+    assert values[0] in chunk['text']
+    with pytest.raises(BoardError):v.get_text(space[6][1],locator['kind'],locator['identifier'],locator['field'])
+    while page['messages']:
+        assert size(page)<=BUDGET
+        seen.extend(x['id'] for x in page['messages'])
+        page=b.read_inbox(actor,cursor=page['cursor'],mcp_compact=True,include_work=True)
+    assert seen==expected
+
+
+def test_large_effective_policy_has_exact_authorized_chunk_locator(space):
+    b,h,o,t,reg,_,(actor,_),_=space
+    task=ticket(space);resources=[str(i)+'r'*200 for i in range(40)]
+    b.set_policy(h,True,True,True,True,[],resources)
+    source=b.get_work(actor,_mcp_all=True);v=MCPViews(b)
+    page=v.page(actor,'get_work',source,limit=5)
+    assert size(page)<=BUDGET and page['ready'][0]['id']==task['id']
+    policy=page['policy'];assert 'resources' not in policy and policy['resources_count']==40
+    loc=policy['resources_detail'];parts=[];offset=0;digest=''
+    while True:
+        chunk=v.get_text(actor,loc['kind'],loc['identifier'],loc['field'],offset,1024,digest)
+        parts.append(chunk['text']);digest=chunk['sha256'];offset=chunk['next_offset']
+        if offset is None:break
+    assert json.loads(''.join(parts))==source['policy']['resources']
+    with pytest.raises(BoardError):v.get_text(o,loc['kind'],loc['identifier'],loc['field'])
+
+
+def test_schema_eleven_upgrade_keeps_pending_full_delivery_and_legacy_cursor(space):
+    from board import Board
+    b,h,o,t,reg,_,(actor,_),_=space
+    messages=[b.post_message(o,t['id'],'Original '+str(i),mentions=['agent:'+reg['identity']['id']],idempotency_key='upgrade'+str(i)) for i in range(3)]
+    inbox=b.read_inbox(actor,limit=1)
+    feed=b.open_message_feed(actor,'schema11-pending')
+    pending=b.read_message_feed(actor,feed['feed_id'])
+    exact=b.get_message(actor,t['id'],messages[0]['id'])
+    with b._tx() as db:
+        db.execute('DROP TABLE mcp_page_cursors')
+        db.execute('ALTER TABLE message_feeds DROP COLUMN pending_view')
+        db.execute('ALTER TABLE message_feeds DROP COLUMN pending_compact_json')
+        db.execute('PRAGMA user_version=11')
+        before=db.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
+    upgraded=Board(b.data_dir)
+    assert upgraded.get_message(actor,t['id'],messages[0]['id'])==exact
+    replay=upgraded.read_message_feed(actor,feed['feed_id'])
+    assert replay==pending
+    assert upgraded.checkpoint_message_feed(actor,feed['feed_id'],pending['delivery_id'],pending['checkpoint'])['checkpoint']==pending['checkpoint']+1
+    assert [x['id'] for x in upgraded.read_inbox(actor,cursor=inbox['cursor'])['messages']]==[x['id'] for x in messages[1:]]
+    with upgraded._connection() as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0]==12
+        assert db.execute('SELECT COUNT(*) FROM messages').fetchone()[0]==before
+        assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+        assert not db.execute('PRAGMA foreign_key_check').fetchall()

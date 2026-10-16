@@ -29,7 +29,7 @@ def browser(tmp_path):
 
 def rpc(browser, name, arguments, *, error=False):
     client, _, _, token, *_ = browser
-    if name in {'get_ticket','get_project','register_agent','reconcile_profile_claim','claim_ticket','renew_ticket','update_ticket','release_ticket'}:
+    if name in {'get_ticket','get_project','register_agent','reconcile_profile_claim','claim_ticket','renew_ticket','update_ticket','release_ticket','open_delegation_family','get_delegation_family','lookup_delegation_family','stop_delegation_family','accept_delegation_result','finalize_delegation_family'}:
         arguments={**arguments,'view':'full'}
     response = client.post('/mcp', headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json, text/event-stream'}, json={
         'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
@@ -56,8 +56,8 @@ def test_six_tools_and_owner_runtime_roundtrip(browser):
         json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
     names = {item['name'] for item in response.json()['result']['tools']}
     assert {'reserve_execution', 'lookup_execution', 'start_execution', 'heartbeat_execution', 'finish_execution', 'get_execution_control'} <= names
-    assert client.get('/health').json()['schema_version'] == 11
-    assert client.get('/health').json()['version'] == '2.9.0'
+    assert client.get('/health').json()['schema_version'] == 12
+    assert client.get('/health').json()['version'] == '2.10.0'
     assert rpc(browser, 'lookup_execution', {'idempotency_key': 'absent'}) == {'found': False}
     execution = reservation(browser)['execution']
     assert rpc(browser, 'lookup_execution', {'idempotency_key': 'api-reservation'})['execution']['id'] == execution['id']

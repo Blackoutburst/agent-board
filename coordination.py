@@ -178,6 +178,7 @@ class CoordinationMixin(ProjectsMixin):
         return result
 
     def _claim_checks(self, db, actor, row, recovery_evidence=''):
+        self._delegation_claim_check(db,actor,row)
         project = self._project_member(db, actor, row['project_id'])
         if project['archived']:
             _fail('Project is archived', 409)
@@ -195,12 +196,8 @@ class CoordinationMixin(ProjectsMixin):
                 _fail('This agent does not advertise the required skills', 403)
         if ticket['claim_expired'] and not recovery_evidence.strip():
             _fail('Expired claim: inspect prior external effects and supply recovery_evidence', 409)
-        if row['resource']:
-            conflict = db.execute("""SELECT id FROM tickets WHERE resource=? AND id!=? AND claimant IS NOT NULL
-                AND status!='done' LIMIT 1""",
-                (row['resource'], row['id'])).fetchone()
-            if conflict:
-                _fail('This work resource is already in use by another task', 409)
+        if self._resource_claim_conflict(db,row):
+            _fail('This work resource is already in use by another task', 409)
         return ticket
 
     def _claim_ticket_tx(self, db, actor, row, expected_version, recovery_evidence=''):
@@ -470,6 +467,9 @@ class CoordinationMixin(ProjectsMixin):
             ORDER BY CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,t.created_at,t.id""",
             (actor['owner_id'], actor['owner_id'], project_id, project_id))
         for row in rows:
+            from board import BoardError
+            try:self._delegation_claim_check(db,actor,row)
+            except BoardError:continue
             if not self._profile_project_allowed(db, actor, row['project_id']):
                 continue
             ticket = self._ticket(row, db)
@@ -483,9 +483,7 @@ class CoordinationMixin(ProjectsMixin):
                 continue
             if ticket['claimant'] and not (include_recovery and ticket['claim_expired']):
                 continue
-            if row['resource'] and db.execute("""SELECT 1 FROM tickets WHERE resource=? AND id!=? AND claimant IS NOT NULL
-                AND status!='done'""",
-                (row['resource'], row['id'])).fetchone():
+            if self._resource_claim_conflict(db,row):
                 continue
             ticket['project_name'] = row['project_name']
             yield ticket

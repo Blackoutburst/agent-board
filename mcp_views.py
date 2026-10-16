@@ -103,17 +103,20 @@ def compact(value, source=None, path=()):
     if prose:
         result['text_fields'] = prose
         result['text_detail_tool'] = 'get_text' if source else 'view=full'
-    if own_source and own_source[0]=='message':
-        # Lists are metadata, never a reason to poison a durable delivery. Exact
-        # source remains available via get_message; counts disclose omissions.
-        for key in ('attachments','mentions','mention_targets'):
-            items = result.get(key)
-            if isinstance(items,list) and (len(items)>2 or size(items)>600):
-                result.pop(key)
-                result[key+'_count'] = len(items)
-                result[key+'_detail'] = {'tool':'get_text','kind':'message',
-                    'identifier':own_source[1],'field':'/'+key,
-                    'encoding':'canonical JSON array text'}
+    # Large metadata collections use exact canonical chunks instead of making
+    # an inbox or an owner's work queue permanently unreadable.
+    keys = ('attachments','mentions','mention_targets') if own_source and own_source[0]=='message' else ()
+    if source and source[0]=='session': keys += ('skills','capabilities')
+    if source and source[0] in ('policy','profile'): keys += ('actions','resources')
+    for key in keys:
+        items = result.get(key)
+        if isinstance(items,list) and (len(items)>2 or size(items)>600):
+            result.pop(key)
+            field = '/'+ '/'.join(x.replace('~','~0').replace('/','~1') for x in (*path,key))
+            result[key+'_count'] = len(items)
+            result[key+'_detail'] = {'tool':'get_text','kind':source[0],
+                'identifier':source[1],'field':field,
+                'encoding':'canonical JSON array text'}
     return result
 
 
@@ -257,7 +260,10 @@ class MCPViews:
             offsets=position.setdefault('offsets',{})
             if position.get('next_group') in rows:
                 keys=list(rows);start=keys.index(position['next_group']);rows={k:rows[k] for k in keys[start:]+keys[:start]}
-            result = {**compact(fixed), **{k:[] for k in rows},
+            fixed = compact(fixed)
+            if kind=='get_work' and 'policy' in value:
+                fixed['policy']=compact(value['policy'],('policy',actor['owner_id']))
+            result = {**fixed, **{k:[] for k in rows},
                       'totals': {k:len(v) for k,v in rows.items()}, 'next_cursor':None}
             blocked=set()
             # limit is a total item bound, including get_work groups.
@@ -330,6 +336,10 @@ class MCPViews:
                 row=db.execute('SELECT * FROM attachments WHERE id=?',(identifier,)).fetchone()
                 if row is None:_fail('Attachment not found',404)
                 self.board._member(db,actor,row['thread_id']);data=self.board._attachment(row)
+            elif kind == 'policy':
+                if identifier!=actor['owner_id']:_fail('Policy not found',404)
+                data=(self.board._effective_profile_policy(db,actor,self.board._profile_for_actor(db,actor))
+                      if actor['kind']=='agent' else json.loads(self.board._owner(db,actor['owner_id'])['policy']))
             elif kind == 'session':
                 if identifier!=actor.get('session_id'):_fail('Session not found',404)
                 data=self.board._session(db.execute('SELECT * FROM sessions WHERE id=?',(identifier,)).fetchone())
@@ -372,5 +382,5 @@ class MCPViews:
         with self.board._connection() as db:
             actor=self.board._actor(db,actor,'allow_read')
             self.board._member(db,actor,thread_id)
-            tasks=[self.board._task(db,row) for row in db.execute('SELECT * FROM tasks WHERE thread_id=?',(thread_id,))]
+            tasks=[self.board._task(db,row) for row in db.execute('SELECT * FROM tasks WHERE thread_id=? ORDER BY created_at,id',(thread_id,))]
         return self.page(actor,'list_thread_tasks',tasks,limit=limit,cursor=cursor,filters={'thread_id':thread_id})

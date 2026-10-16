@@ -215,6 +215,7 @@ class RuntimeMixin:
         from board import BoardError
         try:
             self._runtime_authorize_row(db, actor, row)
+            if self._delegation_execution_control(db,row):return 'authorization_changed'
         except BoardError:
             return 'authorization_changed'
         if self._runtime_limits(db, row['owner_id'])['paused']:
@@ -259,6 +260,7 @@ class RuntimeMixin:
                                (actor['owner_id'],)).fetchone()[0]
             if count >= limits['max_concurrent']:
                 _fail('capacity_exhausted', 409)
+            self._delegation_runtime_check(db,actor,ticket_id,provider,model)
             identifier, now = secrets.token_hex(16), time.time()
             db.execute('''INSERT INTO runtime_executions(
                 id,owner_id,agent_id,profile_version,device_id,session_id,project_id,ticket_id,
@@ -289,6 +291,9 @@ class RuntimeMixin:
                 if existing['payload'] != payload:
                     _fail('execution_key_conflict',409)
                 return {'reserved':True,'execution':self._execution_view(db,existing),'retried':True}
+            # Dedicated family sessions execute their ticket controller only,
+            # including when the addressed message belongs to that ticket.
+            self._delegation_claim_scope(db,actor,None)
             if db.execute('SELECT 1 FROM runtime_executions WHERE owner_id=? AND work_id=? AND turn_id=?',
                           (actor['owner_id'],work_id,turn_id)).fetchone():
                 _fail('execution_turn_conflict',409)
@@ -299,6 +304,7 @@ class RuntimeMixin:
                                (actor['owner_id'],)).fetchone()[0]
             if count >= limits['max_concurrent']:
                 _fail('capacity_exhausted',409)
+            self._delegation_runtime_check(db,actor,linked['ticket_id'],provider,model)
             identifier,now = secrets.token_hex(16),time.time()
             db.execute('''INSERT INTO runtime_executions(
                 id,owner_id,agent_id,profile_version,device_id,session_id,project_id,ticket_id,
@@ -339,6 +345,7 @@ class RuntimeMixin:
                                (row['owner_id'],)).fetchone()[0]
             if count > self._runtime_limits(db, row['owner_id'])['max_concurrent']:
                 _fail('capacity_exhausted', 409)
+            self._delegation_runtime_check(db,actor,row['ticket_id'],row['provider'],row['model'],admission=False)
             if row['state'] == 'running' and row['start_revision'] == expected_revision:
                 return self._execution_view(db, row)
             if row['revision'] != expected_revision or row['state'] != 'reserved':
