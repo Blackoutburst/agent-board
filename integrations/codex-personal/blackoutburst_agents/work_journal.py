@@ -324,7 +324,13 @@ class WorkJournal:
         except sqlite3.Error:
             raise JournalError('journal_unavailable') from None
 
-    def begin(self, scope, request_id, configuration):
+    def begin(self, scope, request_id, configuration, *, operation_id=None):
+        """Begin an exact request, optionally using an ID durably chosen by its parent.
+
+        An explicit ID never adopts an existing request with another ID, even
+        when that candidate is still new and empty. Other callers retain the
+        historical generated-ID behavior.
+        """
         self._ready()
         scope_json, key = _scope(scope)
         self._require_lock(key)
@@ -332,17 +338,23 @@ class WorkJournal:
         if not isinstance(configuration, dict):
             raise JournalError('invalid_configuration')
         configuration_json = _encode(configuration, MAX_CONFIGURATION_BYTES, 'invalid_configuration')
+        if operation_id is not None:
+            _operation_id(operation_id)
         with self._transaction() as db:
             row = db.execute('SELECT * FROM operations WHERE scope_key=? AND request_id=?',
                              (key, request_id)).fetchone()
             if row is not None:
                 operation = self._decode(row)
+                if operation_id is not None and operation['id'] != operation_id:
+                    raise JournalError('operation_id_conflict')
                 if row['configuration_json'] != configuration_json:
                     raise JournalError('request_configuration_conflict')
                 return operation
+            if operation_id is not None and db.execute('SELECT 1 FROM operations WHERE id=?', (operation_id,)).fetchone():
+                raise JournalError('operation_id_conflict')
             if db.execute("SELECT 1 FROM operations WHERE scope_key=? AND stage NOT IN ('complete','abandoned')", (key,)).fetchone():
                 raise JournalError('scope_has_unfinished_operation')
-            operation_id, now = str(uuid.uuid4()), time.time()
+            operation_id, now = operation_id or str(uuid.uuid4()), time.time()
             db.execute('INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?,?)',
                        (operation_id, key, scope_json, request_id, configuration_json, 'new', 1, '{}', now, now))
             return self.get(operation_id)
