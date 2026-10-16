@@ -72,3 +72,14 @@ Cette commande ne contacte pas le board et ne lance pas de modèle. Elle vérifi
 ## Validation
 
 Les tests couvrent le serveur réel sur base temporaire, les refus de permission, la sélection atomique, les changements de profil/session, les réponses perdues, les interruptions et les journaux enfants. Les modèles sont simulés pour ce parcours. Aucune sélection réelle de file ni écoute permanente n’a été activée en production par cette livraison.
+
+
+La [recette intégrée du 16 octobre 2026](docs/queue-acceptance-2026-10-16.md)
+exerce quatre profils et deux propriétaires avec le vrai Board temporaire et
+des modèles simulés : une course sur un ticket, deux chaînes explicites avec
+propriétaires en parallèle, puis un refus avant modèle quand la capacité de
+l’un des propriétaires est occupée. Elle confirme l’identité visible avant
+effet, les limites par propriétaire et les rejeux sans doublon. Une saturation
+Runtime conserve l’opération en revue avec sa réservation de ticket ; ce
+parcours n’attend pas et ne reprend pas automatiquement. Aucun pilote réel de
+file via abonnement n’est revendiqué par cette recette.
