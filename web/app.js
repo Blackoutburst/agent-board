@@ -139,6 +139,7 @@ function renderThreadList() {
   $("thread-list").replaceChildren(...state.threads.map((thread) => btn("", () => openThread(thread.id).catch((error) => notify(error.message, true)), `thread-item${state.view === "thread" && String(thread.id) === String(state.threadId) ? " active" : ""}`)));
   [...$("thread-list").children].forEach((button, index) => {
     const thread = state.threads[index];
+    button.title = threadSubject(thread);
     button.append(el("div", { class: "thread-name" }, el("span", {}, threadSubject(thread)), thread.unread_count ? el("span", { class: "unread", "aria-label": `${thread.unread_count} unread messages` }, thread.unread_count) : null), ...(thread.ticket ? [el("div", { class: "thread-context", lang: "fr" }, `${thread.ticket.project_name} · Ticket #${thread.ticket.number}`)] : []), el("div", { class: "thread-time" }, date(thread.updated_at)));
   });
   if (!state.threads.length) $("thread-list").append(empty($("search").value ? "No matching conversations." : "Ask a question, request a resource, or discuss a decision."));
