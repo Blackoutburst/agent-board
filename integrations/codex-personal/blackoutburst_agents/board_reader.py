@@ -300,8 +300,8 @@ class BoardReader:
         # argument allowlists still run before this trusted injection.
         if name in {'get_ticket','get_thread','get_project','get_work','claim_ticket',
                     'claim_next_ticket','lookup_ticket_selection','renew_ticket',
-                    'update_ticket','release_ticket','request_human_input','lookup_human_request','register_agent','get_message','open_message_feed',
-                    'read_message_feed','checkpoint_message_feed','post_message',
+                    'update_ticket','release_ticket','request_human_input','lookup_human_request','register_agent','get_message',
+                    'read_message_feed','post_message',
                     'open_delegation_family','get_delegation_family','lookup_delegation_family',
                     'stop_delegation_family','accept_delegation_result','finalize_delegation_family'}:
             args={**args,'view':'full'}
