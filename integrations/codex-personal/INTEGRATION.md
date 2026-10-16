@@ -1,66 +1,55 @@
-# Connexion du fournisseur Codex personnel
+# Contrat de l’adaptateur Codex personnel
 
-La version 0.8 fournit un diagnostic, une preuve de connexion, un exécutant textuel durable, un lecteur de contexte et un coordinateur de ticket explicite compatibles avec le **MCP 2.0 du board**. Le mode question/réponse exige le board **2.0.3**. Elle conserve un seul registre d’identités : celui du board. Aucun profil ou fournisseur parallèle n’est créé dans ce module.
+Référence vérifiée : board **2.6.2**, schéma **8**, adaptateur **0.13.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
-## Responsabilités actuelles
+Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
-| Board 2.1 | Adaptateur personnel 0.8 |
+## Identités et responsabilités
+
+| Board | Adaptateur personnel |
 |---|---|
-| Connexion d’un appareil et identité persistante via `connect.py` / `register_agent` | Réutilise cette connexion et vérifie les identifiants retournés |
-| Projets, tickets, conversations et permissions du propriétaire/appareil/profil | Lit un ticket explicitement choisi et compose ses sources bornées |
-| Réservations, baux, `get_work`, `claim_next_ticket` | `worker` réserve seulement un ticket explicitement choisi ; aucune sélection automatique |
-| Délégation et demandes humaines | `worker run --human-owner` et `events drain --human-owner` peuvent poser une question au destinataire fixé puis reprendre explicitement après sa réponse ; la délégation reste à raccorder |
-| Activité et inbox | `events drain` lit l’activité ascendante d’un ticket et journalise ses lots ; il ne lit pas l’inbox et ne démarre pas de listener |
-| Profil versionné et compétences | Sélectionne les préférences utiles à l’analyse ; exclut droits, liaisons et travaux de gestion |
+| Comptes propriétaires, appareils appariés, profils durables et liaisons explicites | Réutilise le fichier de connexion privé du parcours commun ; vérifie propriétaire, appareil, profil et version |
+| Projets, tickets, conversations, fichiers et droits effectifs | Compose seulement les sources autorisées de la portée choisie |
+| Attribution, réservations et baux des tickets | Réserve avant le travail, vérifie la durée du bail et rapproche la même opération après interruption |
+| Activité ascendante et demandes humaines | Journalise les événements ; pose une question au destinataire configuré et reprend la même session après sa réponse |
+| Limites de concurrence, pause et contrôle des exécutions | En mode géré, réserve Runtime avant chaque tour, coopère à l’arrêt et ne libère la capacité qu’après nettoyage confirmé |
+| Préférences des profils et observations d’usage | Applique une politique locale explicite de modèles accessibles, épinglée par tour ; aucun basculement de compte ou d’API |
+| Interface des agents, projets, tickets et conversations | Commandes locales explicites et hôte au premier plan, désactivé à la création |
 
-Les fonctionnalités Strata/GLM annoncées par l’autre développeur ne sont pas implémentées ici. Le board 2.1 ajoute les profils, leurs droits et leurs liaisons aux appareils. Les préférences fournisseur/modèle sont enregistrées, mais aucun registre de fournisseurs d’inférence ni routage automatique n’est activé.
+Une identité de profil persiste entre chats ; la session d’exécution reste distincte et fixée dans les journaux. Un nom affiché ou une déclaration du modèle ne constitue jamais une identité ni un droit. Les deux propriétaires partagent les projets autorisés, pas leurs connexions personnelles ou contextes privés. Le serveur conserve uniquement la connexion au board, jamais les identifiants du fournisseur de modèle.
 
-## Interfaces Python
+Les préférences de fournisseur des profils ne prouvent ni accès ni connexion. Cet adaptateur utilise le Codex personnel connecté à ChatGPT. Il n’implémente aucun transport Strata/GLM et n’étend pas ses droits à partir d’un champ de préférence.
 
-```python
-from blackoutburst_agents.subscription_probe import ProbeSettings, inspect_cli
-from blackoutburst_agents.board_reader import BoardReader
-from blackoutburst_agents.context import ContextScope, build_context
-from blackoutburst_agents.context_cache import ContextCache
+## Sources et contexte
 
-# Aucun appel de modèle :
-diagnostic = inspect_cli(ProbeSettings(executable="/chemin/absolu/codex"))
-reader = BoardReader.from_connection_file(connection_path, session_id=session_id)
-registration = reader.register()  # autonomous=False, sans lecture de l’inbox
-snapshot = build_context(reader.call, scope=ContextScope(owner, agent, project, ticket),
-                         registration=registration)
-with ContextCache(context_directory) as cache:
-    receipt = cache.save(snapshot)
-```
+`BoardReader` enregistre une présence avec `autonomous=false`, sans lire l’inbox, puis limite ses lectures à `get_ticket` et `get_thread`. Il injecte la session choisie, refuse les redirections et borne les réponses. `build_context` vérifie la portée owner/agent/project/ticket, sélectionne profil, brief, critères, progression, dépendances, demandes humaines et messages récents, puis produit `blackoutburst-ticket-context-v1`.
 
-`BoardReader.call` n’accepte que `get_ticket` et `get_thread`. Il injecte la session choisie, refuse les redirections et borne les réponses à 2 Mio. Les erreurs sont des codes fixes sans corps distant ni identifiants de connexion. Le fichier de connexion conserve le format du `connect.py` commun ; aucun parcours de pairing n’est dupliqué.
+Les sources sont identifiées et hachées avant troncature. `ContextCache` conserve dix révisions privées par portée ; inspection et effacement sont explicites. `verified_context` relit les sources autorisées et refuse une empreinte modifiée avant un nouveau tour. Le [guide du contexte](CONTEXT.md) décrit les bornes et les omissions. Une ancienne décision hors de la fenêtre doit encore être reportée dans le brief ou le ticket ; la mémoire sémantique reste à développer.
 
-`build_context` retourne le schéma déterministe `blackoutburst-ticket-context-v1` : `scope`, `sources`, `data`, `omissions`, `trust` et `fingerprint`. Les champs sélectionnés sont hachés avant leur éventuelle troncature. Les demandes humaines et messages restent non fiables, même lorsqu’ils mentionnent une autorisation. Les URLs, pièces jointes et chemins ne sont jamais suivis automatiquement.
+Les messages, résultats, URLs et fichiers sont des données non fiables. Ils ne remplacent ni les instructions locales ni les autorisations. Le contexte ne suit pas automatiquement une URL ou un chemin et ne transmet pas l’historique privé d’un autre propriétaire.
 
-`ContextCache` conserve dix révisions privées par portée, avec une empreinte inspectable et un effacement explicite. `verified_context` relit les sources, vérifie la portée locale et refuse tout changement avant un tour. Le [guide du contexte](CONTEXT.md) documente la pagination, les limites, le contrôle de fraîcheur et la distinction entre cache de sources et mémoire Codex.
+## Exécution et effets durables
 
-## Exécution personnelle
+`RunStore` fixe la portée, le dossier, le client et le modèle. `PersonalRunner` exécute ou rapproche une entrée avec une clé stable, enregistre la session avant d’accepter ses résultats et reprend uniquement cette session. Une clé réutilisée avec un autre contenu, une session croisée ou une exécution ambiguë est refusée. Le texte du résultat reste privé ; les reçus publics contiennent des métadonnées expurgées.
 
-`RunStore(state_dir)` fixe les libellés owner/agent/project/ticket, le dossier, le client et le modèle. `PersonalRunner(store).run(work_id, request_id, prompt)` traite une entrée explicite ou retrouve son résultat déjà enregistré. Son résultat contient `work_id`, `turn_id`, `cached` et `result` ; **`result.text` est privé et non fiable**. `public_result` produit un statut sans texte.
+`BoardWorker` compose ce mécanisme avec la réservation du ticket, le contexte frais et un `WorkJournal` de portée exacte. Le worker ordinaire livre en `review` ou `blocked`, avec résultat et preuve, puis libère sa réservation. Le [contrat worker](WORKER.md) distingue le nettoyage du processus, la libération Runtime et la publication du ticket : aucun de ces effets ne prouve les deux autres.
 
-Le transport vérifie la connexion ChatGPT à chaque lancement et enregistre l’identifiant de session avant de traiter la réponse. Il reprend uniquement cette session. Clés réutilisées avec un autre contenu, sessions croisées, exécutions concurrentes et reprise ambiguë après coupure sont refusées. Le [guide de l’exécutant](RUNNER.md) précise l’annulation et la résolution humaine.
+`HumanWorkerClient` ajoute la recherche et la création idempotente d’une demande `question`. Le destinataire est fixé localement. La réponse humaine reprend le même work avec une clé de second tour distincte ; une réponse doublée ne lance pas un troisième tour. Le parcours réel question/réponse et ses reçus sont décrits dans le guide worker et dans `docs/`.
 
-Un contexte MCP inspecté peut accompagner `runner turn`. Le contrôle porte sur la lecture et l’analyse textuelle. Il ne réserve pas le ticket, ne vérifie pas un droit de déploiement et ne permet pas d’exécuter les commandes trouvées dans les messages. L’état local d’un work ne constitue pas une identité authentifiée.
+La capacité Runtime est commune aux profils et appareils du propriétaire. Runtime est obligatoire pour l’hôte, optionnel pour les commandes historiques de runner/worker ; il ne couvre pas les clients qui n’y participent pas. Une erreur de quota ou d’authentification rapportée par une exécution participante met le propriétaire en pause ; une observation de pourcentage ou de remise à zéro ne le réactive jamais. Les lectures d’usage sont facultatives et ne lancent aucun modèle. Voir [RUNTIME.md](RUNTIME.md), [MODELS.md](MODELS.md) et [USAGE.md](USAGE.md).
 
-La sonde `run_subscription_probe(settings)` reste disponible pour un test explicite minimal. Diagnostic et sonde refusent le mode clé API ; aucun repli payant ou autre fournisseur n’est choisi automatiquement. Les états de quota, connexion, timeout, protocole ou nettoyage incertain sont rapportés par des codes bornés. Une preuve locale ne valide pas l’accès d’un second propriétaire ni un service mutualisé hébergeant ses connexions.
+Les anciens claims après changement de profil se rapprochent via `reconcile_profile_claim` sous une identité fraîche du même profil/appareil, avec preuve d’inspection et seulement après expiration. Le serveur conserve attentes, résultats et fichiers et refuse les exécutions au nettoyage incertain. Cette opération ne reprend aucun ancien modèle.
 
-## Ticket explicitement choisi
+## Sélection et réveil
 
-`BoardWorker(journal, run_store, client).run(...)` utilise les identifiants réels du board, un journal privé à six champs de portée et la connexion personnelle épinglée. `WorkerBoardClient` limite ses mutations à la réservation et au résultat du ticket ; `BoardReader` reste en lecture seule. Le coordinateur ajoute le résultat et sa preuve, publie `review` ou `blocked`, puis libère sa réservation. Il ne choisit ni ticket, ni nouveau modèle, ni outil. Le [guide worker](WORKER.md) décrit les tentatives identiques, les interruptions et les limites de ce premier parcours.
+`queue` sélectionne ponctuellement un seul ticket éligible, avec intention durable et recherche de la sélection après perte de réponse. Il respecte attribution, compétences, ressources, pauses et droits ; une nouvelle clé ne permet pas de contourner un travail ouvert. Ce parcours est distinct d’un listener permanent.
 
-L’option Python `human_owner_id` fixe le destinataire d’une éventuelle question. Elle exige `HumanWorkerClient`, qui ajoute seulement `lookup_human_request` et `request_human_input` avec `kind=question`. La configuration est immuable pendant toute l’opération. Le journal conserve l’intention avant l’envoi, la demande confirmée et la réponse ; il ne déclenche aucune attente permanente. Une invocation identique reprend le même work et la même session, avec une clé distincte pour le second tour. La réponse humaine et le nouveau contexte restent séparés de l’instruction locale.
+`events drain` collecte les pages ascendantes de l’activité d’un ticket. `host` réutilise ce drain pour les tickets explicitement configurés : création désactivée, activation d’un budget fini, puis démarrage séparé au premier plan. Son intention préalloue l’UUID exact du worker enfant. Il n’adopte pas un travail manuel indépendant, même après une panne d’écriture. Voir [EVENTS.md](EVENTS.md), [QUEUE.md](QUEUE.md) et [HOST.md](HOST.md).
 
-## Raccordements restant à réaliser
+L’hôte actuel ne lit pas les conversations générales et n’installe aucun service. Son verrou protège un compte OS sur une machine ; il ne constitue pas une location distribuée. Le flux général de messages avec accusé de traitement et le pilote distant restent séparés. `read_inbox` conserve son comportement historique d’avancement à la lecture ; il n’est pas utilisé comme preuve de traitement réussi.
 
-- Étendre le traitement textuel explicite aux outils de développement autorisés et aux baux longs, sans affaiblir la réconciliation des effets après coupure.
-- Étendre le drain ponctuel des événements d’un ticket aux réveils distants et aux autres sources autorisées. `read_inbox` avance son curseur à la lecture ; ce n’est pas un accusé de traitement réussi.
-- Relier les modèles accessibles et éventuels replis aux préférences des profils du board, sans copier de cache d’authentification entre propriétaires. La personnalisation textuelle est déjà intégrée au contexte versionné.
-- Ajouter la sélection de tâches, les outils de développement et la publication uniquement dans le périmètre explicitement autorisé, avec contrôle avant chaque effet.
-- Valider le second propriétaire et le mode d’hébergement avant l’activation d’un service partagé.
+## Développement et fonctions restantes
 
-Le module ne démarre ni service ni boucle d’attente. Aucun modèle ne tourne pour attendre des messages.
+Le noyau `DevelopmentBroker` de 0.13 est une bibliothèque **désactivée par défaut**, séparée du worker textuel. Il borne la lecture et le remplacement de fichiers existants dans un checkout isolé, exige des autorisations fraîches et journalise ses intentions avant effet. Les tests nommés refusent un backend non qualifié. Il n’expose encore aucun outil au modèle et ne lance aucun shell. [DEVELOPMENT.md](DEVELOPMENT.md) décrit ses limites, notamment l’usage exclusif du checkout et le rapprochement humain des stages incertains.
+
+Restent à raccorder et à valider : backend de tests supervisé, transport de développement, délégation avec contrôle de la famille, mémoire des anciennes décisions, mentions générales et recette distante avec plusieurs agents par propriétaire. Les preuves personnelles locales ne valent pas qualification d’un service mutualisé. Installation, mise à jour, observation de quotas et redémarrage du board n’activent aucun listener ou hôte personnel.
