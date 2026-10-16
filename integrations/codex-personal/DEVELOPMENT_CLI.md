@@ -10,6 +10,13 @@ existing native source pins, so an operator must explicitly requalify the final
 installed package before any pilot. Historical receipts remain dated evidence. This release has only fixture-model tests
 against a temporary Board. It has not run a real model, MCP endpoint or repository.
 
+The separate [`family` command](FAMILY.md), available with adapter 0.19 and Board
+2.9/schema 11, coordinates exactly two temporary child tickets and their parent.
+This page describes the single-ticket command. Family preparation requires an
+already live parent claim, three explicit sessions/checkouts and a fixed model
+per slot. Opening, binding supplied qualifications, finite execution and parent
+publication remain distinct actions; no default worker or host starts them.
+
 ## Existing reviewed controller inputs
 
 An operator first prepares the immutable broker manifest, named-test backend and
@@ -126,10 +133,21 @@ an internal fixture path.
 An uncertainty between final
 attachment and planner-journal creation remains for explicit review.
 
-The first parent linkage marks local fence format 2 transactionally. New readers
-retain format 1 records; old readers refuse format 2. Stop older development
-coordinators before introducing the extension. This does not change the Board
-server database. The fence remains one OS user/machine and cannot resist an
-administrator erasing private state or coordinate multiple hosts. It retains
-completed audit roots until explicit operator resolution; using a fresh isolated
-checkout for the next operation is the supported route in this release.
+The first ordinary parent linkage marks local fence format 2 transactionally.
+Family preparation adds format 3 with one atomic reservation for its three roots.
+The new reader retains older records and never downgrades a format-3 anchor when
+ordinary work is added. Older readers refuse the newer format; stop all older
+development coordinators sharing the anchor before introducing it. Family roots
+cannot be adopted by generic bind/attach: each explicit reserved-to-parent and
+parent-to-planner transition must already be sealed in the private family journal.
+Exact known prefixes permit interrupted transfers to be reconciled. Missing
+active rows, partial families or incompatible targets remain for review.
+
+These local formats do not migrate the Board server database. Rollback requires
+matching adapter code and private journals/stores/anchor; it does not reverse
+external effects. The fence remains one OS user/machine and cannot resist an
+administrator erasing or rolling back private state or coordinate multiple hosts.
+It retains completed audit roots until explicit operator resolution; using a
+fresh isolated checkout for the next operation is the supported route in this
+release. See [FAMILY.md](FAMILY.md) for the three-slot lifecycle and separate stop
+and cleanup paths.

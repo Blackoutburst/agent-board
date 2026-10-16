@@ -8,6 +8,15 @@ strand a checkout.
 This lot has been exercised with simulated model/test work and a temporary Board;
 no actual model turn or production project was used.
 
+The optional [family controller](FAMILY.md) uses this same finite core for two
+temporary workers and their parent, with explicit fixed models and separate
+checkouts. It supplies exact family/workflow identities, current delegation
+checks and journaled targets for the canonical format-3 fence. The core cannot
+create a family or choose another worker/model by itself. Child audits and their
+acceptance precede parent integration; final family audit and parent publication
+are separate from a model's `final` declaration. The family path is exercised
+with simulated transports, not a real subscription development pilot.
+
 The production transport depends on `execute_turn(planner_policy=...)` and the
 separately qualified `PlannerPolicy` API (policy commit `99f67479`). Its workspace
 must be empty, private and distinct from the real checkout and every private
@@ -89,6 +98,15 @@ cannot silently restart the same checkout. Locks and path components are checked
 without following symlinks. It deliberately retains all operations, including
 `review_ready`, until a later explicit operator-resolution workflow; this lot has
 no automatic expiry, anchor deletion or “start fresh” shortcut.
+
+Family preparation upgrades this same anchor to format 3 and reserves all three
+roots in one locked atomic replacement. An ordinary operation cannot adopt a
+family row, and ordinary writes preserve the newer format. Explicit transfers
+match their private write-ahead targets; a lost response can confirm only the
+same family, slot and workflow. Stop older coordinators before sharing a newer
+anchor. Missing active rows or an incomplete family require review, never an
+automatic replacement reservation. See [the family recovery procedure](FAMILY.md)
+for the matching private state and receipt-only cleanup rules.
 
 This fence is local to one OS user and machine. It does not resist an administrator
 or the same user erasing private state, and provides no cross-host coordination.
