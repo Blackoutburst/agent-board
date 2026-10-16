@@ -11,7 +11,7 @@ import time
 
 from blackoutburst_agents import dev_test_backend, dev_test_supervisor
 from blackoutburst_agents.dev_broker import DevelopmentBroker
-from blackoutburst_agents.dev_manifest import NamedTest, digest, prepare_manifest
+from blackoutburst_agents.dev_manifest import DevelopmentError, NamedTest, digest, prepare_manifest
 from blackoutburst_agents.dev_test_backend import backend_id, pin_test_plan, prepare_backend
 from blackoutburst_agents.dev_test_supervisor import SupervisedNativeNamedPythonBackend, prepare_supervision
 
@@ -38,6 +38,31 @@ def gone(pid):
         return True
 
 
+def prepare_fixture(root):
+    """Only data counters enter model/broker file caps, never trusted scripts."""
+    fixtures = {
+        'passed': ("from pathlib import Path\np=Path('count.txt')\np.write_text(str(int(p.read_text())+1))\nprint('bounded fixture')\n", 5),
+        'timeout': ("import signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(20)\n", 1),
+        'crash': ("import os,signal,time\nfrom pathlib import Path\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\np=Path('crash-count.txt')\np.write_text(str(int(p.read_text())+1))\nPath('crash-started.txt').write_text(str(os.getpid()))\ntime.sleep(20)\n", 10),
+    }
+    for data in ('count.txt', 'crash-count.txt'):
+        (root / data).write_text('0')
+    scripts = {}
+    for name, (source, timeout) in fixtures.items():
+        (root / (name + '.py')).write_text(source)
+        scripts[name] = {'script': name + '.py', 'timeout_seconds': timeout, 'max_output_bytes': 128}
+    return scripts, ['count.txt', 'crash-count.txt']
+
+
+def script_patch_refused(broker, root, script):
+    before = (root / script).read_bytes()
+    try:
+        broker.patch_file('trusted-script-patch-denied', script, digest(before), before.decode())
+    except DevelopmentError as error:
+        return error.code == 'path_not_allowed' and (root / script).read_bytes() == before
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--codex', required=True)
@@ -54,31 +79,28 @@ def main():
     try:
         root = directory / 'workspace'
         root.mkdir(mode=0o700)
-        fixtures = {
-            'passed': ("from pathlib import Path\np=Path('count.txt')\np.write_text(str(int(p.read_text())+1) if p.exists() else '1')\nprint('bounded fixture')\n", 5),
-            'timeout': ("import signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(20)\n", 1),
-            'crash': ("import os,signal,time\nfrom pathlib import Path\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\np=Path('crash-count.txt')\np.write_text(str(int(p.read_text())+1) if p.exists() else '1')\nPath('crash-started.txt').write_text(str(os.getpid()))\ntime.sleep(20)\n", 10),
-        }
-        scripts = {}
-        for name, (source, timeout) in fixtures.items():
-            (root / (name + '.py')).write_text(source)
-            scripts[name] = {'script': name + '.py', 'timeout_seconds': timeout, 'max_output_bytes': 128}
+        scripts, data_paths = prepare_fixture(root)
         env = {key: os.environ[key] for key in ('HOME', 'CODEX_HOME', 'TMPDIR') if key in os.environ}
         env.update({'LANG': 'C', 'PATH': '/usr/bin:/bin'})
         version = subprocess.run([args.codex, '--version'], capture_output=True, timeout=5,
             env=env, stdin=subprocess.DEVNULL, close_fds=True).stdout.decode().strip()
         plan = pin_test_plan(root=str(root), codex=args.codex, cli_version=version, scripts=scripts)
         report.update({'host': plan['host'], 'cli_version': version, 'cli_sha256': plan['codex_sha256'],
-            'wrapper_sha256': plan['wrapper_sha256'], 'profile_version': plan['profile_version']})
+            'wrapper_sha256': plan['wrapper_sha256'], 'profile_version': plan['profile_version'],
+            'test_plan_schema': plan['schema'],
+            'trusted_script_pins': {name: {key: test['script_pin'][key] for key in ('sha256', 'bytes')}
+                for name, test in plan['tests'].items()}})
         manifest_dir = directory / 'broker'
         scope = dict(owner_id='synthetic-owner', agent_id='synthetic-agent', device_id='synthetic-device',
             session_id='synthetic-session', project_id='synthetic-project', ticket_id='synthetic-ticket', profile_version=1)
         authorize = lambda given, action, resource: given == scope and resource == 'repo:synthetic'
         prepare_manifest(manifest_dir, root=str(root), base_sha='a' * 40, scope=scope,
-            paths=[test['script'] for test in scripts.values()], resource='repo:synthetic', authorize_scope=authorize,
+            paths=data_paths, resource='repo:synthetic', authorize_scope=authorize,
             tests=[NamedTest(name, backend_id=backend_id(plan), timeout_seconds=test['timeout_seconds'],
                 max_output_bytes=128) for name, test in scripts.items()])
         manifest = json.loads((manifest_dir / 'manifest.json').read_text())
+        report['checks']['scripts_outside_patch_caps'] = not set(manifest['files']).intersection(
+            suite['script'] for suite in scripts.values())
         backend_dir = directory / 'backend'
         prepare_backend(backend_dir, manifest=manifest, plan=plan)
         prepare_supervision(backend_dir)
@@ -88,6 +110,7 @@ def main():
             report['result'] = 'blocked_supervisor_qualification'
             return
         broker = DevelopmentBroker(manifest_dir, enabled=True, authorize_scope=authorize, test_backend=backend)
+        report['checks']['trusted_script_patch_refused'] = script_patch_refused(broker, root, scripts['passed']['script'])
         for name in ('passed', 'timeout'):
             receipt = broker.run_test('supervisor-' + name, name)
             report['checks'][name] = {'result': receipt['result'], 'cleanup_confirmed': receipt.get('cleanup_confirmed')}
@@ -127,6 +150,8 @@ def main():
             time.sleep(0.05)
         report['checks']['test_and_helper_gone'] = gone(test_pid) and all(gone(pid) for pid in helper_pids)
         report['result'] = ('passed_supervisor_fixture' if report['checks']['controller_hard_killed']
+            and report['checks']['scripts_outside_patch_caps']
+            and report['checks']['trusted_script_patch_refused']
             and report['checks']['durable_helper_completion'] and report['checks']['crash_replay_no_execution']
             and report['checks']['test_and_helper_gone']
             and report['checks']['passed'] == {'result': 'passed', 'cleanup_confirmed': True}
