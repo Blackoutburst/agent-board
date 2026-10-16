@@ -405,8 +405,9 @@ class ProjectsMixin:
                            (self._ticket_thread_title(project["name"], row["number"], values["title"]), now, row["thread_id"]))
             self._audit(db, actor, "ticket_updated", {"ticket_id": ticket_id, "version": expected_version + 1, "fields": sorted(changes)})
             if 'assignee_agent_id' in values and values['assignee_agent_id'] != row['assignee_agent_id']:
-                self._assignment_notice(db,actor,row,row['assignee_agent_id'],'unassigned',expected_version+1)
-                self._assignment_notice(db,actor,row,values['assignee_agent_id'],'assigned',expected_version+1)
+                notice_row=db.execute('SELECT * FROM tickets WHERE id=?',(ticket_id,)).fetchone()
+                self._assignment_notice(db,actor,notice_row,row['assignee_agent_id'],'unassigned',expected_version+1)
+                self._assignment_notice(db,actor,notice_row,values['assignee_agent_id'],'assigned',expected_version+1)
             if status == "done":
                 self._unblock_dependents(db, actor, ticket_id)
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)

@@ -48,6 +48,19 @@ for owner, human in humans.items():
                 'cancelled', True, 'cancelled')
         ids[variant] = execution['id']
         executors[execution['id']] = actor
+
+actor = executors[ids['running']]
+thread = board.create_thread(humans['blackoutburst'], 'Message reply fixture', ['blackoutburst'], 'message-runtime-thread')
+with board._connection() as db:
+    profile_id = board._profile_for_actor(db, actor)['id']
+message = board.post_message(humans['blackoutburst'], thread['id'], 'Synthetic addressed message',
+                             mentions=['agent:' + profile_id], idempotency_key='message-runtime-source')
+digest = board.get_message(actor, thread['id'], message['id'])['source_sha256']
+execution = board.reserve_message_execution(actor, 'message-ui', thread['id'], message['id'], digest,
+                                             'message-ui-work', 'message-ui-turn', 'codex_chatgpt', 'fixture-model')['execution']
+board.finish_execution(actor, execution['id'], execution['revision'], 'cancelled', True, 'cancelled')
+ids.update(message=execution['id'], message_source=message['id'], message_thread=thread['id'])
+executors[execution['id']] = actor
 with board._tx() as db:
     db.execute('UPDATE runtime_executions SET last_heartbeat_at=? WHERE id=?', (time.time() - 120, ids['running']))
     # Deliberately malformed metadata exercises text rendering independently of

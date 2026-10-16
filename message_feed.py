@@ -67,6 +67,9 @@ class MessageFeedMixin:
         # withdrawn. Reconciliation must never silently checkpoint past it.
         ids = json.loads(row['pending_ids'])
         current, byte_count = [], 2
+        snapshot=json.loads(row['pending_compact_json']) if mcp_compact and row['pending_compact_json'] is not None else None
+        if snapshot is not None and [item.get('id') for item in snapshot]!=ids:
+            _fail('Message feed snapshot does not match delivery; reconcile its content',409)
         targets = set(self._inbox_targets(db, actor))
         for identifier in ids:
             message = db.execute('SELECT x.* FROM messages x JOIN thread_members m ON m.thread_id=x.thread_id '
@@ -75,8 +78,8 @@ class MessageFeedMixin:
                     or json.loads(message['author']).get('kind') != 'human'
                     or not targets.intersection(json.loads(message['mentions']))):
                 _fail('Message feed delivery is no longer permitted; reconcile its access', 403)
-            rendered = self._message(db, message)
-            if mcp_compact:
+            rendered = snapshot[len(current)] if snapshot is not None else self._message(db, message)
+            if mcp_compact and snapshot is None:
                 from mcp_views import compact
                 rendered = compact(rendered)
             if mcp_compact:
@@ -84,7 +87,7 @@ class MessageFeedMixin:
                 byte_count += size(rendered)+(1 if current else 0)
             else:
                 byte_count += self._feed_message_size(rendered)+(1 if current else 0)
-            if byte_count > (5500 if mcp_compact else MAX_MESSAGE_BYTES):
+            if byte_count > (5000 if mcp_compact else MAX_MESSAGE_BYTES):
                 _fail('Message feed delivery exceeds the byte limit; reconcile its content', 413)
             current.append(rendered)
         return current
@@ -138,6 +141,7 @@ class MessageFeedMixin:
                     WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?''',
                     (row['confirmed_seq'],high,MAX_SCAN_ROWS))
                 selected, scanned, end, byte_count = [], 0, row['confirmed_seq'], 2
+                selected_rendered=[]
                 for message in candidates:
                     scanned += 1
                     permitted = (json.loads(message['author']).get('kind') == 'human'
@@ -163,15 +167,16 @@ class MessageFeedMixin:
                         if byte_count+addition > maximum:
                             # This candidate remains after the confirmed bound.
                             break
-                        selected.append(message['id']);byte_count += addition
+                        selected.append(message['id']);selected_rendered.append(rendered);byte_count += addition
                     end = message['seq']
                     if len(selected) == row['page_limit']: break
                 else:
                     if scanned < MAX_SCAN_ROWS:
                         end = max(row['confirmed_seq'],high)
                 db.execute('''UPDATE message_feeds SET pending_id=?,pending_ids=?,pending_end_seq=?,
-                    pending_high_watermark=?,pending_view=? WHERE id=?''',
-                    (secrets.token_hex(16),json.dumps(selected),end,high,'compact' if mcp_compact else 'full',feed_id))
+                    pending_high_watermark=?,pending_view=?,pending_compact_json=? WHERE id=?''',
+                    (secrets.token_hex(16),json.dumps(selected),end,high,'compact' if mcp_compact else 'full',
+                     json.dumps(selected_rendered) if mcp_compact else None,feed_id))
                 row = db.execute('SELECT * FROM message_feeds WHERE id=?',(feed_id,)).fetchone()
             messages = self._feed_pending_messages(db, actor, row,mcp_compact=mcp_compact)
             db.execute('UPDATE sessions SET last_seen_at=? WHERE id=?',(time.time(),actor['session_id']))
@@ -193,6 +198,6 @@ class MessageFeedMixin:
             self._feed_pending_messages(db,actor,row,mcp_compact=row['pending_view']=='compact')
             db.execute('''UPDATE message_feeds SET confirmed_seq=pending_end_seq,checkpoint=checkpoint+1,
                 last_ack_id=pending_id,last_ack_checkpoint=checkpoint+1,pending_id=NULL,pending_ids=NULL,
-                pending_end_seq=NULL,pending_high_watermark=NULL WHERE id=?''',
+                pending_end_seq=NULL,pending_high_watermark=NULL,pending_compact_json=NULL WHERE id=?''',
                 (feed_id,))
             return {'feed_id':feed_id,'delivery_id':delivery_id,'checkpoint':expected_checkpoint+1,'acknowledged':True}

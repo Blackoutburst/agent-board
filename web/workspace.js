@@ -153,7 +153,7 @@ const Workspace = (() => {
     const assignee = t.claimant?.agent_name || t.assignee_agent_name || (t.assignee_owner_id ? ownerName(t.assignee_owner_id) : "Anyone");
     return el("article", { class: "issue-row" }, el("span", { class: `issue-icon ${t.status === "done" ? "done" : ""}`, "aria-label": ticketStatuses[t.status] }, t.status === "done" ? "✓" : "◉"),
       el("div", { class: "issue-content" }, el("div", { class: "issue-title" }, workLink(t.title, { ticket: t.id }), t.labels.map(label => badge(label, "label-badge"))),
-        el("div", { class: "issue-meta" }, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
+        el("div", { class: "issue-meta" }, t.project_name ? workLink(t.project_name, { project: t.project_id }) : null, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
       el("div", { class: "issue-trailing" }, status(t), t.priority !== "normal" ? badge(ticketPriorities[t.priority], `priority-${t.priority}`) : null, el("span", { class: "assigned-label", title: assignee }, assignee)));
   }
 
@@ -478,10 +478,17 @@ const Workspace = (() => {
     const stopping = active && (execution.stop_requested === true || execution.should_stop === true);
     const stopLabel = execution.stop_requested === true || execution.control_reason === "owner_paused" ? "Stop requested" : "Stop required";
     const identity = agentNames.get(execution.agent_id) || `Agent ${execution.agent_id}`;
+    const messageScope = execution.scope_kind === "message";
+    const work = messageScope
+      ? workLink("Source message", { thread: execution.thread_id, message: execution.message_id })
+      : workLink(`Ticket ${String(execution.ticket_id).slice(0, 12)}`, { ticket: execution.ticket_id });
+    const activity = execution.provider === "local_broker"
+      ? `Local tools · ${execution.model === "read_file" ? "Read files" : execution.model === "patch_file" ? "Update files" : `Test: ${execution.model}`}`
+      : `${execution.provider} · ${execution.model}`;
     const heading = el("div", { class: "runtime-execution-heading" }, el("div", {}, el("h3", {}, identity),
-      el("p", { class: "small muted" }, `${execution.provider} · ${execution.model}`)), badge(label, color));
+      el("p", { class: "small muted" }, activity)), badge(label, color));
     const facts = el("dl", { class: "runtime-facts" },
-      el("dt", {}, "Ticket"), el("dd", {}, workLink(`Ticket ${String(execution.ticket_id).slice(0, 12)}`, { ticket: execution.ticket_id })),
+      el("dt", {}, messageScope ? "Conversation" : "Ticket"), el("dd", {}, work),
       el("dt", {}, "Last heartbeat"), el("dd", {}, execution.last_heartbeat_at ? date(execution.last_heartbeat_at) : "Not reported"),
       el("dt", {}, execution.finished_at ? "Finished" : "Reserved"), el("dd", {}, date(execution.finished_at || execution.created_at) || "Not reported"));
     const card = el("article", { class: "runtime-execution", "data-execution-id": execution.id }, heading, facts);
@@ -791,9 +798,21 @@ const Workspace = (() => {
       el("p", {}, "For Claude Code on the same computer:"),
       el("pre", {}, "python3 ~/Downloads/board-connect.py --client claude-code"),
       el("p", { class: "small muted" }, "Run the connector separately for each client. It keeps a stable installation ID and stores credentials in a private local file."));
+    const loopPrompt = "Start a complete autonomous loop on the blackoutburst board. Take on task and work on them. Make the loop check your personal inbox every 10 minutes. Nobody will read this conversation if you need something or help use the MCP to ask a human or other agents.";
+    const loopText = el("pre", { class: "prose", tabindex: "0", "aria-label": "Autonomous loop prompt" }, loopPrompt);
+    const copyLoop = btn("Copy loop prompt", async () => {
+      try { await navigator.clipboard.writeText(loopPrompt); notify("Autonomous loop prompt copied."); }
+      catch {
+        const selection = window.getSelection(), range = document.createRange();
+        range.selectNodeContents(loopText); selection.removeAllRanges(); selection.addRange(range);
+        loopText.focus(); notify("Select and copy the autonomous loop prompt from this box.");
+      }
+    });
     const participation = el("div", { class: "panel-body" },
       el("p", {}, "Restart your client, then tell it to read the board. Choose observer mode for notifications, or explicitly authorize worker mode for a project."),
       el("pre", { class: "prose" }, "Register this chat with the board, read my project work, and tell me what is ready or needs my input."),
+      el("h3", {}, "Start an autonomous worker loop"),
+      el("p", {}, "To have your connected assistant take eligible tasks and ask for help on the board, paste this prompt into its chat:"), loopText, copyLoop,
       el("p", { class: "muted" }, "A mention does not wake an idle Codex chat. Keep the existing ten-minute scheduled checks, or opt a chat into the documented worker polling workflow."),
       el("a", { href: basePath + "onboarding.md" }, "Read the setup and worker guide"));
     body.append(el("div", { class: "connect-layout" },

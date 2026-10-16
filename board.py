@@ -15,7 +15,7 @@ from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
 from profiles import ProfilesMixin, migrate_profiles
 from communication import CommunicationMixin, migrate_communication
-from runtime import RuntimeMixin, migrate_runtime
+from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
 from message_feed import MessageFeedMixin, migrate_message_feed
 
@@ -63,7 +63,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 10:
+            if version > 11:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -147,10 +147,17 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
                 migrate_message_feed(db)
                 db.execute("PRAGMA user_version=9")
             if version < 10:
-                db.execute('''CREATE TABLE mcp_page_cursors(token_hash TEXT PRIMARY KEY,
-                    reader TEXT NOT NULL, scope TEXT NOT NULL, position TEXT NOT NULL)''')
-                db.execute("ALTER TABLE message_feeds ADD COLUMN pending_view TEXT NOT NULL DEFAULT 'full'")
+                migrate_message_runtime(db)
                 db.execute("PRAGMA user_version=10")
+            if version < 11:
+                db.execute('''CREATE TABLE mcp_page_cursors(token_hash TEXT PRIMARY KEY,
+                    reader TEXT NOT NULL, scope TEXT NOT NULL, position TEXT NOT NULL,
+                    created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
+                db.execute('CREATE INDEX mcp_page_cursor_expiry ON mcp_page_cursors(expires_at)')
+                db.execute('CREATE INDEX mcp_page_cursor_reader ON mcp_page_cursors(reader,created_at)')
+                db.execute("ALTER TABLE message_feeds ADD COLUMN pending_view TEXT NOT NULL DEFAULT 'full'")
+                db.execute("ALTER TABLE message_feeds ADD COLUMN pending_compact_json TEXT")
+                db.execute("PRAGMA user_version=11")
 
     @contextmanager
     def _connection(self):
@@ -480,15 +487,57 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             return self._thread(db, self._member(db, actor, thread_id), actor["owner_id"])
 
     def _message(self, db, row):
+        author = _decode(row["author"])
+        avatar = ""
+        if author.get("kind") == "agent":
+            agent_id = author.get("agent_id")
+            if not agent_id:
+                # Pre-profile messages retain their stamp; resolve only the same owner/device/session.
+                session = db.execute("SELECT agent_id FROM sessions WHERE id=? AND owner_id=? AND device_id=?",
+                                     (author.get("session_id"), author.get("owner_id"), author.get("device_id"))).fetchone()
+                agent_id = session["agent_id"] if session else None
+            profile = db.execute("SELECT json_extract(fields,'$.avatar') AS avatar FROM agent_profiles WHERE id=? AND owner_id=?",
+                                 (agent_id, author.get("owner_id"))).fetchone()
+            if profile:
+                avatar = profile["avatar"] or ""
         attachments = []
         for attachment_id in _decode(row["attachments"]):
             attachment = db.execute("SELECT * FROM attachments WHERE id=?", (attachment_id,)).fetchone()
             if attachment:
                 attachments.append(self._attachment(attachment))
-        return {"id": row["id"], "thread_id": row["thread_id"], "body": row["body"], "author": _decode(row["author"]),
+        return {"id": row["id"], "thread_id": row["thread_id"], "body": row["body"], "author": author, "author_avatar": avatar,
                 "created_at": row["created_at"], "reply_to": row["reply_to"], "mentions": _decode(row["mentions"]),
                 "attachments": attachments, "mention_targets": self._mention_details(db, _decode(row["mentions"])),
                 "url": self.base_url + "/?thread=" + row["thread_id"] + "&message=" + row["id"]}
+
+    @staticmethod
+    def _message_source_hash(row):
+        """Hash immutable/raw source fields, excluding dynamic display metadata."""
+        source = {key:row[key] for key in ('id','thread_id','body','created_at','reply_to')}
+        source.update(author=_decode(row['author']),mentions=_decode(row['mentions']),
+                      attachment_ids=_decode(row['attachments']))
+        try:
+            raw = json.dumps(source,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode('utf-8')
+        except (TypeError,ValueError,UnicodeError):
+            raise BoardError('Message source unavailable',409) from None
+        return hashlib.sha256(raw).hexdigest()
+
+    def get_message(self, actor, thread_id, message_id):
+        """Read one exact permitted source without pagination or read effects."""
+        if any(type(value) is not str or not value or len(value) > 200
+               for value in (thread_id, message_id)):
+            raise BoardError("Message not found", 404)
+        with self._connection() as db:
+            actor = self._actor(db, actor, "allow_read")
+            self._member(db, actor, thread_id)
+            row = db.execute("SELECT * FROM messages WHERE id=? AND thread_id=?",
+                             (message_id, thread_id)).fetchone()
+            if row is None:
+                raise BoardError("Message not found", 404)
+            result = {"message": self._message(db, row), "source_sha256": self._message_source_hash(row)}
+            if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 256 * 1024:
+                raise BoardError("Message exceeds the exact-source byte limit", 413)
+            return result
 
     def get_thread(self, actor, thread_id, before=None, limit=50):
         limit = self._limit(limit)
@@ -796,7 +845,7 @@ class Board(MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, Communicatio
             if mcp_compact:
                 result = compact(result)
                 if include_work:
-                    result.update(tasks=[],work={'detail_tool':'get_work','legacy_tasks_detail':'get_thread(view=full)'})
+                    result.update(work={'detail_tool':'get_work','legacy_tasks_detail':'list_thread_tasks','embedded':False})
                 if size(result)>BUDGET:
                     raise BoardError('Inbox metadata exceeds budget; request an explicit full read',413)
                 return result

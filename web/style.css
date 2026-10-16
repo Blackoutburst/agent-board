@@ -122,3 +122,16 @@
   .sidebar{padding-top:12px;padding-bottom:12px;gap:9px}
   .workspace-nav{min-height:0;flex-shrink:1;overflow-y:auto}
 }
+/* Profile avatars are plain text; constrain the supported 32-character label. */
+.avatar.agent.custom{display:block;line-height:30px;text-align:center;font-size:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Bound preview flex items before Firefox computes native button contents. */
+.conversation-nav,.thread-list{min-width:0}
+.thread-list{overflow-x:hidden;overflow-y:auto;align-items:stretch}
+.thread-item{display:flex;flex:0 0 auto;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:0;min-width:0;max-width:100%;overflow:hidden}
+.thread-name{min-width:0;align-items:flex-start}
+.thread-name>span:first-child{flex:1;min-width:0;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+.thread-name>.unread{flex-shrink:0}
+.thread-context,.thread-time{max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.page-head>div{min-width:0;max-width:100%}
+.page-head h1{overflow-wrap:anywhere}

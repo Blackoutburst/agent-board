@@ -1,0 +1,54 @@
+{
+  "actual_mcp_endpoint_calls": 0,
+  "actual_model_calls": 0,
+  "actual_native_qualifications": 0,
+  "adapter_version": "0.18.0",
+  "base_commit": "bb6c118eccb632d90fbd29e5936c059d722e84e3",
+  "board_schema": 10,
+  "board_version": "2.8.0",
+  "checks": {
+    "cleanup_never_admits_or_runs_a_model": true,
+    "development_requires_exact_parent": true,
+    "legacy_uses_default_guard": true,
+    "message_development_option_refuses_before_connection": true,
+    "message_uses_message_guard": true,
+    "run_store_explicit_id_method_preserved_from_host": true
+  },
+  "date": "2026-10-16",
+  "independent_review": {
+    "mode": "static_read_only",
+    "scope": "Runtime CLI legacy/message/development dispatch and four cross-mode regressions",
+    "status": "no_open_findings"
+  },
+  "integrated_commits": [
+    "fdfc5ee",
+    "5ab2d98"
+  ],
+  "kind": "message_and_development_adapter_integration",
+  "limits": [
+    "Loopback SDK uses temporary synthetic accounts; initial restricted bind was refused, bounded local retry passed.",
+    "No native qualification was run here. Version/source changes invalidate existing private native plans and require explicit requalification before any pilot.",
+    "Historical native receipts remain dated proof for their exact pinned sources, not approval of this version.",
+    "Development requires explicit live grants, exclusive disposable checkout and separately qualified plans.",
+    "Identity-only Runtime CLI cleanup covers exact cached model results; no local_broker replay.",
+    "No listener, task selection, API fallback, real model/account operation or production activation."
+  ],
+  "preserved_main": "aeccb9d1e781ce0726589b61eac3bcf5759527d0",
+  "production_calls": 0,
+  "schema": 1,
+  "source_sha256": {
+    "blackoutburst_agents/__init__.py": "423f73d47bd18973ed6f9e28a102a9dc5a6d01a49c717e0577eea697e72309d6",
+    "blackoutburst_agents/dev_runtime.py": "bb224b31e044a254797a9a60ad04a9ba7af1bc402eb31feb1861e30a8d0f9a26",
+    "blackoutburst_agents/run_store.py": "9fab7ed3d4780e9e42dc28531a4b301508940f4b28a5c7d9177d941aee61d0a7",
+    "blackoutburst_agents/runtime_cli.py": "b05ffd8ef12a358eb402986902d1716cf21e43e5eccfd55a3f7c15c1723ee0d5",
+    "pyproject.toml": "10bf3f62953dae19e44fd143b7b26f8a97cc757e949f65b6268f172b642b9b85",
+    "tests/test_runtime_reconcile_dispatch.py": "1306a283f071c399d12e9e762186dd9568c309eb07ce32ef87177aec8d5611cf"
+  },
+  "tests": {
+    "adapter_full_passed": 886,
+    "backend_full_passed": 587,
+    "cross_mode_dispatch_passed": 4,
+    "sdk_loopback_passed_after_permission_retry": 1,
+    "targeted_dispatch_workflow_runtime_passed": 53
+  }
+}

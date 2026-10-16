@@ -79,3 +79,9 @@ Schema 8 stores ordered task/file associations in `ticket_attachments`, referenc
 ## Browser Markdown
 
 User-authored prose is stored as source text. `web/markdown.js` renders it through the locally vendored markdown-it parser with HTML disabled and an explicit URL protocol allowlist. The same helper renders project/task fields, discussion messages, legacy task prose and human request/answer text. Editors, exact conflict comparisons, identifiers and raw configuration retain their plain-text representation. Mention highlighting operates on resulting text nodes outside links/code; it never creates authorization or alters notification targets.
+
+## Addressed-message Runtime
+
+Schema 10 extends the existing owner-wide execution registry with exact conversation/message/hash scope. Replies require current read/reply permission, active profile/device/session/version, membership and human addressing. This scope shares capacity with ticket executions and grants no task claim or management rights. Exact source reads and confirmed-feed checkpoints remain separate from execution admission and publication.
+
+The optional personal host has two explicitly configured modes: ticket activity and confirmed human messages. Message mode pins only the selected conversation sources, revalidates their access and hashes before transport and publication, and confirms its feed after durable replies. It remains disabled at creation, finite and foreground; there is no distributed lease or permanent server listener.

@@ -7,6 +7,7 @@ available through authorized, hash-checked code-point chunks.
 import hashlib
 import json
 import secrets
+import time
 
 from projects import _fail
 
@@ -51,28 +52,74 @@ def text_info(value):
             'sha256': hashlib.sha256(raw).hexdigest()}
 
 
-def compact(value):
+def _source(value):
+    if not isinstance(value, dict) or 'id' not in value:
+        return None
+    if 'number' in value and 'thread_id' in value: kind = 'ticket'
+    elif 'body' in value and 'thread_id' in value: kind = 'message'
+    elif 'question' in value and 'ticket_id' in value: kind = 'human_request'
+    elif 'instructions' in value and 'destination_kind' in value: kind = 'legacy_task'
+    elif 'filename' in value and 'content_type' in value: kind = 'attachment'
+    elif 'detail' in value and 'ticket_id' in value: kind = 'activity'
+    elif 'participants' in value and 'title' in value: kind = 'thread'
+    elif 'context' in value and 'name' in value: kind = 'project'
+    elif 'label' in value and 'last_seen_at' in value: kind = 'session'
+    elif 'instructions' in value and 'policy' in value: kind = 'profile'
+    elif {'name','avatar','status'} <= value.keys(): kind = 'agent'
+    else: return None
+    return kind, str(value['id'])
+
+
+def _preview(value):
+    end = min(len(value), 80)
+    while len(encoded(value[:end])) > 128:
+        end -= 1
+    return value[:end]
+
+
+def compact(value, source=None, path=()):
     if isinstance(value, list):
-        return [compact(item) for item in value]
+        return [compact(item, source, (*path, str(i))) for i,item in enumerate(value)]
     if not isinstance(value, dict):
         return value
+    own_source = _source(value)
+    if own_source:
+        source, path = own_source, ()
     result, prose = {}, {}
     for key, item in value.items():
         if key=='answer' and isinstance(item,str) and len(encoded(item))<=512:
             result[key]=item
         elif isinstance(item, str) and (key in PROSE or len(encoded(item)) > 1024):
-            if item:
-                prose[key] = text_info(item)
-                result[key + '_preview'] = item[:80]
+            info = text_info(item)
+            if source:
+                field = '/'+ '/'.join(x.replace('~','~0').replace('/','~1') for x in (*path,key))
+                info['get_text'] = {'kind':source[0],'identifier':source[1],'field':field}
+            else:
+                info['retrieval'] = 'Repeat this tool with view=full'
+            prose[key] = info
+            result[key + '_preview'] = _preview(item)
         else:
-            result[key] = compact(item)
+            result[key] = compact(item, source, (*path,key))
     if prose:
         result['text_fields'] = prose
-        result['text_detail_tool'] = 'get_text'
+        result['text_detail_tool'] = 'get_text' if source else 'view=full'
+    if own_source and own_source[0]=='message':
+        # Lists are metadata, never a reason to poison a durable delivery. Exact
+        # source remains available via get_message; counts disclose omissions.
+        for key in ('attachments','mentions','mention_targets'):
+            items = result.get(key)
+            if isinstance(items,list) and (len(items)>2 or size(items)>600):
+                result.pop(key)
+                result[key+'_count'] = len(items)
+                result[key+'_detail'] = {'tool':'get_text','kind':'message',
+                    'identifier':own_source[1],'field':'/'+key,
+                    'encoding':'canonical JSON array text'}
     return result
 
 
 def summary(value):
+    if not isinstance(value,dict):
+        return compact(value)
     if 'number' in value and 'thread_id' in value:
         keep = {'id','project_id','number','thread_id','title','status','priority',
             'version','assignee_owner_id','assignee_agent_id','claimant',
@@ -122,6 +169,16 @@ class MCPViews:
     def _scope(self, kind, filters):
         return hashlib.sha256(encoded([kind, filters])).hexdigest()
 
+    def message(self, actor, thread_id, message_id):
+        if any(type(x) is not str or not 1<=len(x)<=200 for x in (thread_id,message_id)):
+            _fail('Message not found',404)
+        with self.board._connection() as db:
+            actor=self.board._actor(db,actor,'allow_read');self.board._member(db,actor,thread_id)
+            row=db.execute('SELECT * FROM messages WHERE id=? AND thread_id=?',(message_id,thread_id)).fetchone()
+            if row is None:_fail('Message not found',404)
+            return {'message':compact(self.board._message(db,row)),
+                    'source_sha256':self.board._message_source_hash(row)}
+
     def thread(self, actor, thread_id, before=None, limit=50):
         limit = self.board._limit(limit)
         with self.board._connection() as db:
@@ -164,6 +221,7 @@ class MCPViews:
             return result
 
     def _position(self, db, actor, scope, cursor):
+        db.execute('DELETE FROM mcp_page_cursors WHERE expires_at<=?',(time.time(),))
         if not cursor:
             return {}
         if not isinstance(cursor, str) or len(cursor) > 100:
@@ -171,7 +229,7 @@ class MCPViews:
         row = db.execute('SELECT position FROM mcp_page_cursors WHERE token_hash=? AND reader=? AND scope=?',
             (hashlib.sha256(cursor.encode()).hexdigest(), self.board._actor_key(actor), scope)).fetchone()
         if row is None:
-            _fail('MCP cursor was not issued for this session and query')
+            _fail('MCP cursor expired or was not issued for this session and query; restart scan')
         return json.loads(row['position'])
 
     def page(self, actor, kind, value, *, limit=20, cursor=None, filters=None):
@@ -183,47 +241,61 @@ class MCPViews:
         with self.board._tx() as db:
             actor = self.board._actor(db, actor, 'allow_read')
             position = self._position(db, actor, scope, cursor)
-            # Immutable IDs, rather than updated_at, prevent updates from moving
-            # already observed rows across a page boundary. Authorization is
-            # re-evaluated by the source read on every page.
-            def key(item):
-                value = item.get('id',item.get('name',''))
-                return f'n:{value:020d}' if type(value) is int else 's:'+value
-            reverse = kind=='list_activity' and (filters or {}).get('order')=='desc'
-            def beyond(group,item):
-                old=position.get(group)
-                return old is None or (key(item)<old if reverse else key(item)>old)
-            rows = {k:sorted(v, key=key, reverse=reverse) for k,v in groups.items()}
-            remaining = {k:[x for x in v if beyond(k,x)] for k,v in rows.items()}
-            result = {**compact(fixed), **{k:[] for k in groups},
+            rows = groups
+            if kind=='list_activity':
+                high = position.get('high', max((x['id'] for x in value),default=0))
+                position['high']=high
+                rows={'items':[x for x in value if x['id']<=high]}
+            # Preserve the authoritative queue/recency/name order. If mutable
+            # ordering/membership changes, fail explicitly instead of skipping
+            # unseen rows. No ID snapshot or ever-growing seen-ID list is kept.
+            identities = {k:[x.get('id',x.get('name',x)) if isinstance(x,dict) else x for x in v] for k,v in rows.items()}
+            digest=hashlib.sha256(encoded(identities)).hexdigest()
+            if position.get('order_hash',digest)!=digest:
+                _fail('Collection order or membership changed; restart scan and deduplicate IDs',409)
+            position['order_hash']=digest
+            offsets=position.setdefault('offsets',{})
+            if position.get('next_group') in rows:
+                keys=list(rows);start=keys.index(position['next_group']);rows={k:rows[k] for k in keys[start:]+keys[:start]}
+            result = {**compact(fixed), **{k:[] for k in rows},
                       'totals': {k:len(v) for k,v in rows.items()}, 'next_cursor':None}
-            # Reserve cursor and envelope space before adding items. Round robin
-            # means large ready queues cannot hide an assigned claim or request.
-            blocked = set()
-            for index in range(limit):
-                advanced = False
-                for group, candidates in remaining.items():
-                    if group in blocked or index >= len(candidates):
-                        continue
-                    item = summary(candidates[index])
-                    result[group].append(item)
-                    if size(result) > BUDGET-160:
-                        result[group].pop()
-                        if not any(result[k] for k in groups):
-                            _fail('One summary exceeds the MCP budget; request its explicit full detail',413)
-                        blocked.add(group)
-                        continue
-                    position[group] = key(candidates[index])
-                    advanced = True
-                if not advanced:
+            blocked=set()
+            # limit is a total item bound, including get_work groups.
+            for _ in range(limit):
+                advanced=False
+                for group,candidates in rows.items():
+                    index=offsets.get(group,0)
+                    if group in blocked or index>=len(candidates):continue
+                    result[group].append(summary(candidates[index]))
+                    if size(result)>BUDGET-200:
+                        result[group].pop();blocked.add(group);continue
+                    offsets[group]=index+1;advanced=True
                     break
-            more = any(any(beyond(k,x) for x in v) for k,v in rows.items())
+                if not advanced:break
+                # Rotate groups so assigned work and human requests get turns.
+                rows={k:rows[k] for k in [*list(rows)[1:],next(iter(rows))]}
+                position['next_group']=next(iter(rows))
+            more=any(offsets.get(k,0)<len(v) for k,v in rows.items())
             if more:
-                token = secrets.token_urlsafe(24)
-                db.execute('INSERT INTO mcp_page_cursors VALUES(?,?,?,?)',
-                    (hashlib.sha256(token.encode()).hexdigest(),self.board._actor_key(actor),scope,json.dumps(position)))
-                result['next_cursor'] = token
+                if not any(result[k] for k in groups):
+                    _fail('One summary or fixed metadata exceeds the MCP budget; request explicit full detail',413)
+                token=secrets.token_urlsafe(24);now=time.time();reader=self.board._actor_key(actor)
+                db.execute('INSERT INTO mcp_page_cursors VALUES(?,?,?,?,?,?)',
+                    (hashlib.sha256(token.encode()).hexdigest(),reader,scope,json.dumps(position),now,now+3600))
+                db.execute('''DELETE FROM mcp_page_cursors WHERE token_hash IN
+                    (SELECT token_hash FROM mcp_page_cursors WHERE reader=? ORDER BY created_at DESC,token_hash DESC LIMIT -1 OFFSET 128)''',(reader,))
+                result['next_cursor']=token
             return result
+
+    def ticket(self, actor, ticket_id, limit=20, cursor=None):
+        data=self.board.get_ticket(actor,ticket_id)
+        ticket=dict(data['ticket'])
+        # Project detail has its own read and text locator; do not spend the
+        # ticket's control-list budget on an unrelated large project brief.
+        project={k:data['project'][k] for k in ('id','name','version')}
+        page=self.page(actor,'get_ticket',ticket,limit=limit,cursor=cursor,filters={'ticket_id':ticket_id})
+        next_cursor=page.pop('next_cursor');totals=page.pop('totals')
+        return {'ticket':page,'project':compact(project,('project',project['id'])),'totals':totals,'next_cursor':next_cursor}
 
     def get_text(self, actor, kind, identifier, field, offset=0, limit=2048, expected_sha256=''):
         if type(offset) is not int or offset<0 or type(limit) is not int or not 64<=limit<=4096:
@@ -231,40 +303,56 @@ class MCPViews:
         with self.board._connection() as db:
             actor = self.board._actor(db,actor,'allow_read')
             if kind == 'message':
-                row = db.execute('SELECT * FROM messages WHERE id=?',(identifier,)).fetchone()
-                if row is None:
-                    _fail('Message not found',404)
-                self.board._member(db,actor,row['thread_id'])
-                allowed = {'body'}
+                row=db.execute('SELECT * FROM messages WHERE id=?',(identifier,)).fetchone()
+                if row is None:_fail('Message not found',404)
+                self.board._member(db,actor,row['thread_id']);data=self.board._message(db,row)
             elif kind == 'ticket':
-                row = self.board._ticket_member(db,actor,identifier)
-                allowed = {'title','description','acceptance_criteria','progress','outcome','evidence','resource'}
+                row=self.board._ticket_member(db,actor,identifier);data=self.board._ticket(row,db)
+                project=self.board._project_member(db,actor,row['project_id'])
+                data['project_name']=project['name']
             elif kind == 'project':
-                row = self.board._project_member(db,actor,identifier)
-                allowed = {'name','description','context','environment','repository_url'}
+                data=self.board._project(db,self.board._project_member(db,actor,identifier))
             elif kind == 'human_request':
-                row = db.execute('SELECT * FROM human_requests WHERE id=?',(identifier,)).fetchone()
-                if row is None:
-                    _fail('Human request not found',404)
-                self.board._ticket_member(db,actor,row['ticket_id'])
-                allowed = {'question','answer'}
+                row=db.execute('SELECT * FROM human_requests WHERE id=?',(identifier,)).fetchone()
+                if row is None:_fail('Human request not found',404)
+                self.board._ticket_member(db,actor,row['ticket_id']);data=self.board._request(row)
             elif kind == 'legacy_task':
-                row = db.execute('SELECT * FROM tasks WHERE id=?',(identifier,)).fetchone()
-                if row is None:
-                    _fail('Task not found',404)
-                self.board._member(db,actor,row['thread_id'])
-                allowed = {'title','instructions','requirements','progress','outcome','evidence'}
+                row=db.execute('SELECT * FROM tasks WHERE id=?',(identifier,)).fetchone()
+                if row is None:_fail('Task not found',404)
+                self.board._member(db,actor,row['thread_id']);data=self.board._task(db,row)
             elif kind == 'profile':
-                profile = self.board._profile_for_actor(db,actor)
-                if profile is None or profile['id'] != identifier:
-                    _fail('Profile not found',404)
-                row = json.loads(profile['fields'])
-                allowed = {'name','description','instructions','role','response_style','language','preferred_model','preferred_provider'}
-            else:
-                _fail('Unsupported text kind')
-            if field not in allowed:
-                _fail('Unsupported text field')
-            text = row[field] or ''
+                profile=self.board._profile_for_actor(db,actor)
+                if profile is None or profile['id']!=identifier:_fail('Profile not found',404)
+                data=self.board._profile_view(db,profile)
+            elif kind == 'thread':
+                row=self.board._member(db,actor,identifier);data=self.board._thread(db,row,actor['owner_id'])
+            elif kind == 'attachment':
+                row=db.execute('SELECT * FROM attachments WHERE id=?',(identifier,)).fetchone()
+                if row is None:_fail('Attachment not found',404)
+                self.board._member(db,actor,row['thread_id']);data=self.board._attachment(row)
+            elif kind == 'session':
+                if identifier!=actor.get('session_id'):_fail('Session not found',404)
+                data=self.board._session(db.execute('SELECT * FROM sessions WHERE id=?',(identifier,)).fetchone())
+            elif kind == 'agent':
+                data=next((x for x in self.board.list_agents(actor) if x['id']==identifier),None)
+                if data is None:_fail('Agent not found',404)
+            elif kind == 'activity':
+                if not identifier.isdigit():_fail('Activity not found',404)
+                rows=self.board.list_activity(actor,after=int(identifier)-1,limit=1,order='asc')
+                if not rows or str(rows[0]['id'])!=identifier:_fail('Activity not found',404)
+                data=rows[0]
+            else:_fail('Unsupported text kind')
+            parts=([x.replace('~1','/').replace('~0','~') for x in field[1:].split('/')]
+                   if field.startswith('/') else [field])
+            text=data
+            for part in parts:
+                if isinstance(text,dict) and part in text:text=text[part]
+                elif isinstance(text,list) and part.isdigit() and int(part)<len(text):text=text[int(part)]
+                else:_fail('Unsupported text field')
+            # Large metadata arrays can be recovered as canonical JSON chunks,
+            # without an unbounded get_message result or a false empty list.
+            if isinstance(text,(dict,list)):text=encoded(text).decode()
+            if not isinstance(text,str):_fail('Unsupported text field')
             info = text_info(text)
             if expected_sha256 and expected_sha256 != info['sha256']:
                 _fail('Text changed; restart at offset 0 with its new hash',409)

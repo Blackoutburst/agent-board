@@ -1,0 +1,86 @@
+{
+  "auth_rpc_calls_requested": 0,
+  "backend_source_sha256": "8ee24c1c523e947b706d92a6b12a81524794578664a247a67dfdf6baed5a1874",
+  "checks": {
+    "ack_required_before_source": true,
+    "cached_replay": true,
+    "cancelled": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "cancelled",
+      "status": "complete"
+    },
+    "failed": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "failed",
+      "status": "complete"
+    },
+    "output": {
+      "cleanup_confirmed": true,
+      "output_bytes": 16,
+      "result": "failed",
+      "status": "complete"
+    },
+    "passed": {
+      "cleanup_confirmed": true,
+      "output_bytes": 16,
+      "result": "passed",
+      "status": "complete"
+    },
+    "timeout": {
+      "cleanup_confirmed": true,
+      "output_bytes": 0,
+      "result": "failed",
+      "status": "complete"
+    }
+  },
+  "cli_sha256": "0d5ac7aae20c4eda6242428d5e218c55ba96d8763fda2a271088ff37104b9d28",
+  "cli_version": "codex-cli 0.162.0-alpha.17.2",
+  "controller_authentication_files_read": false,
+  "executable_sha256": "179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818",
+  "host": {
+    "machine": "arm64",
+    "release": "25.5.0",
+    "system": "Darwin"
+  },
+  "model_calls": 0,
+  "observed_on": "2026-10-16",
+  "policy": {
+    "filesystem": {
+      ":minimal": "read",
+      ":root": "deny",
+      ":slash_tmp": "deny",
+      ":tmpdir": "deny",
+      "<synthetic-workspace>": "write"
+    },
+    "network": {
+      "enabled": false
+    }
+  },
+  "production_enabled": false,
+  "profile_version": 1,
+  "qualification": {
+    "checks": {
+      "fork": true,
+      "inside_read": true,
+      "inside_write": true,
+      "network_loopback": true,
+      "nproc_raise": true,
+      "outside_read": true,
+      "outside_write": true,
+      "process_group": true,
+      "session": true,
+      "spawn": true
+    },
+    "cleanup_confirmed": true,
+    "plan_hash": "8603ab34cb2842e113fa8bcab12267a021b2a1e2f1e4aa540cb8c7b7ed64d91a",
+    "result": "qualified_single_process_fixture",
+    "schema": 1
+  },
+  "real_repository_tests": false,
+  "result": "passed_fixture_qualification",
+  "schema": 1,
+  "synthetic_files_removed": true,
+  "wrapper_sha256": "7f935355437161b386bafb7343c0d4b64bcadce1bbc647e33a372e2f991fba65"
+}

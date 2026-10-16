@@ -41,6 +41,8 @@ def main(argv=None) -> int:
     configure_parser(subs.add_parser('runner', help='Exécutant personnel local, sans listener du board.'))
     from .context_cli import configure_parser as configure_context, run as run_context
     configure_context(subs.add_parser('context', help='Préparer et inspecter les sources d’un ticket.'))
+    from .decision_cli import configure_parser as configure_memory, run as run_memory
+    configure_memory(subs.add_parser('memory',help='Épingler, consulter et réinitialiser explicitement les décisions sourcées.'))
     from .event_cli import configure_parser as configure_events, run as run_events
     configure_events(subs.add_parser('events', help='Lire ponctuellement les événements d’un ticket.'))
     from .worker_cli import configure_parser as configure_worker, run as run_worker
@@ -53,6 +55,8 @@ def main(argv=None) -> int:
     configure_usage(subs.add_parser('usage', help='Lire les limites locales et transmettre une observation datée.'))
     from .host_cli import configure_parser as configure_host, run as run_host
     configure_host(subs.add_parser('host', help='Hôte local explicite pour des tickets choisis.'))
+    from .development_cli import configure_parser as configure_development, run as run_development
+    configure_development(subs.add_parser('development',help='Développement borné d’un ticket explicitement choisi.'))
     for command, help_text in (
         ("doctor", "Vérifier l’installation et le mode de connexion, sans appel de modèle."),
         ("probe", "Tester une réponse minimale ; consomme une petite part de l’abonnement."),
@@ -64,10 +68,14 @@ def main(argv=None) -> int:
             p.add_argument("--model", help="Modèle choisi explicitement ; sinon défaut du client Codex.")
             p.add_argument("--timeout", type=float, default=120, help="Délai maximum en secondes (1–300).")
     args = parser.parse_args(argv)
+    if args.command == 'development':
+        return run_development(args)
     if args.command == 'host':
         return run_host(args)
     if args.command == 'runner':
         return run_runner(args)
+    if args.command == 'memory':
+        return run_memory(args)
     if args.command == 'context':
         return run_context(args)
     if args.command == 'events':

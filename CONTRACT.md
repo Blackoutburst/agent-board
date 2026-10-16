@@ -1,12 +1,6 @@
-# Board interface contract — 2.8.0
+# Board interface contract — 2.9.0
 
-MCP data pages default to compact views with an 6,000-byte encoded-data budget;
-the complete tool result is tested below 20,000 bytes. Explicit `view="full"`
-restores original shapes/text. Clients must not treat previews as source. See
-[MCP-READS.md](docs/MCP-READS.md) for cursors, `get_text`, attachment chunking,
-confirmed-feed compatibility, assignment notices and bundled worker migration.
-
-The browser REST API and MCP act on one database. Application version is `2.8.0`; schema version is `10`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.9.0`; schema version is `11`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -14,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (45)
+## MCP tools (47)
 
 | Purpose | Tools |
 | --- | --- |
@@ -23,10 +17,11 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
+| Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools |
 | Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Confirmed human-message stream | `open_message_feed`, `read_message_feed`, `checkpoint_message_feed` |
-| Discussion and history | `get_thread`, `post_message`, `list_activity` |
+| Discussion and history | `get_thread`, `get_message`, `post_message`, `list_activity` |
 | Conversations and addressing | `create_conversation`, `list_conversations`, `list_mention_targets` |
 | Files and task tags | `upload_attachment`, `download_attachment`, `list_labels`, `create_label` |
 | Compatible legacy action tasks | `create_task`, `claim_task`, `update_task` |
@@ -104,6 +99,18 @@ Existing-execution lookup/control/heartbeat/finish use a restricted exact identi
 Metadata contains only `id`, `owner_id`, `agent_id`, `profile_version`, `device_id`, `session_id`, `project_id`, `ticket_id`, opaque `work_id`/`turn_id`, `provider`, `model`, `state`, `revision`, `outcome`, categorized `reason`, timestamps, `stop_requested`, `should_stop`, `control_reason`, `cleanup_confirmed` and `stale`. It excludes the idempotency key, prompt, response, executable/workspace path, PID, provider session and credentials. Owner views include all active reservations and at most 50 recently finished executions, and never another owner's registry.
 
 A reported `quota_or_rate_limit` or `authentication_failed` outcome atomically pauses the owner and increments the limits version. The runtime view then reports `quota: {status: "blocked_observed", reason: <category>}`. This is a bounded observation from the executor, not a precise measurement of the subscription. Otherwise quota reflects the availability of the informational connection observations described below; no percentage or reset time is invented. Explicit human `PATCH` with `paused=false` clears the observation. There is no automatic retry, provider/account/model fallback, listener or daemon.
+
+### Addressed-message reservations (schema 10)
+
+`reserve_message_execution(session_id, idempotency_key, thread_id, message_id, source_sha256, work_id, turn_id, provider, model)` admits one reply turn without creating, claiming or completing a ticket. It requires current effective `allow_read` and `allow_reply`, an active exact profile/device/session/version, conversation membership and a **human** source addressed to this executor according to `_inbox_targets`. A named Codex/Claude profile receives its `agent:PROFILE` mentions; an owner mention alone is not permission for that named profile. The existing generic-agent owner-addressing behavior remains unchanged. Message permission grants no work-request, repository, shell or ticket-management authority.
+
+`get_message` adds a top-level `source_sha256` beside its existing `message`. The SHA256 input is UTF-8 JSON with sorted keys, no insignificant whitespace and unescaped Unicode, containing exactly `{id, thread_id, body, author, created_at, reply_to, mentions, attachment_ids}` from the raw message row. `author`, `mentions` and `attachment_ids` are decoded stored values. Dynamic URLs, mention display names and attachment metadata are excluded. Neither this hash nor a source reference causes attachment/file/URL fetching.
+
+Admission, activation and control revalidate the exact source hash and current addressing/access. An edited, withdrawn, retargeted or inaccessible source prevents start and yields `should_stop` during execution. The accepted key binds the message scope and source hash as well as all existing immutable execution identities. The owner/work/turn uniqueness and owner-wide capacity counter are common to ticket and message executions, including uncertain cleanup. Changing scope under an accepted key conflicts; no independent response capacity pool is created.
+
+Message execution metadata adds `scope_kind="message"`, `thread_id`, `message_id` and `source_sha256`. `project_id`/`ticket_id` are null for general conversations, or the related ticket IDs when that link is currently visible to this owner. Changing those linked references or withdrawing that visible context stops the old reservation. These references are context only and confer no claim. Historical ticket execution response fields and the six original tools retain their previous shape and authorization rules. Cleanup/lookup/control remain available to the exact original identity after source, membership, owner permission or profile-version withdrawal; revoked devices are still refused. Finishing an execution never posts its reply.
+
+Schema 10 transactionally rebuilds only `runtime_executions` to make project/ticket references nullable and add the checked message scope plus thread/message foreign keys. Legacy rows, values, uniqueness constraints, indexes and foreign keys are retained, with `scope_kind="ticket"` internally. Migration failure rolls back both table replacement and schema version. Complete backups preserve both scope kinds and unresolved capacity. This extension launches no model and activates no listener.
 
 Owner-only REST routes:
 
@@ -192,3 +199,7 @@ The optional personal adapter reads the subscription through a bounded local Cod
 ## Confirmed human-message feeds (2.7)
 
 `open_message_feed`, `read_message_feed` and `checkpoint_message_feed` provide a separate acknowledged stream for addressed human messages. A stable opening key pins the exact session/profile and initial bounds. A pending delivery remains fixed until its exact ID and checkpoint are confirmed. Current read permissions, profile state and conversation access are checked on every delivery and ACK; agent messages, tasks and general conversation history are excluded. See [the protocol and retention contract](docs/MESSAGE-FEED.md). Legacy `read_inbox` keeps its existing cursor semantics and response shape.
+
+## Exact message sources (2.8)
+
+`get_message(session_id, thread_id, message_id)` reads one exact message only after current read, membership and profile scope checks. A missing message or a message belonging to another thread returns the same 404. The read does not expire work, advance cursors, mark content read or fetch attachment bytes. The UTF-8 result is capped at 256 KiB, with 413 on an oversized source. Message text and file metadata remain untrusted data; this tool grants no authority to follow their instructions.

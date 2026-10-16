@@ -186,6 +186,7 @@ def test_real_mcp_wire_budget_and_full_detail_opt_in(application):
                'list_conversations':{},'list_agents':{},'list_labels':{'project_id':p['id']},
                'list_mention_targets':{'thread_id':t['thread_id']},'list_human_requests':{}}
         for name,args in calls.items(): call(name,**args)
+        call('get_message',thread_id=t['thread_id'],message_id=inbox['messages'][0]['id'])
         chunk=call('get_text',kind='message',identifier=inbox['messages'][0]['id'],field='body')
         assert chunk['next_offset']>0
         claimed=call('claim_next_ticket',project_id=p['id'],idempotency_key='claim')
@@ -244,3 +245,36 @@ def test_activity_pages_honor_direction_and_do_not_move_on_ticket_edits(space):
             seen.extend(x['id'] for x in page['items']);cursor=page['next_cursor']
             if not cursor:break
         assert seen==sorted(set(seen),reverse=order=='desc') and len(seen)==13
+
+
+def test_new_message_and_development_adapters_keep_full_source_after_validation(application):
+    sys.path.insert(0,str(Path(__file__).parents[1]/'integrations/codex-personal'))
+    from blackoutburst_agents.message_client import MessageBoardClient
+    from blackoutburst_agents.development_client import DevelopmentBoardClient
+    from blackoutburst_agents.board_reader import BoardReadError
+    b=application.state.board;h={'kind':'human','owner_id':'blackoutburst'}
+    b.set_policy(h,True,True,True,True,[],[])
+    device=b.create_device(h,'Source bridge',[]);raw=b.authenticate(device['token'])
+    reg=b.register_agent(raw,'source-bridge','Source bridge',[],'codex',False)
+    p=b.create_project(h,'Source bridge',['blackoutburst'],idempotency_key='bridge-p')
+    t=b.create_ticket(h,p['id'],'Source',description='Exact development description',idempotency_key='bridge-t')
+    message=b.post_message(h,t['thread_id'],'Exact human source😀'*100,
+        mentions=['agent:'+reg['identity']['id']],idempotency_key='bridge-m')
+    with TestClient(application) as client:
+        calls=[]
+        def rpc(method,params):
+            calls.append(params)
+            return call_tool(client,device['token'],params['name'],params['arguments'])
+        channel=object.__new__(MessageBoardClient);channel._registered=True;channel.session_id='source-bridge';channel._rpc=rpc
+        source=channel.call('get_message',{'thread_id':t['thread_id'],'message_id':message['id']})
+        assert source==b.get_message(b.actor_session(raw,'source-bridge'),t['thread_id'],message['id'])
+        feed=channel.call('open_message_feed',{'idempotency_key':'bridge-feed','start_at':'beginning','limit':50})
+        page=channel.call('read_message_feed',{'feed_id':feed['feed_id']})
+        assert page['messages'][0]['body']==message['body']
+        development=object.__new__(DevelopmentBoardClient);development._registered=True;development.session_id='source-bridge';development._rpc=rpc;development._initialize=lambda:None
+        assert development.call('get_ticket',{'ticket_id':t['id']})['ticket']['description']=='Exact development description'
+        assert development.call('get_work',{'project_id':p['id'],'limit':1})['ready'][0]['description']=='Exact development description'
+        before=len(calls)
+        with pytest.raises(BoardReadError):channel.call('get_message',{'thread_id':t['thread_id'],'message_id':message['id'],'view':'full'})
+        assert len(calls)==before
+        assert all(c['arguments']['view']=='full' for c in calls)

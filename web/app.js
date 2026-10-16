@@ -139,6 +139,7 @@ function renderThreadList() {
   $("thread-list").replaceChildren(...state.threads.map((thread) => btn("", () => openThread(thread.id).catch((error) => notify(error.message, true)), `thread-item${state.view === "thread" && String(thread.id) === String(state.threadId) ? " active" : ""}`)));
   [...$("thread-list").children].forEach((button, index) => {
     const thread = state.threads[index];
+    button.title = threadSubject(thread);
     button.append(el("div", { class: "thread-name" }, el("span", {}, threadSubject(thread)), thread.unread_count ? el("span", { class: "unread", "aria-label": `${thread.unread_count} unread messages` }, thread.unread_count) : null), ...(thread.ticket ? [el("div", { class: "thread-context", lang: "fr" }, `${thread.ticket.project_name} · Ticket #${thread.ticket.number}`)] : []), el("div", { class: "thread-time" }, date(thread.updated_at)));
   });
   if (!state.threads.length) $("thread-list").append(empty($("search").value ? "No matching conversations." : "Ask a question, request a resource, or discuss a decision."));
@@ -205,7 +206,10 @@ function authorMeta(author = {}, createdAt) {
 }
 function renderMessages() {
   const data = state.threadData;
-  $("messages").replaceChildren(...(data.messages.length ? data.messages.map(messageCard) : [empty(data.thread.ticket ? "Posez une question, demandez une ressource ou une validation. Cet échange apparaîtra dans les conversations après le premier message." : "Ask a question, request a resource, or discuss a decision.")]));
+  const requestPrompts = new Set(state.ticket && state.ticket.id === data.thread.ticket?.id
+    ? state.ticket.human_requests.filter(request => request.status === "open").map(request => request.discussion_message_id).filter(Boolean) : []);
+  const messages = data.messages.filter(message => !requestPrompts.has(message.id));
+  $("messages").replaceChildren(...(messages.length ? messages.map(messageCard) : [empty(data.thread.ticket ? "Posez une question, demandez une ressource ou une validation. Cet échange apparaîtra dans les conversations après le premier message." : "Ask a question, request a resource, or discuss a decision.")]));
   $("older-messages").replaceChildren();
   if (data.next_before) $("older-messages").append(btn("Load older messages", async (event) => {
     event.currentTarget.disabled = true;
@@ -220,9 +224,10 @@ function renderMessages() {
 }
 function messageCard(message) {
   const author = message.author || {};
+  const agentAvatar = author.kind === "agent" && typeof message.author_avatar === "string" ? message.author_avatar : "";
   const extraMentions = (message.mention_targets || []).filter(target => !message.body.toLowerCase().includes(`@${target.name.toLowerCase()}`));
   const reply = message.reply_to ? state.threadData.messages.find((item) => String(item.id) === String(message.reply_to)) : null;
-  return el("article", { class: `message${new URLSearchParams(location.search).get("message") === String(message.id) ? " highlight" : ""}`, id: `message-${message.id}` }, el("div", { class: `avatar${author.kind === "agent" ? " agent" : ""}`, "aria-hidden": "true" }, author.kind === "agent" ? "CX" : authorLabel(author).slice(0, 2).toUpperCase()),
+  return el("article", { class: `message${new URLSearchParams(location.search).get("message") === String(message.id) ? " highlight" : ""}`, id: `message-${message.id}` }, el("div", { class: `avatar${author.kind === "agent" ? " agent" : ""}${agentAvatar ? " custom" : ""}`, "aria-hidden": "true", title: agentAvatar }, author.kind === "agent" ? agentAvatar || "CX" : authorLabel(author).slice(0, 2).toUpperCase()),
     el("div", { class: "message-content" }, authorMeta(author, message.created_at), message.reply_to ? el("div", { class: "reply-reference" }, reply ? `Reply to ${authorLabel(reply.author)}: ${reply.body.slice(0, 100)}` : `Reply to message ${message.reply_to}`) : null,
       el("div", { class: "message-body" }, Conversations.messageBody(message)),
       extraMentions.length ? el("p", { class: "mention-line" }, extraMentions.map(target => el("span", { class: "mention" }, `@${target.name}`))) : null,

@@ -23,7 +23,7 @@ import urllib.request
 MAX_CONNECTION_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PROTOCOL_VERSION = "2025-06-18"
-READ_TOOLS = frozenset({"get_ticket", "get_thread"})
+READ_TOOLS = frozenset({"get_ticket", "get_thread", "get_message"})
 
 
 class BoardReadError(Exception):
@@ -116,6 +116,11 @@ def _connection_file(path):
     finally:
         if fd is not None:
             os.close(fd)
+    return _connection_data(config)
+
+
+def _connection_data(config):
+    """Validate already decoded held bytes without reopening a path."""
     if not isinstance(config, dict):
         raise BoardReadError("invalid_connection")
     endpoint = _endpoint(config.get("mcp_url"))
@@ -194,6 +199,10 @@ class BoardReader:
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), _NoRedirect(),
             urllib.request.HTTPSHandler(context=_tls_context()))
+
+    @property
+    def endpoint(self):
+        return self._config['mcp_url']
 
     def _rpc(self, method, params):
         self._next_id += 1
@@ -291,7 +300,8 @@ class BoardReader:
         # argument allowlists still run before this trusted injection.
         if name in {'get_ticket','get_thread','get_project','get_work','claim_ticket',
                     'claim_next_ticket','lookup_ticket_selection','renew_ticket',
-                    'update_ticket','release_ticket','request_human_input','lookup_human_request','register_agent'}:
+                    'update_ticket','release_ticket','request_human_input','lookup_human_request','register_agent','get_message','open_message_feed',
+                    'read_message_feed','checkpoint_message_feed','post_message'}:
             args={**args,'view':'full'}
         result = self._rpc("tools/call", {"name": name, "arguments": args})
         if not isinstance(result, dict) or ("isError" in result and type(result["isError"]) is not bool):

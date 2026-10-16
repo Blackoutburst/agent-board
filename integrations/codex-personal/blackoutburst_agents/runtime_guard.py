@@ -13,7 +13,7 @@ import time
 
 from .runtime_client import REASONS
 from .runtime_journal import RuntimeJournal
-from .run_store import StoreError
+from .run_store import StoreError,RunStore
 
 
 class RuntimeControlError(StoreError):
@@ -30,21 +30,31 @@ class RuntimeGuard:
         self.control_failed = False
 
     def configuration(self, work, turn_id):
-        local_agent = 'board-agent-' + hashlib.sha256(json.dumps({key:self.scope[key] for key in
-            ('board_endpoint','board_session_id','agent_id')},ensure_ascii=False,sort_keys=True,
+        identity={key:self.scope[key] for key in ('board_endpoint','board_session_id','agent_id')}
+        if work.get('decision_memory') is not None:
+            identity['decision_memory']=RunStore._guard_value(work['decision_memory'])
+        local_agent = 'board-agent-' + hashlib.sha256(json.dumps(identity,ensure_ascii=False,sort_keys=True,
             separators=(',',':'),allow_nan=False).encode()).hexdigest()
         if (any(work.get(key) != self.scope[key] for key in ('owner_id','project_id','ticket_id'))
                 or work.get('agent_id') != local_agent):
             raise RuntimeControlError('runtime_scope_mismatch')
         return RuntimeJournal.configuration(self.scope, work['id'], turn_id, work['model'])
 
+    def expected(self, config):
+        return {**{key:config['scope'][key] for key in ('owner_id','agent_id','project_id','ticket_id')},
+            'session_id':config['scope']['board_session_id'],
+            **{key:config[key] for key in ('work_id','turn_id','provider','model')}}
+
+    def reservation(self, config):
+        return 'reserve_execution', {'idempotency_key':self.operation['key'],
+            **{key:config['scope'][key] for key in ('project_id','ticket_id')},
+            **{key:config[key] for key in ('work_id','turn_id','provider','model')}}
+
     def metadata(self, value):
         if not isinstance(value, dict) or self.operation is None:
             raise RuntimeControlError('runtime_receipt_invalid')
         config = self.operation['configuration']
-        expected = {**{key:config['scope'][key] for key in ('owner_id','agent_id','project_id','ticket_id')},
-            'session_id':config['scope']['board_session_id'],
-            **{key:config[key] for key in ('work_id','turn_id','provider','model')}}
+        expected = self.expected(config)
         if any(value.get(key) != item for key,item in expected.items()):
             raise RuntimeControlError('runtime_scope_mismatch')
         if (not isinstance(value.get('id'),str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',value['id'])
@@ -85,9 +95,8 @@ class RuntimeGuard:
             raise RuntimeControlError('runtime_existing_turn_requires_review')
         try:
             config=self.operation['configuration']
-            result=self.client.call('reserve_execution',{'idempotency_key':self.operation['key'],
-                **{key:config['scope'][key] for key in ('project_id','ticket_id')},
-                **{key:config[key] for key in ('work_id','turn_id','provider','model')}})
+            name, arguments = self.reservation(config)
+            result=self.client.call(name,arguments)
             if not isinstance(result,dict) or result.get('reserved') is not True or type(result.get('retried')) is not bool:
                 raise RuntimeControlError('runtime_reservation_unconfirmed')
             receipt=self.metadata(result.get('execution'))

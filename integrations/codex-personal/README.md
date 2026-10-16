@@ -12,6 +12,12 @@ L’adaptateur 0.12 ajoute un [hôte local explicite](HOST.md) pour une liste fi
 
 L’adaptateur 0.13 ajoute les [primitives du broker de développement](DEVELOPMENT.md), désactivées par défaut : fichiers explicitement autorisés, lectures bornées, remplacement exact avec contrôle du hash, budgets durables et rapprochement après coupure. Cette bibliothèque reste séparée des commandes existantes ; elle ne fournit ni transport de modèle, ni shell, ni backend réel de tests. Un stage dont la propriété ne peut pas être prouvée reste conservé et bloque la reprise jusqu’à inspection humaine.
 
+L’adaptateur 0.14 ajoute un [backend natif de tests Python nommés](NATIVE_TESTS.md) et sa [supervision séparée](SUPERVISED_TESTS.md), sur option et après qualification locale. Le backend supervisé a été vérifié sur Mac avec des fichiers synthétiques, dont un crash du contrôleur suivi d’un nettoyage et d’un rapprochement sans réexécution. Linux reste non qualifié. Les workers existants n’exposent pas ce backend au modèle et aucune installation ne l’active.
+
+Un [mode de réponse aux messages](MESSAGE_HOST.md) est disponible sur configuration explicite `schema_version: 2`, avec le flux confirmé et une portée Runtime de conversation. Le mode activité `schema_version: 1` reste distinct. Aucun listener permanent n’est installé ou activé.
+
+L’adaptateur 0.18 ajoute le [parcours explicite de développement](DEVELOPMENT_CLI.md) : préparation en lecture seule, exécution finie avec droits et contexte frais, preuves datées, rapprochement des reçus et publication séparée en revue. Chaque opération démarre son propre dialogue fournisseur. Le nettoyage Runtime distingue les travaux historiques, les réponses aux messages et ce parcours ; aucun mode n’active les autres. Les tests de cette intégration utilisent uniquement des modèles et backends simulés.
+
 ## Utilisation
 
 Python **3.10 ou supérieur**, sur macOS ou Linux/POSIX ; aucune bibliothèque Python externe n’est nécessaire à l’exécution. Codex doit être installé et connecté par son propriétaire au moyen de son interface ou de sa CLI officielle. L’authentification reste gérée par Codex. [Documentation officielle de connexion](https://learn.chatgpt.com/docs/auth)
@@ -77,3 +83,6 @@ Ces reçus ne contiennent ni jeton de connexion, ni transcription, ni sortie bru
 La version 0.7 lit les préférences du profil du board 2.1 et vérifie leur version avant composition du contexte. La langue, le style et la spécialisation peuvent guider la réponse dans le périmètre demandé ; fournisseur/modèle restent des préférences et ne changent pas automatiquement l’exécutant. Les droits, connexions et tâches hors portée ne sont pas transmis au modèle.
 
 La version 0.8 raccorde les questions au journal événements : la réponse reprend le lot et la session d’origine, et son événement est dédupliqué même après coupure ou abandon. Le rapprochement optionnel d’une question dont l’accusé a été perdu reste en lecture seule. Les scénarios utilisent un vrai Board temporaire et des modèles simulés ; la question/réponse avec un humain réel reste une preuve distincte.
+
+La [mémoire explicite de décisions](MEMORY.md) permet d’épingler une ancienne source humaine du ticket, de la relire exactement avant les tours, puis de consulter/corriger/réinitialiser ses résumés localement. Elle reste optionnelle, bornée et séparée des profils, caches et sessions fournisseur.
+La [politique optionnelle du planificateur](PLANNER_POLICY.md) fournit un dossier vide distinct du checkout et une politique de commandes en lecture seule, après qualification locale explicite sur Mac. Le transport habituel reste inchangé ; cette bibliothèque n’active ni modèle, ni développement, ni listener automatiquement.
