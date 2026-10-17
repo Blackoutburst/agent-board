@@ -234,6 +234,39 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator('#notice').evaluate(node => node.hidden = true);
     await page.screenshot({ path: path.join(output, 'profiles-desktop.png'), fullPage: true });
 
+    // Same live fixture session acknowledges a cosmetic change without a
+    // human unclaim. No model process or external side effect was started.
+    await card(name).getByText('Configuration changed: agent acknowledgement and checked cleanup required.', { exact: true }).waitFor();
+    const refreshArgs = plan => ({ session_id: session,
+      from_profile_version: plan.from_profile_version, expected_profile_version: plan.to_profile_version,
+      configuration_sha256: plan.configuration_sha256, expected_claims: plan.claims,
+      idempotency_key: `refresh-${plan.to_profile_version}`,
+      recovery_evidence: 'Inspected this synthetic browser fixture; no model process or external write is pending.', view: 'full' });
+    const oldLease = (await api(`/tickets/${assigned.id}`)).ticket.lease_expires_at;
+    let refreshPlan = await mcp(executor.token, 'inspect_profile_refresh', { session_id: session, view: 'full' });
+    assert.equal(refreshPlan.mode, 'preserve_claims');
+    let refreshed = await mcp(executor.token, 'refresh_agent_session', refreshArgs(refreshPlan));
+    assert.equal(refreshed.requires_new_model_operation, true);
+    assert.equal((await api(`/tickets/${assigned.id}`)).ticket.lease_expires_at, oldLease);
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await card(name).locator('details.profile-work > summary').click();
+    await card(name).getByRole('button', { name: `Captured configuration v${refreshed.profile_version}`, exact: true }).waitFor();
+    assert.equal(await card(name).getByText('Configuration changed: agent acknowledgement and checked cleanup required.', { exact: true }).count(), 0);
+
+    // A material edit releases the old claim for a separately started operation.
+    await api(`/agent-profiles/${created.id}`, { expected_version: refreshed.profile_version,
+      instructions: 'PRIVATE PROFILE INSTRUCTIONS after explicit handoff' }, 'PATCH');
+    refreshPlan = await mcp(executor.token, 'inspect_profile_refresh', { session_id: session, view: 'full' });
+    assert.equal(refreshPlan.mode, 'release_claims');
+    refreshed = await mcp(executor.token, 'refresh_agent_session', refreshArgs(refreshPlan));
+    assert.equal(refreshed.requires_new_model_operation, true);
+    const released = (await api(`/tickets/${assigned.id}`)).ticket;
+    assert.equal(released.claimant, null);
+    assert.equal(released.assignee_agent_id, created.id);
+    assert.equal(released.status, 'todo');
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await card(name).getByText('Current work (0)', { exact: true }).waitFor();
+
     await page.setViewportSize({ width: 390, height: 844 });
     await noOverflow();
     await page.screenshot({ path: path.join(output, 'profiles-mobile.png'), fullPage: true });
@@ -312,7 +345,7 @@ fs.mkdirSync(output, { recursive: true });
     await secondPage.screenshot({ path: path.join(output, 'profiles-second-owner-mobile.png'), fullPage: true });
     await secondContext.close();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ browser: 'Firefox', flows: ['owner project creation grants and legacy omission', 'online/idle/offline presence independent of lifecycle', 'legacy scope preserved', 'templates and preview', 'both owners create and edit on desktop and mobile', 'private instructions', 'plain-text XSS handling', 'duplicate without access', 'CAS draft preservation', 'read-only version history', 'device binding', 'pause/resume/archive', 'paused and out-of-scope ticket assignments preserved', 'captured work configuration', 'shared summaries and unbound connections', 'desktop and mobile layout'], javascriptErrors: errors }));
+    console.log(JSON.stringify({ browser: 'Firefox', flows: ['owner project creation grants and legacy omission', 'online/idle/offline presence independent of lifecycle', 'legacy scope preserved', 'templates and preview', 'both owners create and edit on desktop and mobile', 'private instructions', 'plain-text XSS handling', 'duplicate without access', 'CAS draft preservation', 'read-only version history', 'device binding', 'pause/resume/archive', 'paused and out-of-scope ticket assignments preserved', 'captured work configuration', 'explicit refresh preserves live claim and lease', 'material edit hands off claim for new operation', 'shared summaries and unbound connections', 'desktop and mobile layout'], javascriptErrors: errors }));
   } finally {
     await browser.close();
   }

@@ -482,7 +482,7 @@ const Workspace = (() => {
       if (profile) node.replaceWith(presenceBadge(profile));
     });
   }
-  const profileWorkNotice = (p) => p?.active_work?.length ? el("p", { class: "callout" }, "This profile has active work. Saving this change blocks further board calls from its current sessions. Reconcile their claims before restarting with the new configuration; external processes are not stopped automatically.") : null;
+  const profileWorkNotice = (p) => p?.active_work?.length ? el("p", { class: "callout" }, "This profile has active work. Agents must inspect and acknowledge the saved configuration before continuing. Compatible descriptive changes and added projects can retain claims after checked cleanup. Instruction, model or permission changes require a new operation and claim handoff. External processes are not stopped automatically; revoked access stays blocked.") : null;
   const profileField = (label, name, maximum, options = {}) => {
     const node = field(label, name, options);
     node.querySelector("input, textarea").maxLength = maximum;
@@ -507,6 +507,7 @@ const Workspace = (() => {
         item.kind === "ticket" ? workLink(item.title, { ticket: item.id }) : el("span", {}, item.title),
         el("span", { class: "small muted" }, ticketStatuses[item.status] || item.status),
         Number.isSafeInteger(item.profile_version) && item.profile_version > 0 ? btn(`Captured configuration v${item.profile_version}`, guard(() => profileHistory(p.id, item.profile_version)), "quiet profile-work-version") : null,
+        item.profile_version !== p.version ? el("span", { class: "small muted" }, "Configuration changed: agent acknowledgement and checked cleanup required.") : null,
         item.lease_expires_at ? el("span", { class: "small muted" }, `Lease until ${date(item.lease_expires_at)}`) : null)) : el("p", { class: "small muted" }, "No active work")));
     card.append(el("div", { class: "profile-actions" },
       btn("Edit profile", guard(() => profileEditor(p.id))),

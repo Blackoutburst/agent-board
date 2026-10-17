@@ -6,6 +6,7 @@ import secrets
 import time
 
 from projects import _fail, _json, _text, _version
+from profile_refresh import ProfileRefreshMixin
 
 TEXT_LIMITS = {'name': 200, 'avatar': 32, 'description': 4000, 'role': 200,
                'instructions': 12000, 'language': 32, 'response_style': 2000,
@@ -68,7 +69,7 @@ def migrate_profiles(db):
     db.execute('UPDATE devices SET profiles_managed=1 WHERE id IN (SELECT device_id FROM agent_profile_bindings)')
 
 
-class ProfilesMixin:
+class ProfilesMixin(ProfileRefreshMixin):
     def _agent_presence(self, db, profile_id):
         last_seen = db.execute('''SELECT MAX(s.last_seen_at) FROM sessions s
             JOIN devices d ON d.id=s.device_id
@@ -386,7 +387,8 @@ class ProfilesMixin:
             if row['agent_id'] != profile['id']:
                 _fail('A registered session cannot change its agent profile', 409)
             if row['profile_version'] != profile['version'] and self._profile_session_claims(db, session_id):
-                _fail('Profile changed during active work; reconcile its claims before registering again', 409)
+                _fail('Profile changed during active work; call inspect_profile_refresh and explicitly '
+                      'refresh_agent_session after cleanup, or reconcile its claims before registering again', 409)
             db.execute("""UPDATE sessions SET label=?,capabilities=?,skills=?,agent_kind=?,autonomous=?,
                 last_seen_at=?,profile_version=? WHERE id=?""", (label.strip(), _json(capabilities), _json(skills), agent_kind,
                 int(autonomous and policy['autonomy'] == 'queue' and policy['allow_requests']), time.time() if seen else row['last_seen_at'], profile['version'], session_id))

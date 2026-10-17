@@ -46,7 +46,7 @@ def test_family_tools_schema_and_open_get_lookup_roundtrip(family_api):
     response=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},
         json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
     tools={tool['name']:tool for tool in response.json()['result']['tools']}
-    assert TOOLS<=set(tools) and len(tools)==55
+    assert TOOLS<=set(tools) and len(tools)==57
     schema=tools['open_delegation_family']['inputSchema']
     assert schema['properties']['children']['minItems']==2
     assert schema['properties']['children']['maxItems']==2

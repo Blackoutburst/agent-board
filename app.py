@@ -334,6 +334,12 @@ MessageFeedCheckpoint = Annotated[int, Field(strict=True, ge=0)]
 
 
 RuntimeOpaque = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$')]
+
+
+class ProfileRefreshClaim(Body):
+    kind: Literal['ticket', 'task']
+    identifier: RuntimeOpaque
+    version: Version
 RuntimeModel = Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:/-]*$')]
 RuntimeOutcome = Literal['completed', 'blocked', 'cancelled']
 RuntimeReason = Literal['', 'completed', 'cancelled', 'quota_or_rate_limit', 'authentication_failed',
@@ -723,6 +729,24 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                              name: str = "", skills: list[str] | None = None, autonomous: bool = False, view: Literal["compact", "full"] = "compact") -> dict:
         """Register this chat under a persistent installation identity. Keep agent_kind/identity_key stable across chats (codex and claude-code are different agents); use a unique session_id for each chat. name is used only when creating the identity. autonomous=true declares human-authorized worker participation; it grants no shell access."""
         return _view(board.register_agent(device_actor(), session_id, label, skills, agent_kind, autonomous, identity_key, name),view)
+
+    @mcp.tool()
+    async def inspect_profile_refresh(session_id: RuntimeOpaque, view: Literal['compact', 'full'] = 'compact') -> dict:
+        """Inspect this exact device/session's current configuration despite its old profile pin. Read view=full before acknowledgement. Returns version/hash, claim versions, compatibility and cleanup blockers, without lifting any work fence. Does not expose claims outside current scope or repin Runtime/family operations."""
+        return _view(board.inspect_profile_refresh(device_actor(), session_id), view)
+
+    @mcp.tool()
+    async def refresh_agent_session(session_id: RuntimeOpaque, from_profile_version: Version,
+                                    expected_profile_version: Version,
+                                    configuration_sha256: Annotated[str, Field(strict=True, pattern=r'^[0-9a-f]{64}$')],
+                                    expected_claims: Annotated[list[ProfileRefreshClaim], Field(max_length=100)],
+                                    idempotency_key: RuntimeOpaque,
+                                    recovery_evidence: Annotated[str, Field(strict=True, min_length=1, max_length=20000)],
+                                    view: Literal['compact', 'full'] = 'compact') -> dict:
+        """Explicitly acknowledge inspected configuration for this same session after stopping and checking prior processes/effects. Requires exact profile/hash/claim versions, current work authorization, concrete evidence and finished Runtime/family cleanup. Compatible descriptive/scope-addition edits preserve live claims with new versions; instruction/model/authority edits release them. Every refresh requires a new model operation. No lease is extended, Runtime/family repinned, or new work executed. Retry the same key after a lost reply; later claims are never changed by a retry. Queue mode is disabled until explicit register_agent."""
+        return _view(board.refresh_agent_session(device_actor(), session_id, from_profile_version,
+            expected_profile_version, configuration_sha256, [claim.model_dump() for claim in expected_claims],
+            idempotency_key, recovery_evidence), view)
 
     @mcp.tool()
     async def get_work(session_id: str, project_id: str = "", limit: int = 20, cursor: str | None = None, view: Literal["compact", "full"] = "compact") -> dict:

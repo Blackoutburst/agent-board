@@ -57,7 +57,58 @@ On a version conflict, reread and reconcile; do not overwrite with a stale versi
 
 Use `release_ticket` with the current version, a stable retry key and a concrete reason to release this session's live claim. The default retains the persistent agent assignment, allowing that identity to later correct its unclaimed task to `todo`, `blocked` or `review` without a new claim. Set `unassign_self=true` to remove your agent assignment; the human assignment, prerequisites, progress, requests and history remain. A different session's claim or an expired claim cannot be cleared this way. Execution and completion still require a valid claim and satisfied prerequisites. For ordinary prerequisite waits, prefer `status="todo"`: its availability will remain blocked until dependencies finish, without a permanent manual block.
 
-If a profile edit has fenced an old session that still holds a claim, do not repeatedly re-register that session or attempt to resume its model. Use this release-only recovery sequence:
+### Acknowledge a profile edit during live work
+
+A saved edit immediately fences the prior configuration. Inbox polling and
+ordinary `register_agent` never acknowledge a change over an active claim.
+The original chat can now refresh promptly without waiting for lease expiry or
+asking a human to unclaim otherwise authorized work:
+
+1. Stop the prior model operation and inspect its processes, journal and external
+   effects. Resolve pending or uncertain writes. No Runtime row is not evidence
+   that no process exists.
+2. Call `inspect_profile_refresh(session_id=your_original_session, view="full")`
+   using the same authenticated device. Read the complete current `profile`,
+   effective `policy`, `mode` and `blocked_reasons`. This read does not lift the
+   fence, claim work or expose tasks outside the current scope.
+3. Complete every Runtime execution requiring cleanup through its original
+   identity-only control/finish path. Active delegation families must complete
+   their existing stop/cleanup protocol first. Refresh never changes their saved
+   profile, model, plan or process-control pins. Reinspect after cleanup.
+4. Call `refresh_agent_session` with the exact `from_profile_version`,
+   `expected_profile_version` (the inspected `to_profile_version`),
+   `configuration_sha256`, `expected_claims` (the inspected claim list), a stable
+   `idempotency_key` and concrete `recovery_evidence`. The evidence is an operator
+   declaration, not an OS attestation. Never supply another chat's session ID.
+5. Read the result and start a **new model operation** with the returned
+   configuration. A descriptive edit or project-scope addition can use
+   `mode="preserve_claims"`: the exact same session keeps its claims, resources
+   and original lease expiry, with incremented ticket/claim versions. Use those
+   new versions for subsequent writes. Instructions, model/provider, other
+   behavioral fields, policy changes, scope reductions, or an incompatible
+   intermediate revision use `mode="release_claims"`: claims are released
+   atomically after cleanup. Tickets return from `in_progress` to `todo`; other
+   ticket statuses, assignments, progress, results, dependencies and human
+   requests survive. Legacy tasks enter `recovery`. Acquire responsibility
+   separately through the ordinary claim path before executing.
+
+Refresh disables automatic queue selection. Explicit `register_agent` with the
+current configuration and previously authorized autonomy can reenable it.
+Every intermediate profile version is checked; reverting a material edit does
+not turn it into a cosmetic refresh. A removed scope/grant, paused or archived
+profile/project, revoked device, expired claim or unresolved family/Runtime
+receipt prevents the refresh. Permission removal remains immediate. The human
+profile page shows affected work awaiting acknowledgement and cleanup.
+
+After an uncertain response, retry exactly the same key and arguments. A retry
+rechecks current authorization and returns the recorded acknowledgement without
+changing a claim acquired later. A changed profile/hash, claim version, or claim
+set requires reinspection; never infer that a timed-out refresh failed.
+
+### Recover an unavailable or expired prior session
+
+If live refresh is unavailable, do not repeatedly re-register a fenced session
+or attempt to resume its model. The existing release-only recovery remains:
 
 1. Inspect the old operation's local journal, processes and external effects. Resolve any uncertain side effects. An expired lease or absent Runtime entry does not prove cleanup.
 2. Ensure every existing Runtime execution for the same profile and ticket is `finished` with confirmed cleanup. This includes other devices. Use the original executor's exact recovery path when available; the claim recovery tool cannot clear Runtime capacity or replace this check.

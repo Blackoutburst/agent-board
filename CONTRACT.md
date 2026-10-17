@@ -12,7 +12,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 
 | Purpose | Tools |
 | --- | --- |
-| Identity and discovery | `register_agent`, `list_agents`, `get_work`, `read_inbox` |
+| Identity and discovery | `register_agent`, `inspect_profile_refresh`, `refresh_agent_session`, `list_agents`, `get_work`, `read_inbox` |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
@@ -38,7 +38,13 @@ MCP reads default to compact, byte-bounded pages. Omitted prose is labelled with
 
 New profiles default to no projects, no permissions and no bindings. A migrated profile retains its old scope (`project_ids: null`) and owner grants. Human updates cannot set scope to null; omitting it preserves existing scope. Profiles have `active`, `paused` or `archived` status and a strictly increasing version with immutable configuration snapshots. Update/binding calls require `expected_version`; creation/duplication use stable idempotency keys. Duplication copies presentation/preferences only and starts paused without access.
 
-Sessions cannot change their profile. An edited profile rejects old-version session operations with 409 until explicit registration; a session with an outstanding claim must first have that claim reconciled by its owner, or through the bounded release-only `reconcile_profile_claim` path below. Re-registration does not bypass this guard. Pause/archive reject operations with 403 while preserving claims. The board does not terminate external processes.
+Sessions cannot change their profile. An edited profile rejects old-version session operations with 409 until explicit acknowledgement. With an outstanding claim, ordinary re-registration remains fenced; the original session can use the bounded inspection/refresh protocol below after cleanup, or its claim can be reconciled through the existing owner/expired-claim paths. Pause/archive reject work operations with 403 while preserving claims. The board does not terminate external processes.
+
+`inspect_profile_refresh(session_id, view="full")` is an explicit identity-bound read of this exact device/session's current private configuration, effective policy, profile versions, configuration SHA256 and claim versions. Current read permission is required. Revoked claim metadata stays private. `blocked_reasons` identifies missing work authorization, expired claims and unresolved Runtime/family cleanup. Ordinary polling does not acknowledge configuration changes.
+
+`refresh_agent_session(session_id, from_profile_version, expected_profile_version, configuration_sha256, expected_claims, idempotency_key, recovery_evidence)` requires the inspected current configuration/hash, the exact complete claim set/versions, live current work authorization, valid live leases and concrete inspection evidence. No unresolved Runtime execution for this session or its claimed tickets, or active delegation family, is permitted. Cleanup is an operator declaration plus retained Runtime receipts, not an OS attestation. No Runtime row, model operation or delegation plan is repinned.
+
+Every intermediate saved profile version is checked. Only name/avatar/description edits and additive project scope are compatible; these preserve the same session's claims and locks, increment write versions and keep the original lease expiry. Other edits require a claim handoff: tickets lose the claim and return from `in_progress` to `todo`, preserving other statuses, results, progress, assignment, dependencies and requests; legacy tasks enter recovery and release their checked resource locks. Every refresh requires a **new model operation** using the returned configuration. Queue autonomy is disabled until explicitly registered again. The tool never starts work. Repeated keys/arguments return the recorded acknowledgement after current authorization checks without changing a later claim. Changed profile/hash or claim versions require reinspection. Removed permission/scope, pause/archive and device revocation remain immediately effective.
 
 The profile policy contains `allow_read`, `allow_messages`, `allow_requests`, optional boolean `allow_create_projects`, exact `actions`/`resources`, and `autonomy` (`responses`, `requested`, `queue`). Owner grants remain the upper bound. Explicit work requires work permission and autonomy beyond responses; automatic queue claims additionally require both queue autonomy and the session's `autonomous=true` registration. Registration never starts a listener.
 
