@@ -43,7 +43,7 @@ def private_write(path, contents):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.'+path.name+'-')
     try:
-        with os.fdopen(fd, 'w') as handle:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
             protect_path(Path(temporary))
             handle.write(contents)
             handle.flush()
@@ -91,7 +91,7 @@ def rpc(config, method, params, request_id=1):
 
 def write_codex(path, installed, directory, client):
     path = Path(path).expanduser()
-    original = path.read_text() if path.exists() else ''
+    original = path.read_text(encoding='utf-8') if path.exists() else ''
     # Remove exactly this server's table and nested subtables, preserving all other configuration.
     lines = original.splitlines(keepends=True)
     kept, skipping = [], False
@@ -111,7 +111,7 @@ def write_codex(path, installed, directory, client):
 
 def write_claude(path, installed, directory, client):
     path = Path(path).expanduser()
-    original = path.read_text() if path.exists() else ''
+    original = path.read_text(encoding='utf-8') if path.exists() else ''
     data = json.loads(original) if original else {}
     data.setdefault('mcpServers', {})['blackoutburst_board'] = {'type':'stdio','command':sys.executable,
         'args':[str(installed),'--stdio','--client',client,'--config-dir',str(directory)]}
@@ -144,10 +144,15 @@ def confirm_registration(result, config, session_id):
 
 def bridge(config):
     registered = set()
-    for line in sys.stdin:
+    # MCP stdio is UTF-8, independently of the process locale (for example
+    # Windows CP1252). Keep text-only streams usable for embedded callers.
+    input_stream = getattr(sys.stdin, 'buffer', sys.stdin)
+    for line in input_stream:
         message = None
         registering = None
         try:
+            if isinstance(line, bytes):
+                line = line.decode('utf-8')
             message = json.loads(line)
             if not isinstance(message, dict):
                 continue
@@ -189,7 +194,7 @@ def select_agent(connection_path, identity_key):
     if connection_path.is_symlink():
         raise RuntimeError('The existing connection must be a private regular file.')
     descriptor = os.open(connection_path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
-    with os.fdopen(descriptor) as source:
+    with os.fdopen(descriptor, encoding='utf-8') as source:
         info = os.fstat(source.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_size > 65536
                 or (os.name != 'nt' and (info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600))):
@@ -227,13 +232,13 @@ def select_agent(connection_path, identity_key):
         raise RuntimeError('Profile selection was not confirmed. Check its binding, permissions and status in the board.') from None
     selected['name'] = profile['name']
     # A failed verification above leaves the original connection unchanged.
-    if connection_path.is_symlink() or connection_path.read_text() != original:
+    if connection_path.is_symlink() or connection_path.read_text(encoding='utf-8') != original:
         raise RuntimeError('The connection changed during verification. Retry after inspecting the current configuration.')
     # The client runs this installed copy, not necessarily the freshly downloaded
     # selector. Upgrade its registration checks before publishing the new key.
     installed = connection_path.parent / 'connect.py'
     if Path(__file__).resolve() != installed.resolve():
-        private_write(installed, Path(__file__).read_text())
+        private_write(installed, Path(__file__).read_text(encoding='utf-8'))
     private_write(connection_path, json.dumps(selected, indent=2)+'\n')
     return {'profile_id': profile['id'], 'name': profile['name']}
 
@@ -259,7 +264,7 @@ def main():
         return
     if args.stdio:
         try:
-            config = json.loads(connection_path.read_text())
+            config = json.loads(connection_path.read_text(encoding='utf-8'))
             bridge(config)
         except Exception:
             print('Board connection is unavailable. Run the connector to pair this agent.', file=sys.stderr)
@@ -272,7 +277,7 @@ def main():
     expected_mcp = url+'/mcp'
     if paired.get('mcp_url') != expected_mcp:
         raise RuntimeError('The board returned a different MCP address; pairing was not installed.')
-    old = json.loads(connection_path.read_text()) if connection_path.exists() else {}
+    old = json.loads(connection_path.read_text(encoding='utf-8')) if connection_path.exists() else {}
     title = {'codex':'Codex','claude-code':'Claude Code','other':'Agent'}[args.client]
     config = {**paired,'client':args.client,'identity_key':old.get('identity_key') or secrets.token_hex(16),
         'name':args.name or old.get('name') or title+' · '+paired['label']}
@@ -285,7 +290,7 @@ def main():
     private_write(connection_path, json.dumps(config, indent=2)+'\n')
     installed = directory/'connect.py'
     if Path(__file__).resolve() != installed:
-        private_write(installed, Path(__file__).read_text())
+        private_write(installed, Path(__file__).read_text(encoding='utf-8'))
     if args.client == 'codex':
         write_codex(args.codex_config, installed, directory, args.client)
     elif args.client == 'claude-code':
