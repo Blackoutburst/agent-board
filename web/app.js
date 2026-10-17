@@ -2,7 +2,7 @@
 
 // All shared content is inserted as text. Agent credentials stay in memory only.
 const basePath = location.pathname.endsWith("/") ? location.pathname : location.pathname.replace(/[^/]*$/, "");
-const state = { actor: null, csrf: "", owners: [], threads: [], view: "welcome", threadId: null, threadData: null,
+const state = { actor: null, csrf: "", owners: [], threads: [], conversationUnread: 0, view: "welcome", threadId: null, threadData: null,
   settings: null, inboxCursor: null, inboxMessages: [], inboxTasks: [], drafts: new Map(), request: 0,
   projects: [], project: null, ticket: null, projectQuery: "", includeArchived: false, ticketFilters: new Map(),
   workDrafts: new Map() };
@@ -96,6 +96,7 @@ function setView(view) {
   document.body.dataset.view = view;
   document.querySelectorAll('.workspace-nav .nav-button').forEach(node => node.classList.remove('active'));
   $("projects-nav").classList.toggle("active", ["projects", "project", "ticket"].includes(view));
+  $("conversations-nav").classList.toggle("active", ["conversations", "thread"].includes(view));
   $("inbox-nav").classList.toggle("active", view === "inbox");
   $("settings-nav").classList.toggle("active", view === "settings");
   renderThreadList();
@@ -129,20 +130,47 @@ async function authenticated(result) {
 }
 
 async function loadThreads() {
-  state.threads = await api(`/threads?q=${encodeURIComponent($("search").value.trim())}`);
+  const query = $("search").value.trim();
+  const threads = await api(`/threads?q=${encodeURIComponent(query)}`);
+  const allThreads = query ? await api("/threads") : threads;
+  if (query !== $("search").value.trim()) return;
+  state.threads = threads;
+  state.conversationUnread = allThreads.reduce((total, thread) => total + (thread.unread_count || 0), 0);
   renderThreadList();
 }
 function threadSubject(thread) {
   return thread.ticket ? thread.message_preview || `Échange à propos du ticket #${thread.ticket.number}` : thread.title;
 }
 function renderThreadList() {
-  $("thread-list").replaceChildren(...state.threads.map((thread) => btn("", () => openThread(thread.id).catch((error) => notify(error.message, true)), `thread-item${state.view === "thread" && String(thread.id) === String(state.threadId) ? " active" : ""}`)));
-  [...$("thread-list").children].forEach((button, index) => {
-    const thread = state.threads[index];
-    button.title = threadSubject(thread);
-    button.append(el("div", { class: "thread-name" }, el("span", {}, threadSubject(thread)), thread.unread_count ? el("span", { class: "unread", "aria-label": `${thread.unread_count} unread messages` }, thread.unread_count) : null), ...(thread.ticket ? [el("div", { class: "thread-context", lang: "fr" }, `${thread.ticket.project_name} · Ticket #${thread.ticket.number}`)] : []), el("div", { class: "thread-time" }, date(thread.updated_at)));
+  for (const list of [$("thread-list"), $("conversations-list")].filter(Boolean)) {
+    list.replaceChildren(...state.threads.map((thread) => {
+      const button = btn("", () => openThread(thread.id).catch((error) => notify(error.message, true)), `thread-item${state.view === "thread" && String(thread.id) === String(state.threadId) ? " active" : ""}`);
+      button.title = threadSubject(thread);
+      button.append(el("div", { class: "thread-name" }, el("span", {}, threadSubject(thread)), thread.unread_count ? el("span", { class: "unread", "aria-label": `${thread.unread_count} unread messages` }, thread.unread_count) : null), ...(thread.ticket ? [el("div", { class: "thread-context", lang: "fr" }, `${thread.ticket.project_name} · Ticket #${thread.ticket.number}`)] : []), el("div", { class: "thread-time" }, date(thread.updated_at)));
+      return button;
+    }));
+    if (!state.threads.length) list.append(empty($("search").value ? "No matching conversations." : "Ask a question, request a resource, or discuss a decision."));
+  }
+  const counter = $("conversation-count");
+  counter.hidden = !state.conversationUnread;
+  counter.textContent = String(state.conversationUnread);
+  counter.setAttribute("aria-label", `${state.conversationUnread} unread conversation messages`);
+}
+async function showConversations(push = true) {
+  state.request++;
+  setView("conversations");
+  workRoute({ page: "conversations" }, push);
+  const search = el("input", { id: "conversation-search", type: "search", placeholder: "Find a conversation…", value: $("search").value });
+  search.addEventListener("input", () => {
+    $("search").value = search.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => loadThreads().catch(workError), 250);
   });
-  if (!state.threads.length) $("thread-list").append(empty($("search").value ? "No matching conversations." : "Ask a question, request a resource, or discuss a decision."));
+  const form = el("form", { class: "conversation-search" }, el("label", { for: "conversation-search" }, "Search conversations", search), el("button", { type: "submit", class: "sr-only" }, "Search"));
+  form.addEventListener("submit", event => { event.preventDefault(); clearTimeout(searchTimer); loadThreads().catch(workError); });
+  $("main").replaceChildren(head("Conversations", "Shared questions, requests and decisions.", btn("New conversation", newThread, "primary")), form, el("div", { id: "conversations-list", class: "thread-list conversation-page-list" }));
+  renderThreadList();
+  await loadThreads();
 }
 function route(threadId, taskId, push = true) {
   const url = new URL(location.href);
@@ -450,6 +478,7 @@ async function loadRoute() {
   if (params.get("ticket")) return openTicket(params.get("ticket"), false);
   if (params.get("project")) return openProject(params.get("project"), false);
   if (params.get("page") === "projects") return loadProjects(false);
+  if (params.get("page") === "conversations") return showConversations(false);
   if (params.get("page") === "settings") return loadSettings();
   if (params.get("page") === "inbox") return loadInbox();
   if (params.get("page") === "agents") return Workspace.agents();
@@ -608,8 +637,9 @@ $("new-thread").addEventListener("click", newThread);
 $("inbox-nav").addEventListener("click", () => loadInbox().catch((error) => notify(error.message, true)));
 $("settings-nav").addEventListener("click", () => loadSettings().catch((error) => notify(error.message, true)));
 $("projects-nav").addEventListener("click", () => loadProjects().catch(workError));
+$("conversations-nav").addEventListener("click", () => showConversations().catch(workError));
 let searchTimer;
-$("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadThreads().catch((error) => notify(error.message, true)), 250); });
+$("search").addEventListener("input", () => { if ($("conversation-search")) $("conversation-search").value = $("search").value; clearTimeout(searchTimer); searchTimer = setTimeout(() => loadThreads().catch((error) => notify(error.message, true)), 250); });
 $("search-form").addEventListener("submit", (event) => { event.preventDefault(); clearTimeout(searchTimer); loadThreads().catch((error) => notify(error.message, true)); });
 $("modal").addEventListener("cancel", () => { $("modal-content").replaceChildren(); });
 window.addEventListener("popstate", () => { if (state.actor) loadRoute().catch(workError); });

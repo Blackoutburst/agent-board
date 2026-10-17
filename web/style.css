@@ -137,6 +137,12 @@
 .page-head h1{overflow-wrap:anywhere}
 
 /* Coordinated work uses only project-visible summaries, with owner controls. */
+.mobile-conversations-nav{display:none}
+.conversation-search{max-width:600px;margin-bottom:20px}
+.conversation-page-list{max-height:none;border:1px solid var(--line);border-radius:6px;gap:0}
+.conversation-page-list>.thread-item{padding:16px;border-bottom:1px solid var(--line);font-size:14px}
+.conversation-page-list>.thread-item:last-child{border-bottom:0}
+@media(max-width:800px){.mobile-conversations-nav{display:flex}.workspace-nav>.nav-button{flex-shrink:0}}
 .delegation-summary,.delegation-member-title{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;min-width:0}
 .delegation-summary>p{flex:1;min-width:0;margin-bottom:12px;overflow-wrap:anywhere}
 .delegation-members{list-style:none;padding:0;margin:0 0 16px;display:grid;gap:10px}
