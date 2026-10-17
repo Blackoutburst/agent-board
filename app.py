@@ -271,6 +271,7 @@ class ProfilePolicy(ProjectBody):
     allow_read: bool = False
     allow_messages: bool = False
     allow_requests: bool = False
+    allow_create_projects: bool = False
     actions: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(default_factory=list, max_length=100)
     resources: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(default_factory=list, max_length=100)
     autonomy: Literal['responses', 'requested', 'queue'] = 'responses'
@@ -301,6 +302,8 @@ class ProfileChanges(ProjectBody):
         values = self.model_dump(exclude_unset=True)
         if self.policy is not None:
             values['policy'] = self.policy.model_dump()
+            if 'allow_create_projects' not in self.policy.model_fields_set:
+                values['policy'].pop('allow_create_projects')
         return values
 
 
@@ -640,7 +643,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     async def create_project(session_id: str, name: str, participants: list[str], idempotency_key: str,
                              description: str = "", context: str = "", repository_url: str = "",
                              environment: str = "", view: Literal["compact", "full"] = "compact") -> dict:
-        """Create an explicitly requested shared project, requiring the owner's work-request permission. Participants are fixed on creation; include only context authorized for those participants. Does not execute commands or grant access to servers."""
+        """Create an explicitly requested shared project with owner work-request permission and the profile's project-creation grant. Scoped profiles default to denied; the owner can grant policy.allow_create_projects. Creation never adds the project to followed scope. A scoped creator receives only an ID/URL receipt with profile_scope_access and owner_scope_grant_required; ask the owner to add that project before reading or working there. Exact retries return the receipt without leaking later project edits. Legacy unrestricted creation is preserved unless explicitly revoked. Participants are fixed on creation; include only authorized context. Does not grant server access."""
         values = validated(NewProject, dict(name=name, participants=participants,
             idempotency_key=idempotency_key, description=description, context=context,
             repository_url=repository_url, environment=environment))

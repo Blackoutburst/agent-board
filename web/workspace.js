@@ -750,9 +750,15 @@ const Workspace = (() => {
       projectPicker.insertBefore(keep, projectPicker.querySelector("p"));
       projectPicker.querySelector("p").textContent = "This existing installation follows its account’s project access. Clear the option to replace that scope with selected projects; an empty selection removes project access.";
     }
+    const createProjects = check("Create new projects", "allow_create_projects", policy.allow_create_projects === true);
+    let createProjectsTouched = false;
+    createProjects.querySelector("input").addEventListener("change", () => { createProjectsTouched = true; });
     const permissions = el("details", { class: "metadata-editor profile-permissions" }, el("summary", {}, "Profile permissions"),
       el("p", { class: "small muted" }, "These limits are combined with your account and device permissions. A profile cannot grant itself additional access."),
       check("Read selected projects and discussions", "allow_read", policy.allow_read), check("Post messages", "allow_messages", policy.allow_messages), check("Create, claim and update work", "allow_requests", policy.allow_requests),
+      createProjects,
+      el("p", { class: "small muted" }, "Creating projects also requires account work permission. New projects are not added to followed projects. For profiles with selected projects, add each new project here separately to grant access."),
+      p?.legacy && p.project_ids === null && !Object.hasOwn(policy, "allow_create_projects") ? el("p", { class: "small muted" }, "This existing account-wide profile may already create projects. Leaving this setting unchanged preserves that behavior. To explicitly deny creation, select and then clear the checkbox.") : null,
       select("Work selection", "autonomy", [["responses", "Responses only"], ["requested", "Explicitly requested work"], ["queue", "Authorized queue work"]], policy.autonomy),
       el("p", { class: "small muted" }, "Queue permission does not start a worker or listener. An executor must also support and be authorized for that workflow."),
       el("details", { class: "profile-legacy-scopes" }, el("summary", {}, "Legacy action limits"), profileField("Allowed actions (one per line)", "actions", 25700, { type: "textarea", value: policy.actions.join("\n") }), profileField("Allowed resources (one per line)", "resources", 25700, { type: "textarea", value: policy.resources.join("\n") })));
@@ -775,6 +781,7 @@ const Workspace = (() => {
       const fields = Object.fromEntries(["name", "avatar", "description", "role", "instructions", "language", "response_style", "preferred_provider", "preferred_model"].map(name => [name, String(values.get(name) || "")]));
       if (!values.has("keep_legacy_scope")) fields.project_ids = values.getAll("project_ids");
       fields.policy = { allow_read: values.has("allow_read"), allow_messages: values.has("allow_messages"), allow_requests: values.has("allow_requests"), autonomy: values.get("autonomy"), actions: lines(String(values.get("actions") || "")), resources: lines(String(values.get("resources") || "")) };
+      if (Object.hasOwn(policy, "allow_create_projects") || createProjectsTouched) fields.policy.allow_create_projects = values.has("allow_create_projects");
       if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
       await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
       closeModal(); agentTab = "profiles"; await agents(); notify(p ? "Profile saved for future work." : "Profile created. Connect an executor when you are ready.");
@@ -823,6 +830,7 @@ const Workspace = (() => {
         ].flatMap(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
         panel("Private instructions", Markdown.block(saved.instructions || "No additional instructions", "panel-body")),
         panel("Permission limits", el("div", { class: "panel-body" }, el("p", {}, `Read: ${saved.policy.allow_read ? "allowed" : "off"} · Messages: ${saved.policy.allow_messages ? "allowed" : "off"} · Work requests: ${saved.policy.allow_requests ? "allowed" : "off"}`),
+          el("p", { class: "small muted" }, `Project creation: ${saved.policy.allow_create_projects === true ? "allowed" : saved.policy.allow_create_projects === false ? "off" : saved.legacy && saved.project_ids === null ? "existing account scope" : "off"}`),
           el("p", { class: "small muted" }, `Work selection: ${saved.policy.autonomy}`),
           el("p", { class: "prose small" }, `Actions: ${saved.policy.actions.join(", ") || "None"}`), el("p", { class: "prose small" }, `Resources: ${saved.policy.resources.join(", ") || "None"}`))));
     };

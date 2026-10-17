@@ -50,9 +50,34 @@ fs.mkdirSync(output, { recursive: true });
     if (legacy) {
       await card(legacy.name).getByRole('button', { name: 'Edit profile', exact: true }).click();
       await dialog().getByLabel('Keep the existing account project scope', { exact: true }).waitFor();
+      assert.equal(await dialog().getByLabel('Create new projects', { exact: true }).isChecked(), false);
       await dialog().getByRole('button', { name: 'Save profile', exact: true }).click();
       await dialog().waitFor({ state: 'hidden' });
-      assert.equal((await api(`/agent-profiles/${legacy.id}`)).project_ids, null);
+      const preserved = await api(`/agent-profiles/${legacy.id}`);
+      assert.equal(preserved.project_ids, null);
+      assert.equal(Object.hasOwn(preserved.policy, 'allow_create_projects'), false);
+      await card(legacy.name).getByRole('button', { name: 'Edit profile', exact: true }).click();
+      await dialog().getByLabel('Keep the existing account project scope', { exact: true }).uncheck();
+      await dialog().getByLabel('Board overhaul', { exact: true }).check();
+      const narrowing = page.waitForRequest(request => request.method() === 'PATCH' && request.url().endsWith(`/api/agent-profiles/${legacy.id}`));
+      await dialog().getByRole('button', { name: 'Save profile', exact: true }).click();
+      assert.equal(Object.hasOwn((await narrowing).postDataJSON().policy, 'allow_create_projects'), false);
+      await dialog().waitFor({ state: 'hidden' });
+      const scoped = await api(`/agent-profiles/${legacy.id}`);
+      assert.equal(scoped.project_ids.length, 1);
+      assert.notEqual(scoped.policy.allow_create_projects, true);
+    }
+    const unrestricted = initial.find(p => p.legacy && p.project_ids === null && p.id !== legacy?.id);
+    if (unrestricted) {
+      await card(unrestricted.name).getByRole('button', { name: 'Edit profile', exact: true }).click();
+      await dialog().getByText('Profile permissions', { exact: true }).click();
+      await dialog().getByLabel('Create new projects', { exact: true }).check();
+      await dialog().getByLabel('Create new projects', { exact: true }).uncheck();
+      await dialog().getByRole('button', { name: 'Save profile', exact: true }).click();
+      await dialog().waitFor({ state: 'hidden' });
+      const denied = await api(`/agent-profiles/${unrestricted.id}`);
+      assert.equal(denied.project_ids, null);
+      assert.equal(denied.policy.allow_create_projects, false);
     }
 
     const name = `Profile acceptance ${Date.now()}`;
@@ -70,6 +95,9 @@ fs.mkdirSync(output, { recursive: true });
     await dialog().getByText('Profile permissions', { exact: true }).click();
     await dialog().getByLabel('Read selected projects and discussions', { exact: true }).check();
     await dialog().getByLabel('Create, claim and update work', { exact: true }).check();
+    assert.equal(await dialog().getByLabel('Create new projects', { exact: true }).isChecked(), false);
+    await dialog().getByText('Creating projects also requires account work permission.', { exact: false }).waitFor();
+    await dialog().getByLabel('Create new projects', { exact: true }).check();
     await dialog().getByLabel('Work selection', { exact: true }).selectOption('requested');
     assert.equal(await dialog().locator('.profile-preview h3').innerText(), name);
     assert.equal(await dialog().locator('img').count(), 0);
@@ -81,6 +109,7 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(created.language, 'fr');
     assert.equal(created.policy.allow_read, true);
     assert.equal(created.policy.allow_messages, false);
+    assert.equal(created.policy.allow_create_projects, true);
     assert.equal(created.bindings.length, 0);
     assert.equal(created.project_ids.length, 1);
     assert.equal(await card(name).locator('img').count(), 0);
@@ -98,8 +127,19 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(copy.policy.allow_read, false);
     assert.equal(copy.policy.allow_requests, false);
     assert.equal(copy.policy.allow_messages, false);
+    assert.notEqual(copy.policy.allow_create_projects, true);
 
     await card(name).getByRole('button', { name: 'Edit profile', exact: true }).click();
+    await dialog().getByText('Profile permissions', { exact: true }).click();
+    assert.equal(await dialog().getByLabel('Create new projects', { exact: true }).isChecked(), true);
+    await dialog().getByLabel('Create new projects', { exact: true }).uncheck();
+    await dialog().getByRole('button', { name: 'Save profile', exact: true }).click();
+    await dialog().waitFor({ state: 'hidden' });
+    created = await api(`/agent-profiles/${created.id}`);
+    assert.equal(created.policy.allow_create_projects, false);
+
+    await card(name).getByRole('button', { name: 'Edit profile', exact: true }).click();
+    assert.equal(await dialog().getByLabel('Create new projects', { exact: true }).isChecked(), false);
     await dialog().getByLabel('Description', { exact: true }).fill('Unsaved local draft');
     await api(`/agent-profiles/${created.id}`, { expected_version: created.version, description: 'Concurrent saved edit' }, 'PATCH');
     await dialog().getByRole('button', { name: 'Save profile', exact: true }).click();
@@ -111,9 +151,11 @@ fs.mkdirSync(output, { recursive: true });
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await card(name).getByText('Concurrent saved edit', { exact: true }).waitFor();
     await card(name).getByRole('button', { name: 'Version history', exact: true }).click();
+    await dialog().getByText('Project creation: off', { exact: true }).waitFor();
     await dialog().getByLabel('Configuration version', { exact: true }).fill('1');
     await dialog().getByRole('button', { name: 'View version', exact: true }).click();
     await dialog().getByText('Version 1 ·', { exact: false }).waitFor();
+    await dialog().getByText('Project creation: allowed', { exact: true }).waitFor();
     assert.match(await dialog().locator('.profile-version-content').innerText(), /<img src=x onerror=alert\(1\)> remains text/);
     assert.equal(await dialog().locator('img').count(), 0);
     assert.equal(await dialog().getByRole('button', { name: /restore/i }).count(), 0);
@@ -270,7 +312,7 @@ fs.mkdirSync(output, { recursive: true });
     await secondPage.screenshot({ path: path.join(output, 'profiles-second-owner-mobile.png'), fullPage: true });
     await secondContext.close();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ browser: 'Firefox', flows: ['online/idle/offline presence independent of lifecycle', 'legacy scope preserved', 'templates and preview', 'both owners create and edit on desktop and mobile', 'private instructions', 'plain-text XSS handling', 'duplicate without access', 'CAS draft preservation', 'read-only version history', 'device binding', 'pause/resume/archive', 'paused and out-of-scope ticket assignments preserved', 'captured work configuration', 'shared summaries and unbound connections', 'desktop and mobile layout'], javascriptErrors: errors }));
+    console.log(JSON.stringify({ browser: 'Firefox', flows: ['owner project creation grants and legacy omission', 'online/idle/offline presence independent of lifecycle', 'legacy scope preserved', 'templates and preview', 'both owners create and edit on desktop and mobile', 'private instructions', 'plain-text XSS handling', 'duplicate without access', 'CAS draft preservation', 'read-only version history', 'device binding', 'pause/resume/archive', 'paused and out-of-scope ticket assignments preserved', 'captured work configuration', 'shared summaries and unbound connections', 'desktop and mobile layout'], javascriptErrors: errors }));
   } finally {
     await browser.close();
   }

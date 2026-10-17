@@ -145,9 +145,11 @@ class ProfilesMixin:
                     self._project_member(db, actor, identifier)
                 result[key] = value
             elif key == 'policy':
-                if not isinstance(value, dict) or set(value) != set(DEFAULT_POLICY):
+                if (not isinstance(value, dict) or not set(DEFAULT_POLICY).issubset(value)
+                        or set(value) - (set(DEFAULT_POLICY) | {'allow_create_projects'})):
                     _fail('Supply every profile policy field')
-                if any(type(value[key]) is not bool for key in ('allow_read', 'allow_messages', 'allow_requests')):
+                if (any(type(value[key]) is not bool for key in ('allow_read', 'allow_messages', 'allow_requests'))
+                        or ('allow_create_projects' in value and type(value['allow_create_projects']) is not bool)):
                     _fail('Profile permission switches must be booleans')
                 if value['autonomy'] not in ('responses', 'requested', 'queue'):
                     _fail('Profile autonomy must be responses, requested, or queue')
@@ -200,8 +202,14 @@ class ProfilesMixin:
     def _write_profile(self, db, identifier, values, *, increment=True):
         row = db.execute('SELECT * FROM agent_profiles WHERE id=?', (identifier,)).fetchone()
         fields = {**json.loads(row['fields']), **{key: value for key, value in values.items() if key in TEXT_LIMITS}}
+        previous_policy = json.loads(row['policy'])
+        policy = dict(values.get('policy', previous_policy))
+        # Older clients replace the six original policy fields. Omission of an
+        # additive grant must neither revoke nor recreate its stored value.
+        if 'allow_create_projects' not in policy and 'allow_create_projects' in previous_policy:
+            policy['allow_create_projects'] = previous_policy['allow_create_projects']
         db.execute('UPDATE agent_profiles SET fields=?,policy=?,project_ids=?,status=?,version=version+?,updated_at=? WHERE id=?',
-                   (_json(fields), _json(values.get('policy', json.loads(row['policy']))),
+                   (_json(fields), _json(policy),
                     _json(values.get('project_ids', json.loads(row['project_ids']))), values.get('status', row['status']), int(increment), time.time(), identifier))
         # Initial construction is one transaction; published versions are never rewritten.
         _record_version(db, identifier, replace_initial=not increment)
@@ -332,6 +340,13 @@ class ProfilesMixin:
         return bool(ticket and ticket['project_id'] in project_ids and db.execute(
             'SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?', (ticket['project_id'], actor['owner_id'])).fetchone())
 
+    @staticmethod
+    def _profile_can_create_projects(profile):
+        policy = json.loads(profile['policy'])
+        # Unscoped legacy profiles already had creation authority. Scoped
+        # profiles require a dedicated owner grant; explicit false always wins.
+        return policy.get('allow_create_projects', json.loads(profile['project_ids']) is None)
+
     def _effective_profile_policy(self, db, actor, profile):
         owner = json.loads(self._owner(db, actor['owner_id'])['policy'])
         policy = json.loads(profile['policy'])
@@ -340,6 +355,11 @@ class ProfilesMixin:
         for field, profile_field in (('allow_read', 'allow_read'), ('allow_reply', 'allow_messages'), ('allow_requests', 'allow_requests')):
             result[field] = owner[field] and policy[profile_field]
         result['allow_requests'] = result['allow_requests'] and policy['autonomy'] != 'responses'
+        # Preserve unchanged policy snapshots for existing pinned clients.
+        # Explicit grants/revocations already require a new profile version.
+        if 'allow_create_projects' in policy:
+            result['allow_create_projects'] = (result['enabled'] and result['allow_requests']
+                                               and self._profile_can_create_projects(profile))
         for field in ('actions', 'resources'):
             result[field] = owner[field] if profile['legacy'] and policy[field] == ['*'] else [item for item in owner[field] if item in policy[field]]
         result['autonomy'] = policy['autonomy']

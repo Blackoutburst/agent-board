@@ -190,6 +190,21 @@ class ProjectsMixin:
                 ORDER BY p.updated_at DESC,p.id""", (actor["owner_id"], int(include_archived), query, query, query))
             return [self._project(db, row) for row in rows if self._profile_project_allowed(db, actor, row["id"])]
 
+    def _created_project_result(self, db, actor, project_id):
+        if actor['kind'] == 'agent':
+            profile = self._profile_for_actor(db, actor)
+            if json.loads(profile['project_ids']) is not None:
+                # Only the exact creation/idempotency path may return this
+                # receipt. Never turn a retry into an out-of-scope metadata
+                # read after another participant has edited the project.
+                if not db.execute('SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?',
+                                  (project_id, actor['owner_id'])).fetchone():
+                    _fail('Project not found', 404)
+                allowed = self._profile_project_allowed(db, actor, project_id)
+                return {'id': project_id, 'url': self.base_url + '/?project=' + project_id,
+                        'profile_scope_access': allowed, 'owner_scope_grant_required': not allowed}
+        return self._project(db, self._project_member(db, actor, project_id))
+
     def create_project(self, actor, name, participants, description="", context="", repository_url="", environment="", idempotency_key=""):
         values = {"name": name, "description": description, "context": context, "repository_url": repository_url,
                   "environment": environment}
@@ -199,13 +214,15 @@ class ProjectsMixin:
             _fail("participants must be a list of owner IDs")
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
+            if actor['kind'] == 'agent' and not self._profile_can_create_projects(self._profile_for_actor(db, actor)):
+                _fail('The owner must explicitly allow project creation for this profile', 403)
             participants = sorted(set(participants + [actor["owner_id"]]))
             for owner_id in participants:
                 self._owner(db, owner_id)
             payload = {**values, "participants": participants}
             previous = self._retry(db, actor, "create_project", idempotency_key, payload)
             if previous:
-                return self._project(db, self._project_member(db, actor, previous))
+                return self._created_project_result(db, actor, previous)
             project_id, now = secrets.token_hex(16), time.time()
             db.execute("""INSERT INTO projects(id,name,description,context,repository_url,environment,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?)""", (project_id, values["name"], values["description"], values["context"],
@@ -213,7 +230,7 @@ class ProjectsMixin:
             db.executemany("INSERT INTO project_members(project_id,owner_id) VALUES(?,?)", [(project_id, x) for x in participants])
             self._remember(db, actor, "create_project", idempotency_key, payload, project_id)
             self._audit(db, actor, "project_created", {"project_id": project_id})
-            return self._project(db, self._project_member(db, actor, project_id))
+            return self._created_project_result(db, actor, project_id)
 
     def get_project(self, actor, project_id):
         with self._connection() as db:
