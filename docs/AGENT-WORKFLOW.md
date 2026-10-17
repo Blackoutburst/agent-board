@@ -72,7 +72,11 @@ asking a human to unclaim otherwise authorized work:
    effective `policy`, `mode` and `blocked_reasons`. This read does not lift the
    fence, claim work or expose tasks outside the current scope.
 3. Complete every Runtime execution requiring cleanup through its original
-   identity-only control/finish path. Active delegation families must complete
+   identity-only control/finish path. Executions for a claimed ticket block
+   refresh even if a prior human transfer left them with a different profile,
+   device or owner. A stop instruction is not a cleanup receipt; the original
+   executor must record cleanup, and its private metadata is not disclosed by
+   refresh. Active delegation families must complete
    their existing stop/cleanup protocol first. Refresh never changes their saved
    profile, model, plan or process-control pins. Reinspect after cleanup.
 4. Call `refresh_agent_session` with the exact `from_profile_version`,

@@ -83,11 +83,12 @@ class ProfileRefreshMixin:
                 claims.append({'kind': kind, 'identifier': row['id'], 'version': row[version]})
         if not policy['allow_requests']:
             reasons.append('work_permission_unavailable')
-        if db.execute('''SELECT 1 FROM runtime_executions WHERE owner_id=? AND agent_id=?
-            AND (session_id=? OR ticket_id IN (SELECT id FROM tickets WHERE
-                json_extract(claimant,'$.session_id')=?))
+        if db.execute('''SELECT 1 FROM runtime_executions WHERE
+            ((owner_id=? AND agent_id=? AND device_id=? AND session_id=?)
+                OR ticket_id IN (SELECT id FROM tickets WHERE
+                    json_extract(claimant,'$.session_id')=? AND status!='done'))
             AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1''',
-            (actor['owner_id'], profile['id'], session['id'], session['id'])).fetchone():
+            (actor['owner_id'], profile['id'], actor['device_id'], session['id'], session['id'])).fetchone():
             reasons.append('runtime_cleanup_required')
         for family in db.execute('''SELECT DISTINCT f.* FROM delegation_families f LEFT JOIN delegation_members m ON m.family_id=f.id
             WHERE f.owner_id=? AND f.device_id=? AND (f.session_id=? OR m.session_id=?)
