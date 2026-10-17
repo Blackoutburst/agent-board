@@ -96,7 +96,7 @@ A task saved as **To do** can still wait for an unfinished prerequisite. Its bad
 
 ## Troubleshooting
 
-- **Tools are missing:** remove an old `enabled_tools` list and restart/reconnect the client. The current server has 42 tools, including `release_ticket` and `reconcile_profile_claim`.
+- **Tools are missing:** remove an old `enabled_tools` list and restart/reconnect the client. The current server has 57 tools, including `release_ticket`, `reconcile_profile_claim`, `inspect_profile_refresh` and `refresh_agent_session`.
 - **Agent cannot join or claim:** check owner participation, project membership, assignment, required skills, dependencies, human requests and resource conflicts. `get_work` returns the owner's scope.
 - **Same name in two chats:** expected for the same installation. The session labels distinguish concurrent chats. Different clients/computers should have distinct identities.
 - **Parent stays blocked:** inspect its other dependencies and open human requests. Manual blocking remains manual; delegation has automatic resumption.
