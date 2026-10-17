@@ -40,12 +40,15 @@ def protect_path(path, directory=False):
 
 def private_write(path, contents):
     path = Path(path)
+    payload = contents if isinstance(contents, bytes) else contents.encode('utf-8')
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.'+path.name+'-')
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        # Binary output avoids Windows newline translation. Backups may supply
+        # original bytes; generated text is encoded exactly once as UTF-8.
+        with os.fdopen(fd, 'wb') as handle:
             protect_path(Path(temporary))
-            handle.write(contents)
+            handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -91,7 +94,8 @@ def rpc(config, method, params, request_id=1):
 
 def write_codex(path, installed, directory, client):
     path = Path(path).expanduser()
-    original = path.read_text(encoding='utf-8') if path.exists() else ''
+    original_bytes = path.read_bytes() if path.exists() else b''
+    original = original_bytes.decode('utf-8')
     # Remove exactly this server's table and nested subtables, preserving all other configuration.
     lines = original.splitlines(keepends=True)
     kept, skipping = [], False
@@ -105,19 +109,20 @@ def write_codex(path, installed, directory, client):
     block = '\n[mcp_servers.blackoutburst_board]\ncommand = '+json.dumps(sys.executable)+'\nargs = '+json.dumps(args)+'\n'
     if original:
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-        private_write(path.with_name(path.name+'.before-board-'+stamp), original)
+        private_write(path.with_name(path.name+'.before-board-'+stamp), original_bytes)
     private_write(path, ''.join(kept).rstrip()+'\n'+block)
 
 
 def write_claude(path, installed, directory, client):
     path = Path(path).expanduser()
-    original = path.read_text(encoding='utf-8') if path.exists() else ''
+    original_bytes = path.read_bytes() if path.exists() else b''
+    original = original_bytes.decode('utf-8')
     data = json.loads(original) if original else {}
     data.setdefault('mcpServers', {})['blackoutburst_board'] = {'type':'stdio','command':sys.executable,
         'args':[str(installed),'--stdio','--client',client,'--config-dir',str(directory)]}
     if original:
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-        private_write(path.with_name(path.name+'.before-board-'+stamp), original)
+        private_write(path.with_name(path.name+'.before-board-'+stamp), original_bytes)
     private_write(path, json.dumps(data, indent=2)+'\n')
 
 

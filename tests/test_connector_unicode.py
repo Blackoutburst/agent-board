@@ -38,7 +38,9 @@ def test_bridge_reads_utf8_protocol_bytes_independently_of_host_codec(monkeypatc
     assert json.loads(capsys.readouterr().out)['result']['body'] == body
 
 
-def test_connector_preserves_utf8_files_under_non_utf8_locale(tmp_path):
+@pytest.mark.parametrize('client', ['codex', 'claude-code'])
+@pytest.mark.parametrize('newline', ['\n', '\r\n'], ids=['lf', 'crlf'])
+def test_connector_preserves_utf8_files_under_non_utf8_locale(tmp_path, client, newline):
     # A subprocess controls Python's actual default file codec; mocking locale
     # accessors does not change the codec selected internally by open().
     code = r'''
@@ -47,21 +49,36 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location('connector', os.environ['BOARD_CONNECTOR_SCRIPT'])
 module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 root = Path(os.environ['BOARD_TEST_ROOT'])
-original = 'title = "caf\u00e9"\n[mcp_servers.other]\ncommand="kept"\n'
-path = root / 'config.toml'; path.write_bytes(original.encode('utf-8'))
-module.write_codex(path, root / 'connect.py', root, 'codex')
-assert 'caf\u00e9'.encode('utf-8') in path.read_bytes()
-backup = next(root.glob('config.toml.before-board-*'))
+client = os.environ['BOARD_TEST_CLIENT']
+newline = json.loads(os.environ['BOARD_TEST_NEWLINE'])
+if client == 'codex':
+    original = 'title = "caf\u00e9"\n[mcp_servers.other]\ncommand="kept"\n'
+    path = root / 'config.toml'
+else:
+    original = '{\n  "title": "caf\u00e9",\n  "mcpServers": {"other": {"command": "kept"}}\n}\n'
+    path = root / 'claude.json'
+original = original.replace('\n', newline)
+path.write_bytes(original.encode('utf-8'))
+writer = module.write_codex if client == 'codex' else module.write_claude
+writer(path, root / 'connect.py', root, client)
+if client == 'codex':
+    assert 'caf\u00e9'.encode('utf-8') in path.read_bytes()
+else:
+    assert json.loads(path.read_bytes().decode('utf-8'))['title'] == 'caf\u00e9'
+backup = next(root.glob(path.name + '.before-board-*'))
 assert backup.read_bytes() == original.encode('utf-8')
-text = 'Fran\u00e7ais \u2014 \u65e5\u672c\u8a9e'
+text = 'Fran\u00e7ais \u2014 \u65e5\u672c\u8a9e\r\nligne\n'
 module.private_write(root / 'unicode.txt', text)
 assert (root / 'unicode.txt').read_bytes() == text.encode('utf-8')
+module.private_write(root / 'bytes.txt', text.encode('utf-8'))
+assert (root / 'bytes.txt').read_bytes() == text.encode('utf-8')
 print(json.dumps({'codec': locale.getpreferredencoding(False), 'preserved': True}))
 '''
     result = subprocess.run([sys.executable, '-X', 'utf8=0', '-c', code],
         env={**os.environ, 'LC_ALL': 'C', 'PYTHONCOERCECLOCALE': '0', 'PYTHONUTF8': '0',
              'PYTHONIOENCODING': 'ascii', 'BOARD_CONNECTOR_SCRIPT': str(SCRIPT),
-             'BOARD_TEST_ROOT': str(tmp_path)}, capture_output=True, text=True)
+             'BOARD_TEST_ROOT': str(tmp_path), 'BOARD_TEST_CLIENT': client,
+             'BOARD_TEST_NEWLINE': json.dumps(newline)}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['preserved']
 
