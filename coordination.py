@@ -132,6 +132,35 @@ class CoordinationMixin(ProjectsMixin):
             JOIN tickets t ON t.id=r.ticket_id WHERE t.project_id=? AND r.status='open'""", (row['id'],)).fetchone()[0]
         return result
 
+    def _stale_agent_assignment(self, db, row):
+        """An idle assignment may yield, but never a live lease or process fence."""
+        if not row['assignee_agent_id'] or row['status'] not in ('todo', 'in_progress'):
+            return False
+        profile = db.execute('SELECT * FROM agent_profiles WHERE id=?', (row['assignee_agent_id'],)).fetchone()
+        if not profile or profile['status'] != 'active':
+            return False
+        policy = self._effective_profile_policy(db, {'owner_id': profile['owner_id']}, profile)
+        projects = json.loads(profile['project_ids'])
+        if (not policy['enabled'] or not policy['allow_requests']
+                or (projects is not None and row['project_id'] not in projects)
+                or not db.execute('SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?',
+                    (row['project_id'], profile['owner_id'])).fetchone()
+                or db.execute('SELECT 1 FROM owner_execution_limits WHERE owner_id=? AND paused=1',
+                    (profile['owner_id'],)).fetchone()):
+            return False
+        presence = self._agent_presence(db, row['assignee_agent_id'])
+        # Give a fresh human assignment a full polling grace period, including
+        # profiles that have not connected yet. Reads never change assignments.
+        if presence['online'] or row['updated_at'] > time.time() - presence['idle_after_seconds']:
+            return False
+        claimant = json.loads(row['claimant']) if row['claimant'] else None
+        if claimant and (claimant['kind'] != 'agent' or (row['lease_expires_at'] or 0) > time.time()):
+            return False
+        if not claimant and row['status'] != 'todo':
+            return False
+        return not db.execute("""SELECT 1 FROM runtime_executions WHERE ticket_id=?
+            AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1""", (row['id'],)).fetchone()
+
     def _ticket(self, row, db=None):
         if db is None:
             with self._connection() as connection:
@@ -174,6 +203,8 @@ class CoordinationMixin(ProjectsMixin):
             result['work_state'] = 'ready'
         identity = db.execute('SELECT fields FROM agent_profiles WHERE id=?', (row['assignee_agent_id'],)).fetchone()
         result['assignee_agent_name'] = json.loads(identity['fields'])['name'] if identity else None
+        result['assignee_presence'] = self._agent_presence(db, row['assignee_agent_id']) if identity else None
+        result['assignment_stale'] = self._stale_agent_assignment(db, row)
         result['ready'] = result['work_state'] == 'ready'
         return result
 
@@ -189,13 +220,17 @@ class CoordinationMixin(ProjectsMixin):
             _fail('Task is blocked by prerequisites or a human request', 409)
         if actor['kind'] == 'agent':
             session = db.execute('SELECT * FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()
-            if row['assignee_agent_id'] and session['agent_id'] != row['assignee_agent_id']:
+            if (row['assignee_agent_id'] and session['agent_id'] != row['assignee_agent_id']
+                    and not ticket['assignment_stale']):
                 _fail('Task is assigned to another agent identity', 403)
             skills = json.loads(session['skills'])
             if not set(ticket['required_skills']).issubset(skills):
                 _fail('This agent does not advertise the required skills', 403)
         if ticket['claim_expired'] and not recovery_evidence.strip():
             _fail('Expired claim: inspect prior external effects and supply recovery_evidence', 409)
+        if ticket['claim_expired'] and db.execute("""SELECT 1 FROM runtime_executions WHERE ticket_id=?
+                AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1""", (row['id'],)).fetchone():
+            _fail('Expired claim still has an unresolved execution; confirm process cleanup before recovery', 409)
         if self._resource_claim_conflict(db,row):
             _fail('This work resource is already in use by another task', 409)
         return ticket
@@ -215,13 +250,23 @@ class CoordinationMixin(ProjectsMixin):
             _fail('Task is already claimed', 409)
         if row['assignee_owner_id'] not in (None, actor['owner_id']):
             _fail('Task is assigned to another owner', 403)
-        self._claim_checks(db, actor, row, recovery_evidence)
+        ticket = self._claim_checks(db, actor, row, recovery_evidence)
+        release_assignment = (actor['kind'] == 'agent' and ticket['assignment_stale']
+            and row['assignee_agent_id'] != db.execute('SELECT agent_id FROM sessions WHERE id=?',
+                (actor['session_id'],)).fetchone()[0])
         now = time.time()
         lease = now + self.ticket_lease_seconds if actor['kind'] == 'agent' else None
         db.execute("""UPDATE tickets SET claimant=?,claim_started_version=version+1,lease_expires_at=?,
-            status='in_progress',version=version+1,updated_at=? WHERE id=? AND version=?""",
-            (_json(self._author(db, actor)), lease, now, row['id'], expected_version))
+            assignee_agent_id=?,status='in_progress',version=version+1,updated_at=? WHERE id=? AND version=?""",
+            (_json(self._author(db, actor)), lease, None if release_assignment else row['assignee_agent_id'],
+             now, row['id'], expected_version))
         db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
+        if release_assignment:
+            self._audit(db, actor, 'ticket_idle_assignment_released',
+                {'ticket_id': row['id'], 'previous_assignee_agent_id': row['assignee_agent_id'],
+                 'version': expected_version + 1})
+            self._assignment_notice(db, actor, self._ticket_member(db, actor, row['id']),
+                row['assignee_agent_id'], 'unassigned', expected_version + 1)
         self._audit(db, actor, 'ticket_recovered' if expired else 'ticket_claimed',
             {'ticket_id': row['id'], 'recovery_evidence': recovery_evidence})
         return self._ticket(self._ticket_member(db, actor, row['id']), db)
@@ -425,6 +470,7 @@ class CoordinationMixin(ProjectsMixin):
                 if not (own_human and not project_id) and not projects.intersection(visible_projects):
                     continue
                 item = self._profile_public(profile)
+                item.update(self._agent_presence(db, profile['id']))
                 if not own_human:
                     result.append(item)
                     continue
@@ -440,8 +486,7 @@ class CoordinationMixin(ProjectsMixin):
                     tickets.extend(entry['tickets'])
                 first = sessions[0] if sessions else {}
                 item.update(device_id=first.get('device_id'), device_label=first.get('device_label'),
-                            agent_kind=first.get('agent_kind'), online=any(entry['online'] for entry in sessions),
-                            last_seen_at=max((entry['last_seen_at'] or 0 for entry in sessions), default=0) or None,
+                            agent_kind=first.get('agent_kind'),
                             sessions=sessions, tickets=tickets)
                 result.append(item)
             return result
@@ -477,7 +522,7 @@ class CoordinationMixin(ProjectsMixin):
                 continue
             if actor['kind'] == 'agent' and row['assignee_agent_id']:
                 identity_id = db.execute('SELECT agent_id FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()[0]
-                if identity_id != row['assignee_agent_id']:
+                if identity_id != row['assignee_agent_id'] and not ticket['assignment_stale']:
                     continue
             if actor['kind'] == 'agent' and not set(ticket['required_skills']).issubset(skills):
                 continue

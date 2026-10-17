@@ -1,6 +1,7 @@
 """Isolated local-only browser fixture; never points at production data."""
 import os
 import tempfile
+import time
 from pathlib import Path
 
 os.environ['BOARD_DATA_DIR']=tempfile.mkdtemp(prefix='board-overhaul-ui-')
@@ -36,5 +37,8 @@ b.register_agent(b.authenticate(mac['token']),'mac-preview','Interface verificat
 c=b.create_ticket(human,p['id'],'Review the GitHub-inspired task workspace',description='Keep work, discussions, and dependencies readable on desktop and mobile.',priority='high',labels=['ux'],idempotency_key='c')
 d=b.create_ticket(human,p['id'],'Confirm the release owner',description='Agree on the account that will own the release.',idempotency_key='d')
 b.request_human_input(human,d['id'],'blackoutburst','Which account should own the production release?','human-preview')
+# Age synthetic sessions to exercise idle badges for both owned and shared profiles.
+with b._tx() as db:
+ db.execute('UPDATE sessions SET last_seen_at=? WHERE id IN (?,?)',(time.time()-901,'linux-preview','mac-preview'))
 print('Preview listening on 127.0.0.1:18765; isolated synthetic records only.',flush=True)
 uvicorn.run(app,host='127.0.0.1',port=18765,log_level='warning')

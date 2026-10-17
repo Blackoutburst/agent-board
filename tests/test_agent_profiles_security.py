@@ -329,10 +329,10 @@ def test_agent_directory_uses_real_shared_profile_scope_and_public_projection(gu
     directory = b.list_agents(s['actor'])
     assert hidden['id'] not in {item['id'] for item in directory}
     shared = next(item for item in directory if item['id'] == public['id'])
-    assert set(shared) == {'id', 'owner_id', 'name', 'avatar', 'status'}
+    assert set(shared) == {'id', 'owner_id', 'name', 'avatar', 'status', 'presence', 'online', 'last_seen_at', 'idle_after_seconds'}
     assert 'Private' not in json.dumps(directory)
     human_shared = next(item for item in b.list_agents(s['alice']) if item['id'] == public['id'])
-    assert set(human_shared) == {'id', 'owner_id', 'name', 'avatar', 'status'}
+    assert set(human_shared) == {'id', 'owner_id', 'name', 'avatar', 'status', 'presence', 'online', 'last_seen_at', 'idle_after_seconds'}
     assert b.get_agent_profile(s['bob'], public['id'])['instructions'] == 'Private shared instructions marker'
 
 

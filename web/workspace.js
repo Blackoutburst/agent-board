@@ -446,7 +446,7 @@ const Workspace = (() => {
     return entries.length ? el("div", { class: "agent-list" }, entries.map(a => {
       if (a.owner_id !== state.actor.owner_id) {
         return el("article", { class: "agent-card shared-agent-summary" },
-          el("div", { class: "agent-heading" }, profileAvatar(a), el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, ownerName(a.owner_id))), profileStatus(a)),
+          el("div", { class: "agent-heading" }, profileAvatar(a), el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, ownerName(a.owner_id))), profileStatus(a), presenceBadge(a)),
           el("p", { class: "small muted" }, "Shared profile. Its instructions, devices, sessions and work details are private to its owner."));
       }
       const sessions = Array.isArray(a.sessions) ? a.sessions : [], tickets = Array.isArray(a.tickets) ? a.tickets : [];
@@ -454,7 +454,7 @@ const Workspace = (() => {
       return el("article", { class: "agent-card" },
         el("div", { class: "agent-heading" }, a.avatar ? profileAvatar(a) : el("div", { class: `agent-emblem${kind.includes("claude") ? " claude-code" : ""}` }, kind.includes("claude") ? "C" : kind ? "CX" : "◇"),
           el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, `${ownerName(a.owner_id)} / ${a.device_label || "No executor check-in"}`)),
-          badge(a.online ? "Online" : sessions.length ? "Offline" : "Not connected", a.online ? "status-ready" : "")),
+          profileStatus(a), presenceBadge(a)),
         el("p", { class: "small muted" }, a.last_seen_at ? `Last seen ${date(a.last_seen_at)}` : "No executor has checked in with this profile yet."),
         tickets.length ? tickets.map(t => el("div", { class: "agent-task" }, workLink(`#${t.number} ${t.title}`, { ticket: t.id }), status(t))) : el("p", { class: "muted" }, "No active tasks"),
         el("details", {}, el("summary", {}, `${sessions.length} chat session${sessions.length === 1 ? "" : "s"}`), sessions.map(s => el("div", { class: "session-row" }, el("strong", {}, s.label), badge(s.autonomous ? "Worker" : "Observer"), el("span", { class: "small muted" }, (s.skills || []).join(", ") || "General")))),
@@ -469,6 +469,19 @@ const Workspace = (() => {
   };
   const profileAvatar = (p) => el("span", { class: "profile-avatar", "aria-hidden": "true", title: p.avatar || "" }, p.avatar || "◇");
   const profileStatus = (p) => badge(profileStates[p.status] || p.status, p.status === "active" ? "status-ready" : p.status === "paused" ? "status-blocked" : "");
+  const presenceBadge = (p) => el("span", { class: `badge${p.presence === "online" ? " status-ready" : ""}`, "data-agent-presence": p.id },
+    { online: "Online", idle: "Idle", offline: "Offline" }[p.presence] || "Unknown presence");
+  async function refreshAgentPresence() {
+    const inProject = state.view === "project" && projectTab === "agents";
+    if (!inProject && (state.view !== "agents" || agentTab === "runtime")) return;
+    const request = state.request, entries = await api(inProject ? `/agents?project_id=${workPath(state.project.id)}` : "/agents");
+    if (request !== state.request) return;
+    const byId = new Map(entries.map(item => [item.id, item]));
+    document.querySelectorAll("[data-agent-presence]").forEach(node => {
+      const profile = byId.get(node.dataset.agentPresence);
+      if (profile) node.replaceWith(presenceBadge(profile));
+    });
+  }
   const profileWorkNotice = (p) => p?.active_work?.length ? el("p", { class: "callout" }, "This profile has active work. Saving this change blocks further board calls from its current sessions. Reconcile their claims before restarting with the new configuration; external processes are not stopped automatically.") : null;
   const profileField = (label, name, maximum, options = {}) => {
     const node = field(label, name, options);
@@ -479,7 +492,7 @@ const Workspace = (() => {
     const own = p.owner_id === state.actor.owner_id;
     const card = el("article", { class: "profile-card", "data-profile-id": p.id },
       el("div", { class: "profile-heading" }, profileAvatar(p), el("div", { class: "profile-identity" }, el("h2", {}, p.name),
-        el("p", { class: "small muted" }, ownerName(p.owner_id), own ? " · Your profile" : " · Shared profile")), profileStatus(p)));
+        el("p", { class: "small muted" }, ownerName(p.owner_id), own ? " · Your profile" : " · Shared profile")), profileStatus(p), presenceBadge(p)));
     if (!own) {
       card.append(el("p", { class: "muted small" }, "This profile belongs to another project participant. Its configuration and connections are private."));
       return card;
@@ -968,5 +981,5 @@ const Workspace = (() => {
   $("agents-nav").addEventListener("click", guard(agents));
   $("requests-nav").addEventListener("click", guard(requests));
   $("guide-link").addEventListener("click", event => { event.preventDefault(); guard(setup)(); });
-  return { projects, project, ticket, renderTicket, refreshTicket, renderInbox, projectEditor, ticketEditor, agents, requests, setup, settings, inbox, refreshRequestCount };
+  return { projects, project, ticket, renderTicket, refreshTicket, renderInbox, projectEditor, ticketEditor, agents, requests, setup, settings, inbox, refreshRequestCount, refreshAgentPresence };
 })();

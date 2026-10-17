@@ -69,6 +69,14 @@ def migrate_profiles(db):
 
 
 class ProfilesMixin:
+    def _agent_presence(self, db, profile_id):
+        last_seen = db.execute('''SELECT MAX(s.last_seen_at) FROM sessions s
+            JOIN devices d ON d.id=s.device_id
+            WHERE s.agent_id=? AND d.revoked_at IS NULL''', (profile_id,)).fetchone()[0]
+        online = last_seen is not None and last_seen > time.time() - 900
+        return {'presence': 'online' if online else 'idle' if last_seen is not None else 'offline',
+                'online': online, 'last_seen_at': last_seen, 'idle_after_seconds': 900}
+
     def _profile_owned(self, db, actor, profile_id):
         row = db.execute('SELECT * FROM agent_profiles WHERE id=? AND owner_id=?', (profile_id, actor['owner_id'])).fetchone()
         if not row:
@@ -95,7 +103,8 @@ class ProfilesMixin:
                 active.append({'kind': kind, **dict(item)})
         return {**dict(row), **json.loads(row['fields']), 'policy': json.loads(row['policy']),
                 'project_ids': json.loads(row['project_ids']), 'legacy': bool(row['legacy']),
-                'bindings': bindings, 'active_work': active}
+                'bindings': bindings, 'active_work': active,
+                **self._agent_presence(db, row['id'])}
 
     def _profile_view(self, db, row):
         result = self._profile(db, row)

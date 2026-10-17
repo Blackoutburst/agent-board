@@ -854,7 +854,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def list_agents(session_id: str, project_id: str = "", limit: int = 20, cursor: str | None = None, view: Literal["compact", "full"] = "compact") -> dict:
-        """List safe agent summaries visible through shared project membership: id, owner_id, name, avatar and status. Private profile configuration, devices, sessions and tasks are omitted for agent callers. Compact pages return items/next_cursor/totals; drain next_cursor with the same filters. view=full explicitly restores the original list."""
+        """List safe agent summaries through shared project membership: id, owner_id, name, avatar, lifecycle status, and aggregate presence/online/last_seen_at/idle_after_seconds. Presence becomes idle after 900 seconds without a check-in; offline means no known check-in on a non-revoked device. It does not prove process cleanup. Private profile configuration, devices, sessions and tasks are omitted for agent callers. Compact pages return items/next_cursor/totals; drain next_cursor with the same filters. view=full restores the full list."""
         return full_list(board.list_agents(session_actor(session_id), project_id)) if view == "full" else wire(views.page(session_actor(session_id),'list_agents',board.list_agents(session_actor(session_id), project_id),limit=limit,cursor=cursor,filters={'project_id':project_id}))
 
     @mcp.tool()

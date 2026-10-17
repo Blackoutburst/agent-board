@@ -28,7 +28,7 @@ class CommunicationMixin:
             if selected is not None and (not project or project['project_id'] not in selected):
                 continue
             result.append({'id':'agent:'+row['id'],'agent_id':row['id'],'name':json.loads(row['fields'])['name'],
-                           'kind':'agent','owner_id':row['owner_id']})
+                           'kind':'agent','owner_id':row['owner_id'], **self._agent_presence(db,row['id'])})
         return result
 
     def list_mention_targets(self, actor, thread_id):

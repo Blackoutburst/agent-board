@@ -41,6 +41,10 @@ fs.mkdirSync(output, { recursive: true });
     await page.getByRole('button', { name: 'Profiles', exact: true }).waitFor();
     await card('Claude Code · Linux server').waitFor();
     assert.equal(await card('Claude Code · Linux server').getByRole('button').count(), 0);
+    await card('Claude Code · Linux server').getByText('Idle', { exact: true }).waitFor();
+    await card('Claude Code · Linux server').getByText('Active', { exact: true }).waitFor();
+    await card('Codex · Work Mac').getByText('Idle', { exact: true }).waitFor();
+    await card('Codex · Home PC').getByText('Online', { exact: true }).waitFor();
     const initial = await api('/agent-profiles');
     const legacy = initial.find(p => p.legacy && p.project_ids === null);
     if (legacy) {
@@ -201,9 +205,12 @@ fs.mkdirSync(output, { recursive: true });
     await dialog().getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'Connections', exact: true }).first().click();
     await page.getByText('These are registered installations and their live sessions.', { exact: false }).waitFor();
-    await page.locator('.agent-card').filter({ has: page.getByRole('heading', { name: copyName, exact: true }) }).getByText('Not connected', { exact: true }).waitFor();
+    await page.locator('.agent-card').filter({ has: page.getByRole('heading', { name: copyName, exact: true }) }).getByText('Offline', { exact: true }).waitFor();
     const shared = page.locator('.shared-agent-summary').filter({ has: page.getByRole('heading', { name: 'Claude Code · Linux server', exact: true }) });
     await shared.waitFor();
+    await shared.getByText('Idle', { exact: true }).waitFor();
+    await shared.getByText('Active', { exact: true }).waitFor();
+    await page.locator('.agent-card').filter({ has: page.getByRole('heading', { name: 'Codex · Work Mac', exact: true }) }).getByText('Idle', { exact: true }).waitFor();
     assert.equal(await shared.getByRole('button').count(), 0);
     assert.equal(await shared.locator('details').count(), 0);
     assert.ok(!(await shared.innerText()).includes('Linux release checks'));
@@ -263,7 +270,7 @@ fs.mkdirSync(output, { recursive: true });
     await secondPage.screenshot({ path: path.join(output, 'profiles-second-owner-mobile.png'), fullPage: true });
     await secondContext.close();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ browser: 'Firefox', flows: ['legacy scope preserved', 'templates and preview', 'both owners create and edit on desktop and mobile', 'private instructions', 'plain-text XSS handling', 'duplicate without access', 'CAS draft preservation', 'read-only version history', 'device binding', 'pause/resume/archive', 'paused and out-of-scope ticket assignments preserved', 'captured work configuration', 'shared summaries and unbound connections', 'desktop and mobile layout'], javascriptErrors: errors }));
+    console.log(JSON.stringify({ browser: 'Firefox', flows: ['online/idle/offline presence independent of lifecycle', 'legacy scope preserved', 'templates and preview', 'both owners create and edit on desktop and mobile', 'private instructions', 'plain-text XSS handling', 'duplicate without access', 'CAS draft preservation', 'read-only version history', 'device binding', 'pause/resume/archive', 'paused and out-of-scope ticket assignments preserved', 'captured work configuration', 'shared summaries and unbound connections', 'desktop and mobile layout'], javascriptErrors: errors }));
   } finally {
     await browser.close();
   }

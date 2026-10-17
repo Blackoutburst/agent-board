@@ -3,8 +3,15 @@
 const Conversations = (() => {
   const targetCache = new Map();
   function targets(threadId) {
-    if (!targetCache.has(threadId)) targetCache.set(threadId, api(`/threads/${encodeURIComponent(threadId)}/mentionables`).catch(error => { targetCache.delete(threadId); throw error; }));
-    return targetCache.get(threadId);
+    const cached = targetCache.get(threadId);
+    if (cached && cached.expires > Date.now()) return cached.promise;
+    const entry = { expires: Date.now() + 30000 };
+    entry.promise = api(`/threads/${encodeURIComponent(threadId)}/mentionables`).catch(error => {
+      if (targetCache.get(threadId) === entry) targetCache.delete(threadId);
+      throw error;
+    });
+    targetCache.set(threadId, entry);
+    return entry.promise;
   }
   function mentionEditor(textarea, draft, threadId) {
     const menu = el("div", { class: "mention-menu", id: "mention-options", role: "listbox", "aria-label": "Mention someone", hidden: true });
@@ -26,7 +33,10 @@ const Conversations = (() => {
     }
     function render() {
       menu.replaceChildren(...choices.map((target, index) => btn("", () => choose(target), index === selected ? "selected" : "", { role: "option", "aria-selected": String(index === selected), onMousedown: event => event.preventDefault() })));
-      [...menu.children].forEach((button, index) => button.append(el("strong", {}, `@${choices[index].name}`), el("span", { class: "small muted" }, `${choices[index].kind === "agent" ? "Agent" : "Human"} · ${ownerName(choices[index].owner_id)}`)));
+      [...menu.children].forEach((button, index) => {
+        const target = choices[index], presence = { online: "Online", idle: "Idle", offline: "Offline" }[target.presence];
+        button.append(el("strong", {}, `@${target.name}`), el("span", { class: "small muted" }, `${target.kind === "agent" ? "Agent" : "Human"} · ${ownerName(target.owner_id)}${target.kind === "agent" && presence ? " · " + presence : ""}`));
+      });
       menu.hidden = !choices.length; textarea.setAttribute("aria-expanded", String(choices.length > 0));
     }
     async function update() {
@@ -73,6 +83,7 @@ const Conversations = (() => {
       if (request !== state.request || !state.actor) return;
       const counter = $("inbox-count"); counter.hidden = !inbox.count; counter.textContent = String(inbox.count); counter.setAttribute("aria-label", `${inbox.count} inbox items`);
       if (state.view === "inbox") Workspace.renderInbox(inbox);
+      if (!$("modal").open) await Workspace.refreshAgentPresence();
       if (["thread", "ticket"].includes(state.view) && state.threadId) {
         const threadId = state.threadId;
         const data = await api(`/threads/${encodeURIComponent(threadId)}?limit=50`);
