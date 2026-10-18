@@ -46,12 +46,40 @@ const Markdown = (() => {
       node.replaceWith(fragment);
     }
   }
+  function codeContainer(pre, label = "Copy code") {
+    const wrapper = document.createElement("div"), copy = document.createElement("button");
+    wrapper.className = "code-block";
+    copy.type = "button"; copy.className = "code-copy"; copy.textContent = label;
+    copy.setAttribute("aria-live", "polite");
+    let reset;
+    copy.addEventListener("click", async () => {
+      clearTimeout(reset);
+      try {
+        await navigator.clipboard.writeText(pre.textContent);
+        copy.textContent = "Copied!";
+      } catch {
+        const selection = window.getSelection(), range = document.createRange();
+        range.selectNodeContents(pre); selection.removeAllRanges(); selection.addRange(range);
+        copy.textContent = "Select and copy";
+      }
+      reset = setTimeout(() => { copy.textContent = label; }, 2000);
+    });
+    pre.replaceWith(wrapper);
+    wrapper.append(copy, pre);
+    return wrapper;
+  }
+  function codeBlock(value, className = "", label = "Copy code") {
+    const pre = document.createElement("pre");
+    pre.className = className; pre.textContent = String(value || "");
+    return codeContainer(pre, label);
+  }
   function block(value, className = "", mentions = []) {
     const root = document.createElement("div");
     root.className = `markdown-body ${className}`.trim();
     root.innerHTML = parser.render(String(value || ""));
     highlightMentions(root, mentions);
+    root.querySelectorAll("pre").forEach(pre => codeContainer(pre));
     return root;
   }
-  return {block};
+  return {block, codeBlock};
 })();

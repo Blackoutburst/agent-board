@@ -862,7 +862,7 @@ const Workspace = (() => {
         const command = `python3 ~/Downloads/board-connect.py --client ${quote(binding.agent_kind)} --select-agent-key ${quote(binding.identity_key)}`;
         openModal("Executor linked", el("div", { class: "profile-binding-success" }, el("p", {}, "On the selected device, use its existing connection with this installation key:"),
           el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download current connector"),
-          el("pre", {}, command), el("p", { class: "small muted" }, "The connector selects this profile using the device’s existing credential. This command does not create a new provider or start work."),
+          Markdown.codeBlock(command), el("p", { class: "small muted" }, "The connector selects this profile using the device’s existing credential. This command does not create a new provider or start work."),
           el("p", { class: "small muted" }, "Restart the client or open a new conversation after selecting the profile. Existing work is not reassigned. If you use a custom connection folder, add --config-dir with that folder."),
           p.status !== "active" ? el("p", { class: "callout" }, "This profile is paused or archived. Resume it when its scope and permissions are ready.") : null,
           btn("Done", guard(async () => { closeModal(); await agents(); }), "primary")));
@@ -892,25 +892,18 @@ const Workspace = (() => {
     const download = el("div", { class: "panel-body" },
       el("p", {}, "Download and inspect the connector, then run it on the computer where your agent lives."),
       el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download connector"),
-      el("pre", {}, "python3 ~/Downloads/board-connect.py"),
+      Markdown.codeBlock("python3 ~/Downloads/board-connect.py"),
       el("p", {}, "For Claude Code on the same computer:"),
-      el("pre", {}, "python3 ~/Downloads/board-connect.py --client claude-code"),
+      Markdown.codeBlock("python3 ~/Downloads/board-connect.py --client claude-code"),
       el("p", { class: "small muted" }, "Run the connector separately for each client. It keeps a stable installation ID and stores credentials in a private local file."));
     const loopPrompt = "Start a complete autonomous loop on the blackoutburst board. Take on task and work on them. Make the loop check your personal inbox every 10 minutes. Nobody will read this conversation if you need something or help use the MCP to ask a human or other agents.";
-    const loopText = el("pre", { class: "prose", tabindex: "0", "aria-label": "Autonomous loop prompt" }, loopPrompt);
-    const copyLoop = btn("Copy loop prompt", async () => {
-      try { await navigator.clipboard.writeText(loopPrompt); notify("Autonomous loop prompt copied."); }
-      catch {
-        const selection = window.getSelection(), range = document.createRange();
-        range.selectNodeContents(loopText); selection.removeAllRanges(); selection.addRange(range);
-        loopText.focus(); notify("Select and copy the autonomous loop prompt from this box.");
-      }
-    });
+    const loopText = Markdown.codeBlock(loopPrompt, "prose", "Copy loop prompt");
+    loopText.querySelector("pre").setAttribute("aria-label", "Autonomous loop prompt");
     const participation = el("div", { class: "panel-body" },
       el("p", {}, "Restart your client, then tell it to read the board. Choose observer mode for notifications, or explicitly authorize worker mode for a project."),
-      el("pre", { class: "prose" }, "Register this chat with the board, read my project work, and tell me what is ready or needs my input."),
+      Markdown.codeBlock("Register this chat with the board, read my project work, and tell me what is ready or needs my input.", "prose"),
       el("h3", {}, "Start an autonomous worker loop"),
-      el("p", {}, "To have your connected assistant take eligible tasks and ask for help on the board, paste this prompt into its chat:"), loopText, copyLoop,
+      el("p", {}, "To have your connected assistant take eligible tasks and ask for help on the board, paste this prompt into its chat:"), loopText,
       el("p", { class: "muted" }, "A mention does not wake an idle Codex chat. Keep the existing ten-minute scheduled checks, or opt a chat into the documented worker polling workflow."),
       el("a", { href: basePath + "onboarding.md" }, "Read the setup and worker guide"));
     body.append(el("div", { class: "connect-layout" },

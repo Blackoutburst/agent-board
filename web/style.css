@@ -107,6 +107,7 @@
 .markdown-body ul,.markdown-body ol{padding-left:1.6em}.markdown-body li+li{margin-top:.2em}.markdown-body li>p{margin-bottom:.35em}
 .markdown-body blockquote{padding:.2em 1em;border-left:3px solid var(--line);color:var(--muted)}
 .markdown-body pre{max-width:100%;min-width:0;white-space:pre;overflow-x:auto;margin:0 0 .9em}.markdown-body pre code{white-space:pre;overflow-wrap:normal}
+.code-block{position:relative;min-width:0;max-width:100%;margin:0 0 .9em}.code-block>pre{margin:0;padding-top:46px}.code-copy{position:absolute;top:7px;right:7px;padding:4px 9px;font-size:12px;min-height:30px}
 .markdown-body :not(pre)>code{padding:.1em .35em;background:var(--raised);border-radius:4px;font-size:.9em}
 .markdown-body table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:0 0 .9em}.markdown-body th,.markdown-body td{border:1px solid var(--line);padding:.4em .7em;text-align:left}.markdown-body th{background:var(--raised)}
 .markdown-body img{max-width:100%;height:auto}.markdown-body hr{border:0;border-top:1px solid var(--line);margin:1em 0}.page-head .markdown-body{color:var(--muted);font-size:13px}
