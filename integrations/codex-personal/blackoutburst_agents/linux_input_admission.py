@@ -200,7 +200,9 @@ def prepare_linux_input_attempt_locked(broker, *, lock_lease, fence, binding,
     journal._linux_input_state_for_lease(lock_lease)
     if operation_id in state['operations']: _fail('linux_input_attempt_not_reusable')
     limits = _manifest(broker.manifest)
-    reserve = PASSES * limits['max_file_bytes'] * len(broker.manifest['files'])
+    # RepositoryFiles.read_at may consume one oversize sentinel byte
+    # after fstat, including on a pass that refuses a growing input.
+    reserve = PASSES * (limits['max_file_bytes'] + 1) * len(broker.manifest['files'])
     # Charge validation occurs before directory creation or workspace capture.
     candidate = decode(canonical(state))
     journal.charge(candidate, read_bytes=reserve)

@@ -32,7 +32,7 @@ def validate_operation(key, operation, *, origin, manifest):
             or detail['profile'] != PROFILE or detail['origin'] != origin
             or type(detail['capture_passes']) is not int or detail['capture_passes'] != PASSES
             or type(detail['reserved_read_bytes']) is not int
-            or detail['reserved_read_bytes'] != PASSES * min(1048576, manifest['budgets']['max_file_bytes']) * len(manifest['files'])
+            or detail['reserved_read_bytes'] != PASSES * (min(1048576, manifest['budgets']['max_file_bytes']) + 1) * len(manifest['files'])
             or type(detail['timeout_seconds']) is not int or not 1 <= detail['timeout_seconds'] <= 60
             or type(detail['max_output_bytes']) is not int or not 0 <= detail['max_output_bytes'] <= 1048576
             or type(detail['directory_identity']) is not list or len(detail['directory_identity']) != 2

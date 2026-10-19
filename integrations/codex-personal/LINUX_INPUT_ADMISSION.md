@@ -53,8 +53,10 @@ packet bytes; a shortened backend name alone is insufficient.
 The manifest's initial explicit inventory and approved script inventory are
 separate from the capture reservation. Before the first workspace capture, one
 atomic state replacement commits both the intent and the entire conservative
-reservation: **5 × file count × min(manifest per-file bound,1MiB)**, plus one
-operation. It is deliberately not capped by the snapshot total bound: a capture
+reservation: **5 × file count × (min(manifest per-file bound, 1 MiB) + 1)**, plus one
+operation. The additional byte covers the oversize sentinel that the existing
+reader can consume to detect growth after its initial file stat. It is
+deliberately not capped by the snapshot total bound: a capture
 can read its last bounded file before discovering a total-limit excess. Existing
 manifest budget ceilings are unchanged. Large manifests can therefore be refused
 conservatively; no reservation is reduced or refunded after a failure.

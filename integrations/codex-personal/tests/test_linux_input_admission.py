@@ -76,7 +76,7 @@ class InputAdmissionTests(unittest.TestCase):
         original = LinuxInputSnapshot._capture; seen=[]
         def capture(snapshot):
             state=self.durable();seen.append(state)
-            self.assertEqual(state['used']['read_bytes'],5*65536)
+            self.assertEqual(state['used']['read_bytes'],5*65537)
             self.assertEqual(next(iter(state['operations'].values()))['phase'],'intent')
             return original(snapshot)
         with patch.object(LinuxInputSnapshot,'_capture',capture),patch('subprocess.Popen',side_effect=AssertionError('spawn')):
@@ -89,7 +89,7 @@ class InputAdmissionTests(unittest.TestCase):
                         planner_snapshot=self.planner,expected_plan_sha256=self.plan.sha256,input_packet=packet)
                     self.finish(handle)
                 self.refuse(handle.input_packet,'linux_input_attempt_not_held')
-                self.assertEqual(state['used'],{'operations':1,'read_bytes':5*65536,'patch_bytes':0,'tests':0})
+                self.assertEqual(state['used'],{'operations':1,'read_bytes':5*65537,'patch_bytes':0,'tests':0})
         self.assertEqual(len(seen),5)
         self.assertEqual(self.authorize.call_count,12) # initial + each of five passes, two permissions
         receipt=next(iter(self.durable()['operations'].values()))['receipt']
@@ -142,7 +142,7 @@ class InputAdmissionTests(unittest.TestCase):
                         with self.context(lease) as handle:
                             if kind=='duplicate':handle.observe_boundary('before_source');handle.observe_boundary('before_source')
                             if kind=='order':handle.observe_boundary('after_result')
-                state=self.durable();self.assertEqual(state['used']['read_bytes'],5*65536)
+                state=self.durable();self.assertEqual(state['used']['read_bytes'],5*65537)
                 self.assertEqual(next(iter(state['operations'].values()))['phase'],'needs_review')
                 with self.broker.journal.lock():
                     lease=self.broker.journal.held_lock_lease()
@@ -154,7 +154,7 @@ class InputAdmissionTests(unittest.TestCase):
             with patch.object(LinuxInputSnapshot,'_capture',side_effect=RuntimeError('sensitive fixture text')):
                 with self.assertRaises(RuntimeError):self.context(lease).__enter__()
         state=self.durable();op=next(iter(state['operations'].values()))
-        self.assertEqual(op['phase'],'needs_review');self.assertEqual(state['used']['read_bytes'],5*65536)
+        self.assertEqual(op['phase'],'needs_review');self.assertEqual(state['used']['read_bytes'],5*65537)
         self.assertNotIn('sensitive',canonical(state).decode());self.assertNotIn('not_started',canonical(state).decode())
 
     def test_complete_is_not_replayed_or_recharged_and_inspection_has_no_handle(self):
@@ -279,7 +279,7 @@ class InputAdmissionTests(unittest.TestCase):
         with self.broker.journal.lock():
             lease=self.broker.journal.held_lock_lease()
             self.refuse(lambda:self.context(lease).__enter__())
-        state=self.durable();self.assertEqual(state['used']['read_bytes'],5*65536)
+        state=self.durable();self.assertEqual(state['used']['read_bytes'],5*65537)
         self.assertEqual(next(iter(state['operations'].values()))['phase'],'needs_review')
 
     def test_reconcile_refuses_before_authority_and_workspace_for_all_phases(self):
@@ -339,7 +339,7 @@ class InputAdmissionTests(unittest.TestCase):
                 with self.context(lease) as handle:
                     (self.root/'one.txt').write_text('changed\n')
                     handle.observe_boundary('before_source')
-        state=self.durable();self.assertEqual(state['used']['read_bytes'],5*65536)
+        state=self.durable();self.assertEqual(state['used']['read_bytes'],5*65537)
         self.assertEqual(next(iter(state['operations'].values()))['phase'],'needs_review')
 
     def test_wrong_planner_and_fence_refuse_before_reservation(self):
@@ -350,7 +350,7 @@ class InputAdmissionTests(unittest.TestCase):
         self.assertEqual(self.durable()['used']['read_bytes'],0)
 
     def test_real_budget_check_rejects_thirteenth_reserved_attempt_without_refund(self):
-        # 13 * 327680 = 4259840 > the existing default read cap 4194304.
+        # 13 * 327685 = 4259905 > the existing default read cap 4194304.
         for index in range(12):
             with self.broker.journal.lock():
                 lease=self.broker.journal.held_lock_lease()
@@ -433,3 +433,30 @@ class InputAdmissionTests(unittest.TestCase):
             self.assertEqual(inspect_linux_input_attempt(other,'attempt')['result'],'requires_review')
             self.refuse(lambda:other.reconcile('attempt'),'linux_input_reconciliation_forbidden')
         self.assertEqual(self.durable(),before)
+
+    def test_growth_after_fstat_on_fifth_capture_reserves_the_read_sentinel(self):
+        from blackoutburst_agents.dev_manifest import RepositoryFiles
+        content=b'a'*65536;path=self.root/'one.txt';path.write_bytes(content)
+        self.planner=DevelopmentPlanner._snapshot({'files':[{'path':'one.txt','after_sha256':digest(content)}]},
+                                                  self.broker.manifest)
+        original,read=RepositoryFiles.read_at,os.read
+        passes,consumed,grown=0,0,False
+        def capture(files,*args):
+            nonlocal passes
+            if files.root!=str(self.root):return original(*args)
+            passes+=1
+            def counted(descriptor,maximum):
+                nonlocal consumed,grown
+                if passes==5 and not grown:
+                    path.write_bytes(content+b'b');grown=True
+                data=read(descriptor,maximum);consumed+=len(data);return data
+            with patch('os.read',side_effect=counted):return original(*args)
+        with patch.object(RepositoryFiles,'read_at',capture),self.broker.journal.lock():
+            lease=self.broker.journal.held_lock_lease()
+            with self.assertRaises(DevelopmentError) as caught:
+                with self.context(lease) as handle:self.finish(handle)
+        self.assertEqual(caught.exception.code,'file_too_large')
+        self.assertEqual(passes,5);self.assertEqual(consumed,327681)
+        state=self.durable();self.assertEqual(state['used']['read_bytes'],327685)
+        self.assertGreaterEqual(state['used']['read_bytes'],consumed)
+        self.assertEqual(next(iter(state['operations'].values()))['phase'],'needs_review')
