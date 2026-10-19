@@ -72,13 +72,16 @@ class NativeTestBackendTests(unittest.TestCase):
         self.backend.private.replace('qualification.json', json.dumps(value).encode())
         return value
 
-    def test_no_qualification_refuses_before_any_launch_or_intent(self):
+    def test_no_qualification_has_a_terminal_nonlaunch_proof(self):
         with patch.object(self.backend, '_execute') as execute:
             self.assertFalse(self.backend.qualified_for(self.request.manifest_hash, self.suite))
             with self.assertRaises(DevelopmentError):
                 self.backend.run(self.request)
             execute.assert_not_called()
-        self.assertFalse((self.directory / (self.request.operation_id + '.json')).exists())
+        proof = self.backend.lookup_not_started(self.request)
+        self.assertEqual(proof['reason'], 'test_backend_unqualified')
+        self.assertIs(proof['started'], False)
+        self.assertIs(proof['cleanup_confirmed'], True)
 
     def test_qualification_must_include_every_exact_check_and_cleanup(self):
         value = self.qualified()

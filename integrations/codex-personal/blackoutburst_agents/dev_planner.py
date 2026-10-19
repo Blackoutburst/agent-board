@@ -458,8 +458,8 @@ class DevelopmentPlanner:
             if guard.should_cancel():
                 raise DevelopmentError('planner_runtime_stopped')
             if original_backend is not None:
-                backend.authorize_scope = lambda scope, action, resource: (
-                    original_backend(scope, action, resource) is True and
+                backend.authorize_scope = self._broker_authorize if original_backend is self._base_authorize else (
+                    lambda scope, action, resource: original_backend(scope, action, resource) is True and
                     self._broker_authorize(scope, action, resource))
             receipt, cleanup = self._effect(state)
             step['receipt'] = receipt
@@ -477,7 +477,16 @@ class DevelopmentPlanner:
             if reason == 'permission_revoked' and self._broker_refusal_reason is not None:
                 reason = self._broker_refusal_reason
             if action['kind'] == 'test':
-                self.broker.reject_test_before_dispatch(step['action_key'], reason)
+                not_started = self.broker.reject_test_before_dispatch(step['action_key'], reason)
+                if not_started is not None and guard.operation is not None and guard.operation['start_confirmed']:
+                    step['receipt'] = {'receipt': not_started}
+                    state['tests'].pop(action['name'], None)
+                    self.journal.charge(state, bytes=len(canonical(step['receipt'])))
+                    self.journal.save(state)
+                    guard.finish_action(work, step['id'], status='blocked', cleanup_confirmed=True)
+                    if guard.operation['phase'] == 'finished':
+                        step['tool_finished'] = True
+                        self.journal.save(state)
             # Any launch/receipt ambiguity keeps capacity and the canonical
             # fence for explicit reconciliation; never invent cleanup proof.
             guard.review()
