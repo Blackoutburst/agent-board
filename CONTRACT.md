@@ -334,7 +334,8 @@ non-finite values, ambiguous field lists and invalid Unicode; no SQL JSON
 function parses these unvalidated prerequisite details. Missing, malformed,
 ambiguous or over-bound history refuses that path with the same bounded stop
 instruction, without audit text. These limits bound fetched/parsed records and
-bytes; they do not impose a wall-clock limit on SQLite's metadata search. The
+bytes; they do not bound SQLite's internal heap while measuring stored text,
+nor impose a wall-clock limit on its metadata search. The
 read sequence remains an observation, not an atomic snapshot against external
 writers. Dependency claims that keep review status, progress, comments and
 content edits outside this guard do not invalidate it. Their delivered text is
