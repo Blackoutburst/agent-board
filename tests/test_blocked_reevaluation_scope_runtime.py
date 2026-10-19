@@ -175,7 +175,7 @@ def test_review_reminder_maintenance_remains_scoped_and_idempotent(tmp_path):
     for ticket in tickets: stale_review(board,ticket['id'])
     response=board.get_work(actor)
     assert [item['id'] for item in response['review']]==[tickets[0]['id']]
-    assert response['policy']['allow_messages'] is False
+    assert response['policy']['allow_reply'] is False
     assert len(board.get_thread(human,tickets[0]['thread_id'])['messages'])==1
     assert board.get_thread(human,tickets[1]['thread_id'])['messages']==[]
     before=snapshot(board)
