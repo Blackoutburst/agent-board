@@ -10,7 +10,7 @@ from blackoutburst_agents.subscription_probe import (
 )
 
 CATEGORIES = ('agent_message','reasoning','command_execution','file_change',
-              'mcp_tool_call','web_search','todo_list','unknown')
+              'mcp_tool_call','collab_tool_call','web_search','todo_list','error','unknown')
 NONCE = 'PRIVATE_NONCE_SENTINEL_0da274'
 SECRET = 'PRIVATE_BODY_COMMAND_AUTH_SENTINEL_6bfc56'
 
@@ -34,7 +34,7 @@ class ProbeDiagnosticTests(unittest.TestCase):
         value=result['diagnostic']
         self.assertEqual(set(value),{'schema_version','item_events','saturated'})
         self.assertIs(type(value['schema_version']),int)
-        self.assertEqual(value['schema_version'],1)
+        self.assertEqual(value['schema_version'],2)
         self.assertEqual(tuple(value['item_events']),CATEGORIES)
         self.assertIs(type(value['saturated']),bool)
         self.assertTrue(all(type(count) is int and 0 <= count <= 1024 for count in value['item_events'].values()))
@@ -51,7 +51,7 @@ class ProbeDiagnosticTests(unittest.TestCase):
                     event={'type':phase,'item':{'type':category,'id':SECRET,'text':SECRET,
                         'body':SECRET,'command':SECRET,'arguments':SECRET}}
                     result=self.parse(event,*success(),b'not-json')
-                    self.assertEqual(result['reason'],'protocol_error' if category in CATEGORIES[:2]
+                    self.assertEqual(result['reason'],'protocol_error' if category in (*CATEGORIES[:2],'error')
                                      else 'unexpected_tool_event')
                     diagnostic=self.diagnostic(result)
                     self.assertEqual(diagnostic['item_events'][category],2 if category=='agent_message' else 1)

@@ -319,14 +319,15 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
     # Counts describe decoded item events, never executions or side effects.
     # Only these fixed keys leave the parser; unknown names are not retained.
     categories = ("agent_message", "reasoning", "command_execution", "file_change",
-                  "mcp_tool_call", "web_search", "todo_list", "unknown")
+                  "mcp_tool_call", "collab_tool_call", "web_search", "todo_list",
+                  "error", "unknown")
     item_events = dict.fromkeys(categories, 0)
     saturated = False
     maximum_events = 1024
 
     def rejected(reason: str) -> dict[str, object]:
         return {"ok": False, "reason": reason, "verification": verification,
-                "diagnostic": {"schema_version": 1, "item_events": dict(item_events),
+                "diagnostic": {"schema_version": 2, "item_events": dict(item_events),
                                "saturated": saturated}}
 
     if result.failure is not None:
@@ -338,6 +339,7 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
         return rejected("protocol_error")
     protocol_error = False
     terminal_failure = False
+    diagnostic_item = False
     tool_event = False
     failures: list[str] = []
     messages: list[str] = []
@@ -376,6 +378,19 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
                 item_events[category] += 1
             else:
                 saturated = True
+            if item["type"] == "error":
+                # Codex 0.163 also emits this completed item for non-fatal
+                # warnings. It is not a tool or proof of a fatal quota/auth
+                # error. Still reject qualification, even with an exact nonce.
+                # No message text, hash or preview leaves this parser.
+                if (event_type != "item.completed"
+                        or set(item) != {"id", "type", "message"}
+                        or type(item["id"]) is not str or not 1 <= len(item["id"]) <= 256
+                        or type(item["message"]) is not str or len(item["message"]) > 16384):
+                    protocol_error = True
+                else:
+                    diagnostic_item = True
+                continue
             if item["type"] not in ("agent_message", "reasoning"):
                 tool_event = True
             if item["type"] == "agent_message" and event_type == "item.completed":
@@ -394,6 +409,8 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
         reason = "protocol_error"
     elif terminal_failure:
         reason = next((reason for reason in failures if reason != "execution_failed"), "execution_failed")
+    elif diagnostic_item:
+        reason = "cli_diagnostic_item"
     elif result.returncode != 0:
         reason = _failure_category(result.stderr.decode("utf-8", "replace"))
     elif completed_count != 1:
