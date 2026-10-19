@@ -6,6 +6,7 @@ import ctypes
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -19,13 +20,24 @@ import time
 import types
 import uuid
 
-PROTOCOL = 'synthetic-linux-recovery-v1'
+PROTOCOL = 'synthetic-linux-recovery-v2'
 MAX_FILE = 256 * 1024
 MAX_OUTPUT = 16384
 TTL = 1.5
 CASES = frozenset({'normal', 'timeout_ignore_term', 'controller_sigkill',
                    'lost_response', 'refuse_before_source'})
 FOUNDATION = Path(__file__).with_name('qualify_linux_foundation.py')
+# Kept explicit so receipt-only inspection never imports/executes pinned code.
+REQUIRED_CHECKS = frozenset({'pid_namespace_init', 'outside_process_hidden_before_filter',
+    'no_new_privs_before_filter', 'bounding_caps_zero_before_filter', 'inside_read', 'inside_write',
+    'outside_write', 'readonly_file_write', 'runtime_write', 'outside_read', 'old_root_absent',
+    'home_proc_private_state_absent', 'work_volume_bound', 'network_loopback', 'network_unix_path',
+    'network_unix_abstract', 'fork', 'exec', 'session', 'process_group', 'outside_signal_denied',
+    'clone3', 'x32_abi_denied', 'namespace_change_denied', 'caps_zero_after_filter',
+    'nproc_raise_denied', 'hard_limits'})
+ERROR_CHECKS = frozenset({'outside_write', 'readonly_file_write', 'runtime_write', 'outside_read',
+    'network_loopback', 'network_unix_path', 'network_unix_abstract', 'fork', 'exec', 'session',
+    'process_group', 'outside_signal_denied', 'clone3', 'x32_abi_denied', 'namespace_change_denied'})
 LIMITS = {'address_space_each': 256 * 1024 * 1024, 'startup_seconds': 5,
     'test_seconds': 3, 'total_seconds': 10, 'cleanup_seconds': 2,
     'cpu_supervisor': 5, 'cpu_launcher_test': 1, 'max_processes_outside_controller': 3,
@@ -53,9 +65,103 @@ def _pairs(values):
     return result
 
 
+def finite_float(text):
+    value = float(text)
+    if not math.isfinite(value):
+        raise RecoveryError('non_finite_json_number')
+    return value
+
+
 def decoded(data):
-    return json.loads(data, object_pairs_hook=_pairs,
+    return json.loads(data, object_pairs_hook=_pairs, parse_float=finite_float,
         parse_constant=lambda _: (_ for _ in ()).throw(RecoveryError('non_json_constant')))
+
+
+def integer(value, minimum=0, maximum=None):
+    return type(value) is int and value >= minimum and (maximum is None or value <= maximum)
+
+
+def sha256(value):
+    return type(value) is str and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def identity(value):
+    return (type(value) is list and len(value) == 2
+            and integer(value[0]) and integer(value[1], 1))
+
+
+def file_pin(value):
+    return (type(value) is dict and set(value) == {'identity', 'size', 'sha256'}
+            and identity(value['identity']) and integer(value['size'], 0, 64 * 1024 * 1024)
+            and sha256(value['sha256']))
+
+
+def canonical_uuid(value):
+    if type(value) is not str:
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError:
+        return False
+    return str(parsed) == value and parsed.version == 4
+
+
+def nonce(value):
+    return type(value) is str and len(value) == 32 and all(c in '0123456789abcdef' for c in value)
+
+
+def runtime_pins(value):
+    return (type(value) is dict and 1 <= len(value) <= 256 and '/usr/bin/python3.10' in value
+        and all(type(path) is str and len(path) <= 4096 and path.startswith(('/usr/', '/lib/'))
+                and '..' not in Path(path).parts and str(Path(path)) == path and file_pin(pin)
+                for path, pin in value.items())
+        and sum(pin['size'] for pin in value.values()) <= 128 * 1024 * 1024)
+
+
+def namespace_identity(value):
+    return (type(value) is dict and set(value) == {'acquired_by', 'kernel_fdinfo_nspid',
+            'host_pid_namespace_identity', 'init_pid_namespace_identity',
+            'init_is_exact_launcher_child', 'namespace_numbers_used_for_host_signals'}
+        and value['acquired_by'] == 'SCM_RIGHTS_from_trusted_init'
+        and type(value['kernel_fdinfo_nspid']) is list and len(value['kernel_fdinfo_nspid']) == 2
+        and integer(value['kernel_fdinfo_nspid'][0], 2)
+        and type(value['kernel_fdinfo_nspid'][1]) is int and value['kernel_fdinfo_nspid'][1] == 1
+        and identity(value['host_pid_namespace_identity']) and identity(value['init_pid_namespace_identity'])
+        and value['host_pid_namespace_identity'] != value['init_pid_namespace_identity']
+        and value['init_is_exact_launcher_child'] is True
+        and value['namespace_numbers_used_for_host_signals'] is False)
+
+
+def validate_state(state):
+    if type(state) is not dict or not integer(state.get('namespace_launches'), 0, 1):
+        raise RecoveryError('state_schema_invalid')
+    phase = state.get('phase')
+    if type(phase) is not str:
+        raise RecoveryError('state_schema_invalid')
+    keys = {'phase', 'namespace_launches'}
+    if phase in ('prepared', 'launch_intent', 'helper_started'):
+        valid = state['namespace_launches'] == 0
+    elif phase == 'namespace_launch_intent':
+        valid = state['namespace_launches'] == 1
+    elif phase == 'refused_before_release':
+        keys.add('refusal')
+        valid = state['namespace_launches'] == 1 and state.get('refusal') == 'explicit_synthetic_stop'
+    elif phase in ('source_release_intent', 'source_ack_written'):
+        keys.add('admission_sha256')
+        valid = state['namespace_launches'] == 1 and sha256(state.get('admission_sha256'))
+    elif phase == 'terminal':
+        keys.add('receipt_sha256')
+        valid = sha256(state.get('receipt_sha256'))
+        if 'admission_sha256' in state:
+            keys.add('admission_sha256');valid = valid and sha256(state['admission_sha256'])
+        if 'refusal' in state:
+            keys.add('refusal')
+            valid = valid and state['refusal'] == 'explicit_synthetic_stop' and 'admission_sha256' not in state
+    else:
+        valid = False
+    if not valid or set(state) != keys:
+        raise RecoveryError('state_schema_invalid')
+    return state
 
 
 def read_file(path):
@@ -110,10 +216,28 @@ def new_file(path, data):
 
 
 def replace_state(directory, state):
+    validate_state(state)
     temporary = directory / 'state.next'
     new_file(temporary, encoded(state))
     os.replace(temporary, directory / 'state.json')
     fsync_directory(directory)
+
+
+def private_lock(directory, name):
+    fd = os.open(directory / name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size != 0):
+            raise RecoveryError('private_lock_invalid')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RecoveryError('controller_or_helper_busy') from None
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def foundation(expected=None):
@@ -152,12 +276,23 @@ def load_job(directory):
             or job['request'].get('protocol') != PROTOCOL
             or type(job['request'].get('plan')) is not dict
             or set(job['request']['plan']) != {'runtime', 'tools', 'limits', 'seccomp_sha256'}
-            or job['request']['plan']['limits'] != LIMITS
-            or type(job['request']['plan']['runtime']) is not dict
+            or encoded(job['request']['plan']['limits']) != encoded(LIMITS)
+            or not runtime_pins(job['request']['plan']['runtime'])
             or type(job['request']['plan']['tools']) is not dict
             or set(job['request']['plan']['tools']) != {'/usr/bin/python3.10', '/usr/bin/unshare'}
+            or not all(file_pin(pin) for pin in job['request']['plan']['tools'].values())
+            or encoded(job['request']['plan']['tools']['/usr/bin/python3.10']) !=
+               encoded(job['request']['plan']['runtime']['/usr/bin/python3.10'])
+            or not sha256(job['request']['plan'].get('seccomp_sha256'))
+            or not canonical_uuid(job['request'].get('job_uuid'))
+            or not nonce(job['request'].get('nonce'))
             or job['request']['runtime_sha256'] != digest(encoded(job['request']['plan']['runtime']))
-            or job['request'].get('journal') != pin
+            or encoded(job['request'].get('journal')) != encoded(pin)
+            or not file_pin(job['request'].get('outside_pin'))
+            or job['request']['outside_pin']['size'] != len(b'synthetic')
+            or job['request']['outside_pin']['sha256'] != digest(b'synthetic')
+            or any(not sha256(job['request'].get(k)) for k in
+                   ('foundation_sha256', 'driver_sha256', 'runtime_sha256'))
             or digest(encoded(job['request'])) != job['request_sha256']
             or digest(encoded(job['request']['plan'])) != job['plan_sha256']
             or job['request'].get('case') not in CASES):
@@ -182,6 +317,8 @@ def prepare(directory, case):
     if case not in CASES or directory.exists():
         raise RecoveryError('new_fixture_required')
     base, source_hash = foundation()
+    if base.REQUIRED_CHECKS != REQUIRED_CHECKS:
+        raise RecoveryError('foundation_schema_changed')
     if platform.system() != 'Linux' or platform.machine() != 'x86_64' or os.geteuid() == 0 or sys.version_info[:2] != (3, 10):
         raise RecoveryError('unsupported_probe_host')
     directory.mkdir(mode=0o700)
@@ -208,12 +345,16 @@ def validate_frame(frame, job):
             or any(frame.get(key) != value for key, value in expected.items())
             or frame.get('phase') not in ('source_started', 'result')):
         raise RecoveryError('source_frame_binding_invalid')
-    base, _ = foundation(job['request']['foundation_sha256'])
-    if (set(frame['checks']) != base.REQUIRED_CHECKS
+    if (type(frame['checks']) is not dict or set(frame['checks']) != REQUIRED_CHECKS
             or any(type(value) is not bool for value in frame['checks'].values())
-            or type(frame['errors']) is not dict
-            or any(type(value) is not int or value < 0 for value in frame['errors'].values())):
+            or type(frame['errors']) is not dict or set(frame['errors']) != ERROR_CHECKS
+            or any(not integer(value, 0, 4095) for value in frame['errors'].values())):
         raise RecoveryError('source_frame_content_invalid')
+    for name, code in frame['errors'].items():
+        expected = {1, 13, 30} if name in {'outside_write', 'readonly_file_write', 'runtime_write'} else (
+            {2} if name == 'outside_read' else {1})
+        if frame['checks'][name] != (code in expected):
+            raise RecoveryError('source_errno_check_inconsistent')
     return frame
 
 
@@ -333,9 +474,8 @@ def supervisor(directory, descriptor):
     job = load_job(directory)
     base, _ = foundation(job['request']['foundation_sha256'])
     base.limits(5);verify_sources(job, base)
-    lock_fd = os.open(directory / 'helper.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    state = decoded(read_file(directory / 'state.json'))
+    lock_fd = private_lock(directory, 'helper.lock')
+    state = validate_state(decoded(read_file(directory / 'state.json')))
     if state != {'phase': 'launch_intent', 'namespace_launches': 0}:
         raise RecoveryError('job_already_attempted')
     state.update(phase='helper_started')
@@ -439,7 +579,9 @@ def supervisor(directory, descriptor):
     finally:
         parent.close();child.close()
         clean = {'kernel_init_identity_received': False, 'cleanup_confirmed': False,
-                 'namespace_init_exited': False, 'launcher_reaped': False}
+                 'namespace_init_exited': False, 'launcher_reaped': False,
+                 'term_sent_to_init_pidfd': False, 'init_terminal_after_term': None,
+                 'namespace_pid_numbers_used_for_signals': False}
         if launcher is not None:
             clean = cleanup(base, launcher, launcher_fd, init_fd,
                             term=reason == 'source_wall_deadline_exhausted')
@@ -451,6 +593,7 @@ def supervisor(directory, descriptor):
         observation = {'outcome': source_outcome, 'reason': reason, 'source_ack_written': source_released,
             'admission_sha256': admission_sha256,
             'source_frame_sha256': None if source_frame is None else digest(encoded(source_frame)),
+            'source_begin_frame': begin, 'source_result_frame': source_frame,
             'source_begin_sha256': None if begin is None else digest(encoded(begin)),
             'source_checks': None if begin is None else begin['checks'], 'output_bytes': stream_bytes,
             'cleanup': clean, 'namespace_identity': identity,
@@ -463,42 +606,108 @@ def supervisor(directory, descriptor):
 
 
 def validate_receipt(receipt, state, job, admission=None):
+    validate_state(state)
     if (type(receipt) is not dict or set(receipt) != {'result', 'result_sha256'}
+            or not sha256(receipt.get('result_sha256'))
             or digest(encoded(receipt['result'])) != receipt['result_sha256']
-            or state.get('phase') != 'terminal' or state.get('namespace_launches') != 1
-            or state.get('receipt_sha256') != digest(encoded(receipt))):
+            or state['phase'] != 'terminal' or state['namespace_launches'] != 1
+            or state['receipt_sha256'] != digest(encoded(receipt))):
         raise RecoveryError('terminal_receipt_missing_or_invalid')
     result = receipt['result']
-    if (set(result) != set(bindings(job)) | {'phase', 'observation', 'namespace_launches'}
-            or any(result.get(key) != value for key, value in bindings(job).items())
-            or result.get('phase') != 'terminal' or result.get('namespace_launches') != 1
-            or type(result.get('observation')) is not dict
-            or result['observation'].get('cleanup', {}).get('cleanup_confirmed') is not True
-            or result['observation'].get('outside_canary_unchanged') is not True
-            or result['observation'].get('outcome') not in ('completed', 'cancelled', 'not_started')):
+    if (type(result) is not dict
+            or set(result) != set(bindings(job)) | {'phase', 'observation', 'namespace_launches'}
+            or any(type(result.get(key)) is not str or result[key] != value
+                   for key, value in bindings(job).items())
+            or result['phase'] != 'terminal' or not integer(result['namespace_launches'], 1, 1)):
         raise RecoveryError('terminal_receipt_binding_or_cleanup_invalid')
     observation = result['observation']
-    released = observation.get('source_ack_written')
+    keys = {'outcome', 'reason', 'source_ack_written', 'admission_sha256', 'source_frame_sha256',
+        'source_begin_sha256', 'source_checks', 'source_begin_frame', 'source_result_frame',
+        'output_bytes', 'cleanup', 'namespace_identity', 'outside_canary_before',
+        'outside_canary_after', 'outside_canary_unchanged', 'elapsed_seconds'}
+    if (type(observation) is not dict or set(observation) != keys
+            or observation['outcome'] not in ('completed', 'cancelled', 'not_started')
+            or type(observation['reason']) is not str or not 1 <= len(observation['reason']) <= 128
+            or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789_' for c in observation['reason'])
+            or not integer(observation['output_bytes'], 0, MAX_OUTPUT)
+            or type(observation['elapsed_seconds']) not in (int, float)
+            or not 0 <= observation['elapsed_seconds'] <= LIMITS['total_seconds'] + LIMITS['cleanup_seconds']
+            or not math.isfinite(observation['elapsed_seconds'])
+            or not namespace_identity(observation['namespace_identity'])
+            or not file_pin(observation['outside_canary_before'])
+            or not file_pin(observation['outside_canary_after'])
+            or encoded(observation['outside_canary_before']) != encoded(job['request']['outside_pin'])
+            or encoded(observation['outside_canary_after']) != encoded(job['request']['outside_pin'])
+            or observation['outside_canary_unchanged'] is not True):
+        raise RecoveryError('terminal_observation_schema_invalid')
+    clean = observation['cleanup']
+    if (type(clean) is not dict or set(clean) != {'kernel_init_identity_received',
+            'namespace_init_exited', 'launcher_reaped', 'cleanup_confirmed',
+            'term_sent_to_init_pidfd', 'init_terminal_after_term', 'namespace_pid_numbers_used_for_signals'}
+            or any(clean[k] is not True for k in ('kernel_init_identity_received',
+                       'namespace_init_exited', 'launcher_reaped', 'cleanup_confirmed'))
+            or clean['namespace_pid_numbers_used_for_signals'] is not False
+            or type(clean['term_sent_to_init_pidfd']) is not bool
+            or (clean['term_sent_to_init_pidfd'] and type(clean['init_terminal_after_term']) is not bool)
+            or (not clean['term_sent_to_init_pidfd'] and clean['init_terminal_after_term'] is not None)):
+        raise RecoveryError('terminal_cleanup_evidence_invalid')
+    released = observation['source_ack_written']
     if type(released) is not bool or released != (observation['outcome'] in ('completed', 'cancelled')):
         raise RecoveryError('source_release_receipt_inconsistent')
     if released:
         if (type(admission) is not dict or set(admission) != set(bindings(job)) |
                 {'phase', 'namespace_identity', 'work_input_pin'}
-                or any(admission.get(key) != value for key, value in bindings(job).items())
+                or any(type(admission.get(key)) is not str or admission[key] != value
+                       for key, value in bindings(job).items())
                 or admission['phase'] != 'source_release_intent'
-                or observation.get('admission_sha256') != digest(encoded(admission))
+                or not namespace_identity(admission['namespace_identity'])
+                or not file_pin(admission['work_input_pin'])
+                or admission['work_input_pin']['size'] != len(b'synthetic')
+                or admission['work_input_pin']['sha256'] != digest(b'synthetic')
+                or observation['admission_sha256'] != digest(encoded(admission))
                 or state.get('admission_sha256') != digest(encoded(admission))
-                or admission.get('namespace_identity') != observation.get('namespace_identity')):
+                or encoded(admission['namespace_identity']) != encoded(observation['namespace_identity'])
+                or 'refusal' in state):
             raise RecoveryError('admission_receipt_missing_or_invalid')
-    elif admission is not None or observation.get('admission_sha256') is not None:
+    elif (admission is not None or observation['admission_sha256'] is not None
+            or 'admission_sha256' in state):
         raise RecoveryError('non_dispatch_proof_invalid')
+    frames = (('source_begin_frame', 'source_begin_sha256', 'source_started'),
+              ('source_result_frame', 'source_frame_sha256', 'result'))
+    for name, hash_name, phase in frames:
+        frame = observation[name]
+        if frame is None:
+            if observation[hash_name] is not None:
+                raise RecoveryError('source_frame_receipt_invalid')
+        else:
+            validate_frame(frame, job)
+            if (not released or frame['phase'] != phase or not sha256(observation[hash_name])
+                    or observation[hash_name] != digest(encoded(frame))):
+                raise RecoveryError('source_frame_receipt_invalid')
+    begin, final = observation['source_begin_frame'], observation['source_result_frame']
+    if ((begin is None and (final is not None or observation['source_checks'] is not None))
+            or (begin is not None and encoded(observation['source_checks']) != encoded(begin['checks']))):
+        raise RecoveryError('source_frame_order_or_checks_invalid')
+    if observation['outcome'] == 'completed':
+        if (observation['reason'] != 'completed' or begin is None or final is None
+                or not all(begin['checks'].values()) or not all(final['checks'].values())
+                or observation['output_bytes'] < len(encoded(begin)) + len(encoded(final)) + 2):
+            raise RecoveryError('completed_source_evidence_missing')
+    elif observation['reason'] == 'completed':
+        raise RecoveryError('non_completed_reason_invalid')
+    if 'refusal' in state and (observation['outcome'] != 'not_started' or observation['reason'] != state['refusal']):
+        raise RecoveryError('refusal_state_inconsistent')
+    if not released and (begin is not None or final is not None or observation['output_bytes'] != 0):
+        raise RecoveryError('non_dispatch_source_evidence_invalid')
     return receipt
 
 
 def inspect(directory):
     job = load_job(directory)
-    state = decoded(read_file(directory / 'state.json'))
-    admission = decoded(read_file(directory / 'admission.json')) if state.get('admission_sha256') else None
+    state = validate_state(decoded(read_file(directory / 'state.json')))
+    # A real admission must never disappear merely because state omits its hash.
+    admission_path = directory / 'admission.json'
+    admission = decoded(read_file(admission_path)) if os.path.lexists(admission_path) else None
     receipt = validate_receipt(decoded(read_file(directory / 'receipt.json')), state, job, admission)
     return {'result': 'linux_unqualified', 'backend_execution_qualified': False,
         'receipt_sha256': digest(encoded(receipt)), 'terminal_result': receipt['result'],
@@ -508,7 +717,7 @@ def inspect(directory):
 def corruptions(directory):
     """Metadata-only negative cases; never writes/reopens an existing attempt."""
     job = load_job(directory)
-    state = decoded(read_file(directory / 'state.json'))
+    state = validate_state(decoded(read_file(directory / 'state.json')))
     receipt = decoded(read_file(directory / 'receipt.json'))
     admission = decoded(read_file(directory / 'admission.json'))
     validate_receipt(receipt, state, job, admission)
@@ -543,8 +752,19 @@ def corruptions(directory):
 
 
 def controller(directory):
+    load_job(directory)
+    if validate_state(decoded(read_file(directory / 'state.json')))['phase'] != 'prepared':
+        return inspect(directory)
+    lock_fd = private_lock(directory, 'controller.lock')
+    try:
+        return _controller_locked(directory)  # Re-read state under the admission lock.
+    finally:
+        os.close(lock_fd)
+
+
+def _controller_locked(directory):
     job = load_job(directory)
-    state = decoded(read_file(directory / 'state.json'))
+    state = validate_state(decoded(read_file(directory / 'state.json')))
     if state.get('phase') != 'prepared':
         return inspect(directory)  # Receipt only; an open intent cannot be relaunched.
     base, _ = foundation(job['request']['foundation_sha256'])

@@ -7,12 +7,24 @@ planner. Every output retains `linux_unqualified` and
 subscription, service, account, sysctl, AppArmor or host permission configuration
 is involved. Only fixed synthetic canaries execute.
 
-The [19 October receipt](docs/linux-recovery-2026-10-19.json) binds driver
-SHA-256 `73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2`
-and unchanged foundation
+The [original 19 October receipt](docs/linux-recovery-2026-10-19.json)
+retains the five earlier measurements for driver `73389402…`. Its receipt
+reader was subsequently found to accept boolean/float launch counters and an
+incomplete `completed` observation in pure fixtures. Recomputed integrity hashes
+were not enough to reject those malformed records. Those measurements remain
+historical evidence, not qualification of the revised reader.
+
+The separate [schema-correction receipt](docs/linux-recovery-schema-2026-10-19.json)
+binds revised driver SHA-256
+`5b4061b7d7d8b34fb8d23902445fcc6266a32b99c3ccc81ea9cdfb048a3e0b75`
+and five fresh jobs. Protocol
+`synthetic-linux-recovery-v2` requires exact fields and primitive types in
+state, receipt, observation, admission, cleanup, namespace identity and pins.
+Job UUID/nonce and public runtime/tool inventories are also strictly bounded; an
+admission present on disk cannot be hidden by omitting its state reference.
+No old receipt is migrated or retroactively augmented with missing evidence.
+The foundation source remains
 `b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc`.
-It records five native jobs, their exact durable receipts, a sixth metadata-only
-negative scenario and cached consumption without another namespace launch.
 
 ## Durable protocol
 
@@ -23,7 +35,9 @@ runtime/tool pins, filter and hard limits. No credential path is accepted in
 the runtime inventory. Files are opened without following symlinks and checked
 for owner, type, link count and size. The request and directory are fsynced.
 
-An explicit controller records `launch_intent` before starting one helper.
+An explicit controller takes its private admission lock, rereads the state under
+that lock, and records `launch_intent` before starting one helper. Concurrent
+cooperating calls cannot regress a terminal state to a new launch intention.
 The helper runs in a separate session with no SSH/controller stdio, acquires
 the job lock, verifies the exact packet and pins, and durably records its
 single namespace launch intention. An existing open intention never starts
@@ -48,10 +62,18 @@ the attempt. Init/source never inherit this writer or reader. Source's separate
 ACK descriptor is closed before fixed code, together with other non-stdio
 descriptors. Queued heartbeats do not hide EOF.
 
-Each source-start/result frame carries protocol, job UUID, nonce, request hash,
+Each source-start/result frame is retained in the final receipt and carries protocol, job UUID, nonce, request hash,
 plan hash, driver/foundation/runtime hashes, phase and typed guard metadata.
 Duplicate JSON keys, nonfinite values, wrong identities, phase ordering and
-oversized output refuse the result. A source-start frame alone is not a final
+oversized output refuse the result. Receipt consumption recomputes each frame
+hash, checks its exact binding/phase/27 boolean guards/15 integer errno results,
+and verifies that `completed` has both frames and successful guards. Launch
+counters and output sizes are exact integers, never booleans or floats; elapsed
+time is finite and bounded. A `cleanup_confirmed` flag alone is insufficient:
+received kernel identity, init termination and launcher reaping are separately
+required, with strict boolean types and no namespace PID signaling. These are
+consistency checks of trusted measured records, not protection against an
+operator fabricating all their contents. A source-start frame alone is not a final
 source result. Cancelled jobs therefore retain a null final-source-frame hash.
 
 The helper independently observes init-pidfd termination and launcher reaping.
@@ -137,5 +159,5 @@ cd integrations/codex-personal
 python3 -m pytest -q tests/test_linux_recovery.py tests/test_linux_foundation.py tests/test_linux_feasibility.py
 ```
 
-The recorded run has 31 passing pure tests. Real scenario results and pure
+The revised recorded run has 44 passing pure tests, including thirteen schema/concurrency regression methods. Real scenario results and pure
 tests are separate evidence; neither declares the overall project finished.
