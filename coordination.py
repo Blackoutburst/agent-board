@@ -198,11 +198,17 @@ class CoordinationMixin(ProjectsMixin):
         result['waiting_on_human'] = any(item['status'] == 'open' for item in result['human_requests'])
         result['claim_expired'] = bool(row['status'] != 'done' and result['claimant'] and result['claimant']['kind'] == 'agent'
             and (row['lease_expires_at'] or 0) <= time.time())
+        # A stopped delegation family or an unconfirmed Runtime cleanup keeps
+        # an unclaimed open ticket from starting, whatever its stored status.
+        execution = (self._execution_block_reasons(db, row, durable=row['status'] != 'blocked')
+                     if row['status'] != 'done' else [])
+        derived_block = bool(execution) and row['status'] in ('todo', 'in_progress') and (
+            not result['claimant'] or result['claim_expired'])
         if row['status'] == 'done':
             result['work_state'] = 'done'
         elif result['waiting_on_human']:
             result['work_state'] = 'waiting_on_human'
-        elif result['blocked_by'] or row['status'] == 'blocked':
+        elif result['blocked_by'] or row['status'] == 'blocked' or derived_block:
             result['work_state'] = 'blocked'
         elif result['claim_expired']:
             result['work_state'] = 'recovery'
@@ -217,12 +223,17 @@ class CoordinationMixin(ProjectsMixin):
         result['assignee_presence'] = self._agent_presence(db, row['assignee_agent_id']) if identity else None
         result['assignment_stale'] = self._stale_agent_assignment(db, row)
         result['ready'] = result['work_state'] == 'ready'
-        result['block_reasons'] = (self._block_reasons(row, result)
-            + self._execution_block_reasons(db, row)) if row['status'] == 'blocked' else []
+        result['block_reasons'] = (self._block_reasons(row, result) + execution if row['status'] == 'blocked'
+                                   else execution if derived_block else [])
         return result
 
-    def _execution_block_reasons(self, db, row):
-        """Expose only generic reasons, never another executor's identity."""
+    def _execution_block_reasons(self, db, row, durable=False):
+        """Expose only generic reasons, never another executor's identity.
+
+        durable=True keeps only stops that persist without further changes:
+        a cancelled, finished or expired family and an unconfirmed cleanup,
+        not a family stop that a policy or grant change could undo.
+        """
         family = self._delegation_ticket_family(db, row['id'])
         tickets = [row['id']] if family is None else [family['parent_ticket_id']] + [
             member[0] for member in db.execute(
@@ -232,7 +243,9 @@ class CoordinationMixin(ProjectsMixin):
         if db.execute(f"SELECT 1 FROM runtime_executions WHERE ticket_id IN ({placeholders}) "
                       "AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1", tickets).fetchone():
             reasons.append('runtime_cleanup')
-        if family is not None and self._delegation_stop_reason(db, family):
+        if family is not None and (
+                self._delegation_stop_reason(db, family) in ('delegation_stopped', 'delegation_deadline')
+                if durable else self._delegation_stop_reason(db, family)):
             reasons.append('delegation')
         return reasons
 
@@ -777,7 +790,7 @@ class CoordinationMixin(ProjectsMixin):
             if not self._profile_project_allowed(db, actor, row['project_id']):
                 continue
             ticket = self._ticket(row, db)
-            if ticket['blocked_by'] or ticket['waiting_on_human']:
+            if ticket['blocked_by'] or ticket['waiting_on_human'] or ticket['block_reasons']:
                 continue
             if actor['kind'] == 'agent' and row['assignee_agent_id']:
                 identity_id = db.execute('SELECT agent_id FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()[0]
