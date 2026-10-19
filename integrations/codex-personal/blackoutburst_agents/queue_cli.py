@@ -8,6 +8,7 @@ import signal
 import threading
 
 from .board_worker import BoardWorker
+from .client_lifecycle import own_client
 from .context import ContextScope, _profile
 from .queue_client import QueueBoardClient, HumanQueueBoardClient
 from .queue_journal import QueueJournal, STAGES
@@ -149,8 +150,8 @@ def run(args):
                     output={'status':'exported','operation_id':operation['id'],'revision':operation['revision']}
                 elif args.queue_command=='reconcile-selection':
                     operation=journal.get(args.operation)
-                    client=QueueBoardClient.from_connection_file(args.connection_file,
-                        session_id=operation['scope']['board_session_id'])
+                    client=own_client(stack,QueueBoardClient.from_connection_file(args.connection_file,
+                        session_id=operation['scope']['board_session_id']))
                     output=_public(QueueWorker(journal,None,client).reconcile_selection(operation['id']))
                 else:output=_local_resolution(args,journal)
             else:
@@ -167,7 +168,7 @@ def run(args):
                 workspace=args.workspace.expanduser().resolve(strict=True)
                 if not workspace.is_dir():raise ValueError
                 client_class=HumanQueueBoardClient if args.human_owner is not None else QueueBoardClient
-                client=client_class.from_connection_file(args.connection_file,session_id=args.session)
+                client=own_client(stack,client_class.from_connection_file(args.connection_file,session_id=args.session))
                 scope={'owner_id':args.owner,'agent_id':args.agent,'board_session_id':args.session,'board_endpoint':client.endpoint}
                 if not args.execute:
                     registration=client.register()

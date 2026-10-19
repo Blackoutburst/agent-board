@@ -30,6 +30,14 @@ def _effect_receipt(step,manifest,broker):
         raw=entry['receipt']
         if kind=='test' and raw.get('cleanup_confirmed') is not True:
             raise DevelopmentError('development_cleanup_receipt_missing')
+        if kind=='test' and raw.get('result')=='not_started':
+            if (entry.get('admission',{}).get('dispatch')!='pending'
+                    or raw.get('started') is not False
+                    or raw.get('admission_sha256')!=digest(canonical(entry['admission']))):
+                raise DevelopmentError('development_cleanup_identity_changed')
+            if receipt is not None and receipt.get('receipt')!=raw:
+                raise DevelopmentError('development_cleanup_identity_changed')
+            return 'blocked'
         if receipt is None:return 'blocked'  # No post-effect inspection receipt.
         if (receipt if kind=='patch' else receipt.get('receipt'))!=raw:
             raise DevelopmentError('development_cleanup_identity_changed')

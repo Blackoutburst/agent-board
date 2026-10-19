@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "adapter_version": "0.24.0",
+  "date": "2026-10-19",
+  "scope": "persistent MCP transport and explicit client lifetimes",
+  "models": 0,
+  "real_authentication_material_in_receipt": false,
+  "automatic_http_retries": 0,
+  "local_tls": {
+    "synthetic": true,
+    "os": "darwin",
+    "tests": 38,
+    "test_files": [
+      "tests/test_persistent_transport.py",
+      "tests/test_board_reader.py"
+    ],
+    "elapsed_test_seconds": 6.15,
+    "rpc_count_each": 12,
+    "fresh_connections": 12,
+    "persistent_connections": 1,
+    "fresh_seconds": 0.018812,
+    "persistent_seconds": 0.003153,
+    "timing_speed_assertions": false,
+    "expired_connect_post_count": 0,
+    "closed_during_connect_post_count": 0,
+    "late_socket_closed": true
+  },
+  "owner_lifetimes": {
+    "targeted_tests": 142,
+    "tested_by": "separate implementation subtask",
+    "real_rpc_or_model": false
+  },
+  "remote_read_only_benchmark": {
+    "measured_rpc_count_each": 12,
+    "warmup_rpc_count_each": 1,
+    "method": "get_ticket",
+    "models": 0,
+    "mutations": 0,
+    "registrations": 0,
+    "automatic_retries": 0,
+    "server_connection_counts": null,
+    "fresh_total_seconds": 5.13858,
+    "fresh_median_seconds": 0.440947,
+    "persistent_total_seconds": 2.757605,
+    "persistent_median_seconds": 0.255702,
+    "total_reduction_percent": 46.34,
+    "measured_fresh_reader_sha256": "bc89090a685bfd1074afd4cdd5205831f0fdd91e387bc84371c055b1f799eb8d",
+    "measured_persistent_reader_sha256": "6d327f1131b3944f39722454cb864cd8585e578d433988ae660aaec5c8543661",
+    "measured_transport_sha256": "7db3e6138e466bc1fd400dd693a6875150389eff76b4acb4afc82d6c8ec25e08",
+    "measured_before_final_post_connect_guard": false
+  },
+  "source_sha256": {
+    "blackoutburst_agents/persistent_transport.py": "7db3e6138e466bc1fd400dd693a6875150389eff76b4acb4afc82d6c8ec25e08",
+    "blackoutburst_agents/board_reader.py": "6d327f1131b3944f39722454cb864cd8585e578d433988ae660aaec5c8543661",
+    "blackoutburst_agents/client_lifecycle.py": "11321f4c6c0615afc97324d7e9d26974b67c4821193aad000d0838f5ffaf7e68",
+    "tests/test_persistent_transport.py": "5ea748c738208b2dfbbb355e0b7ef8e6bd916f11841380fb643210771b3e2faa",
+    "tests/test_owner_client_lifecycle.py": "89f4bf3b2e2487f3acea0f27172378632eded974203a734cacbce9ee41440d0e",
+    "tests/test_small_owner_client_lifecycle.py": "5cdb5b4fc9387f4f7fcecd5212fb78c6dca7ff723a6294b7df5ebc213242da47"
+  },
+  "limits": [
+    "Loopback timings are not a remote performance guarantee.",
+    "The final source passed targeted TLS tests; remote connection counts were not instrumented.",
+    "A blocking OS DNS resolver is not strictly interruptible through socket timeout alone.",
+    "No complete family model pilot or native sandbox qualification is established by this receipt.",
+    "No automatic retry means a failed POST can remain remotely ambiguous; exact controller recovery remains required."
+  ]
+}

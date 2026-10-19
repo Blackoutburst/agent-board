@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 
+from .client_lifecycle import own_client
 from .run_store import RunStore
 from .runtime_client import RuntimeBoardClient
 from .runtime_guard import RuntimeGuard, RuntimeControlError
@@ -40,8 +41,8 @@ def run(args):
                         raise RuntimeControlError('runtime_development_scope_mismatch')
                     from .message_runtime import MessageRuntimeClient,MessageRuntimeGuard
                     client_kind,guard_kind=MessageRuntimeClient,MessageRuntimeGuard
-                client=client_kind.from_connection_file(args.connection_file,
-                    session_id=scope['board_session_id'],timeout=3)
+                client=own_client(stack,client_kind.from_connection_file(args.connection_file,
+                    session_id=scope['board_session_id'],timeout=3))
                 store=RunStore(args.state);stack.callback(store.close)
                 # Hold the model-work lock: a cached result cannot be reconciled
                 # while a cooperating model process still owns this work.

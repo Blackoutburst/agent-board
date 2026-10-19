@@ -19,6 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .persistent_transport import PersistentMCPTransport
+
 
 MAX_CONNECTION_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -196,15 +198,28 @@ class BoardReader:
         self._initialized = False
         self._registered = False
         self._transport_session = None
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _NoRedirect(),
-            urllib.request.HTTPSHandler(context=_tls_context()))
+        self._closed = False
+        self._opener = PersistentMCPTransport(_endpoint(config['mcp_url']), _tls_context())
+
+    def close(self):
+        if self._closed:return
+        self._closed=True
+        close=getattr(self._opener,'close',None)
+        if close is not None:close()
+
+    def __enter__(self):return self
+    def __exit__(self,*_):self.close()
+
+    def _discard_connection(self):
+        discard=getattr(self._opener,'discard',None)
+        if discard is not None:discard()
 
     @property
     def endpoint(self):
         return self._config['mcp_url']
 
     def _rpc(self, method, params):
+        if self._closed:raise BoardReadError('connection_closed')
         self._next_id += 1
         request_id = self._next_id
         try:
@@ -226,7 +241,9 @@ class BoardReader:
                 if response.geturl() != self._config["mcp_url"]:
                     raise BoardReadError("redirect_blocked")
                 if response.status != 200:
-                    raise BoardReadError("http_error")
+                    raise BoardReadError('redirect_blocked' if 300<=response.status<400 else
+                        'authentication_failed' if response.status==401 else
+                        'permission_denied' if response.status==403 else 'http_error')
                 length = response.headers.get("Content-Length")
                 if length is not None and (not length.isdecimal() or int(length) > MAX_RESPONSE_BYTES):
                     raise BoardReadError("response_too_large")
@@ -262,6 +279,7 @@ class BoardReader:
                     self._transport_session = session
                 raw = b"".join(parts)
         except BoardReadError:
+            self._discard_connection()
             raise
         except urllib.error.HTTPError as error:
             code = ("redirect_blocked" if 300 <= error.code < 400 else
@@ -275,14 +293,18 @@ class BoardReader:
             raise BoardReadError("timeout" if isinstance(error.reason, TimeoutError) else "connection_failed") from None
         except (OSError, ValueError, http.client.HTTPException):
             raise BoardReadError("connection_failed") from None
-        result = _sse(raw) if content_type == "text/event-stream" else _json(raw, "invalid_response")
-        if (not isinstance(result, dict) or result.get("jsonrpc") != "2.0"
-                or type(result.get("id")) is not int or result["id"] != request_id
-                or ("error" in result) == ("result" in result)):
-            raise BoardReadError("invalid_response")
-        if "error" in result:
-            raise BoardReadError("rpc_rejected")
-        return result["result"]
+        try:
+            result = _sse(raw) if content_type == "text/event-stream" else _json(raw, "invalid_response")
+            if (not isinstance(result, dict) or result.get("jsonrpc") != "2.0"
+                    or type(result.get("id")) is not int or result["id"] != request_id
+                    or ("error" in result) == ("result" in result)):
+                raise BoardReadError("invalid_response")
+            if "error" in result:
+                raise BoardReadError("rpc_rejected")
+            return result["result"]
+        except BoardReadError:
+            self._discard_connection()
+            raise
 
     def _initialize(self):
         if self._initialized:

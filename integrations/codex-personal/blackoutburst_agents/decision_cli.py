@@ -5,6 +5,7 @@ from pathlib import Path
 import stat
 
 from .board_reader import BoardReader, BoardReadError
+from .client_lifecycle import managed_client
 from .context import ContextError, ContextScope
 from .decision_memory import DecisionMemory, DecisionMemoryError, MAX_SUMMARY_BYTES, memory_scope
 from .runner_cli import _write_private
@@ -48,11 +49,11 @@ def run(args):
         scope=memory_scope(args.endpoint,ContextScope(args.owner,args.agent,args.project,args.ticket))
         with DecisionMemory(args.state,create=args.memory_command=='pin') as memory:
             if args.memory_command=='pin':
-                reader=BoardReader.from_connection_file(args.connection_file,session_id=args.session)
-                if reader.endpoint!=args.endpoint:raise DecisionMemoryError('decision_scope_invalid')
-                result=memory.pin(scope,expected_revision=args.revision,summary=read_summary(args.summary_file),
-                    thread_id=args.thread,message_id=args.message,call=reader.call,registration=reader.register(),decision_id=args.decision)
-                output={'status':'pinned',**result}
+                with managed_client(BoardReader.from_connection_file(args.connection_file,session_id=args.session)) as reader:
+                    if reader.endpoint!=args.endpoint:raise DecisionMemoryError('decision_scope_invalid')
+                    result=memory.pin(scope,expected_revision=args.revision,summary=read_summary(args.summary_file),
+                        thread_id=args.thread,message_id=args.message,call=reader.call,registration=reader.register(),decision_id=args.decision)
+                    output={'status':'pinned',**result}
             elif args.memory_command=='inspect':
                 snapshot=memory.inspect(scope)
                 _write_private(args.output,json.dumps(snapshot,ensure_ascii=False,indent=2)+'\n')

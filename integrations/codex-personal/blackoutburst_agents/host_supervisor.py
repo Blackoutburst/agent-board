@@ -8,6 +8,7 @@ from contextlib import contextmanager, ExitStack
 import time
 
 from .board_reader import BoardReadError
+from .client_lifecycle import own_client
 from .board_worker import BoardWorker
 from .context import ContextScope, _profile
 from .event_client import EventBoardClient, HumanEventBoardClient
@@ -81,13 +82,13 @@ class _ExactWorker:
 def default_resources(host, target, scope, cancelled):
     with ExitStack() as resources:
         kind = HumanEventBoardClient if target.get('human_owner_id') else EventBoardClient
-        raw = kind.from_connection_file(target['connection_file'], session_id=scope['board_session_id'])
+        raw = own_client(resources, kind.from_connection_file(target['connection_file'], session_id=scope['board_session_id']))
         client = PinnedClient(raw, host, target, scope, cancelled)
         events = resources.enter_context(EventJournal(host.directory / 'events'))
         work = resources.enter_context(WorkJournal(host.directory / 'work'))
         runs = RunStore(host.directory / 'runs'); resources.callback(runs.close)
         runtime = resources.enter_context(RuntimeJournal(host.directory / 'runtime'))
-        runtime_client = RuntimeBoardClient.from_worker(raw)
+        runtime_client = own_client(resources, RuntimeBoardClient.from_worker(raw))
         worker = BoardWorker(work, runs, client, runtime_guard_factory=lambda exact:
                              RuntimeGuard(runtime, runtime_client, exact))
         yield EventDrainer(events, worker, client)

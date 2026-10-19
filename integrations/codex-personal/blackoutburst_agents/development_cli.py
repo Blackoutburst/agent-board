@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from .board_reader import BoardReadError
+from .client_lifecycle import own_client
 from .development_client import DevelopmentBoardClient
 from .development_worker import DevelopmentBoardWorker
 from .dev_journal import PrivateDirectory, decode
@@ -109,7 +110,7 @@ def run(args):
                     budgets.document()
                     store=stack.enter_context(closing(RunStore(args.state)))
                     runtime=stack.enter_context(RuntimeJournal(args.runtime_journal))
-                    client=DevelopmentBoardClient.from_connection_file(args.connection_file,session_id=args.session,timeout=3)
+                    client=own_client(stack,DevelopmentBoardClient.from_connection_file(args.connection_file,session_id=args.session,timeout=3))
                     scope={key+'_id':getattr(args,key) for key in ('owner','agent','project','ticket')}
                     scope.update(board_endpoint=client.endpoint,board_session_id=args.session)
                 else:
@@ -117,12 +118,12 @@ def run(args):
                     pins=op['configuration']['pins']
                     store=stack.enter_context(closing(RunStore(pins['runs']['path'])))
                     runtime=stack.enter_context(RuntimeJournal(pins['runtime']['path']))
-                    client=DevelopmentBoardClient.from_connection_file(args.connection_file,
-                        session_id=op['scope']['board_session_id'],timeout=3)
+                    client=own_client(stack,DevelopmentBoardClient.from_connection_file(args.connection_file,
+                        session_id=op['scope']['board_session_id'],timeout=3))
                     if client.endpoint!=op['scope']['board_endpoint']:
                         raise DevelopmentError('development_connection_scope_mismatch')
                     client.adopt_registration()
-                control=RuntimeBoardClient.from_worker(client)
+                control=own_client(stack,RuntimeBoardClient.from_worker(client))
                 worker=DevelopmentBoardWorker(journal,store,runtime,client,control)
                 if command=='prepare':
                     result=worker.prepare(scope=scope,request_id=args.request,instruction=instruction,
