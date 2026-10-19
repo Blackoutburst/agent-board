@@ -16,7 +16,8 @@ class PersonalRunner:
         self.runtime_guard = runtime_guard
 
     def run(self, work_id: str, request_id: str, prompt: str, *,
-            timeout: float = 120, should_cancel: Callable[[], bool] | None = None, context_guard=None) -> dict:
+            timeout: float = 120, should_cancel: Callable[[], bool] | None = None, context_guard=None,
+            before_prompt: Callable[[], None] | None = None) -> dict:
         """Process one explicit input. Retrying its key never starts another turn.
 
         The returned result may contain model text. Callers must treat it as
@@ -49,12 +50,15 @@ class PersonalRunner:
                     or (self.runtime_guard is not None and self.runtime_guard.should_cancel()))
 
             try:
+                # Opt-in only: existing transports retain their original kwargs.
+                prompt_guard = {} if before_prompt is None else {'before_prompt': before_prompt}
                 result = self.transport(
                     settings, prompt, Path(work['workspace']),
                     resume_session_id=work['provider_session_id'],
                     on_started=lambda pid: self.store.on_process(turn_id, pid),
                     on_session=lambda sid: self.store.on_session(turn_id, sid),
                     should_cancel=cancelled,
+                    **prompt_guard,
                 )
             except Exception:
                 # The transport owns process cleanup in its finally block.

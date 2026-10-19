@@ -31,7 +31,8 @@ class DevelopmentBoardWorker:
     def __init__(self, journal, store, runtime_journal, client, control_client, *,
                  backend_factory=SupervisedNativeNamedPythonBackend, policy_factory=PlannerPolicy,
                  planner_factory=DevelopmentPlanner, _transport=None, _test_anchor=None,
-                 _allow_fixture_backend=False, clock=time.time, controller_scope=None, controller_guard=None, delegation_guard=None, fence_intent=None):
+                 _allow_fixture_backend=False, clock=time.time, controller_scope=None, controller_guard=None, delegation_guard=None, fence_intent=None,
+                 controller_local_guard=None):
         self.journal, self.store, self.runtime = journal, store, runtime_journal
         self.client, self.control = client, control_client
         self.backend_factory, self.policy_factory, self.planner_factory = backend_factory, policy_factory, planner_factory
@@ -41,15 +42,25 @@ class DevelopmentBoardWorker:
                     {'kind','operation_id','family_id','slot','plan_sha256','configuration_sha256','journal'}
                     or controller_scope['kind'] != 'delegation_family'
                     or controller_scope['slot'] not in ('child_0','child_1','parent')
-                    or not callable(controller_guard) or not callable(delegation_guard) or not callable(fence_intent)):
+                    or not callable(controller_guard) or not callable(controller_local_guard)
+                    or not callable(delegation_guard) or not callable(fence_intent)):
                 raise DevelopmentError('invalid_development_controller')
             development_work_id(controller_scope['operation_id'])
             opaque(controller_scope['family_id']);sha256(controller_scope['plan_sha256'])
             sha256(controller_scope['configuration_sha256'])
-        elif controller_guard is not None or delegation_guard is not None or fence_intent is not None:
+        elif (controller_guard is not None or controller_local_guard is not None
+                or delegation_guard is not None or fence_intent is not None):
             raise DevelopmentError('invalid_development_controller')
         self.controller_scope = deepcopy(controller_scope)
         self.controller_guard, self.delegation_guard, self.fence_intent = controller_guard, delegation_guard, fence_intent
+        self.controller_local_guard = controller_local_guard
+
+    def _local_control(self, operation_id, *, inspection=False):
+        """Local operation/family stop checks, without the remote controller guard."""
+        if not inspection and self._stopped(operation_id):raise DevelopmentError('development_stop_requested')
+        if self.controller_scope is not None and self.controller_local_guard(inspection=inspection) is not True:
+            raise DevelopmentError('development_controller_stopped')
+        return True
 
     def _controller_cancelled(self, operation_id=None, *, inspection=False):
         if not inspection and operation_id is not None and self._stopped(operation_id):
@@ -470,6 +481,7 @@ class DevelopmentBoardWorker:
                                 lambda target:self.fence_intent('planner',target),
                             fence_verify=None if self.fence_intent is None else
                                 lambda target:self._verify_family_binding(target,'planner'),
+                            local_guard=lambda **options:self._local_control(op['id'],**options),
                             _transport=self.transport,_test_anchor=self.test_anchor,
                             _allow_fixture_backend=self.allow_fixture,_clock=self.clock)
                         try:

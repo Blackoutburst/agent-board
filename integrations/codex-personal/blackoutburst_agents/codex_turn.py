@@ -131,6 +131,7 @@ def execute_turn(
     on_session: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     planner_policy=None,
+    before_prompt: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Run one text turn, returning only its final message and safe checks.
 
@@ -138,6 +139,8 @@ def execute_turn(
     synchronously on the first valid thread.started, before subsequent events are
     processed. Callers can therefore persist identities before accepting results.
     Callback failures stop the owned process group and block the turn.
+    ``before_prompt`` is an opt-in forced authority check at the first stdin
+    write, after metadata/policy checks. Polling callbacks cannot replace it.
     """
     verification: dict[str, object] = {
         "exit_zero": False, "turn_completed": False, "session_verified": False,
@@ -153,6 +156,8 @@ def execute_turn(
         return result
     try:
         if not isinstance(prompt, str):
+            return result
+        if before_prompt is not None and not callable(before_prompt):
             return result
         prompt_bytes = prompt.encode("utf-8", "strict")
         if not prompt_bytes or len(prompt_bytes) > _PROMPT_LIMIT:
@@ -334,6 +339,19 @@ def execute_turn(
                 break
             for key, _ in selector.select(min(remaining, 0.05)):
                 if key.data == "stdin":
+                    if written == 0 and before_prompt is not None:
+                        try:
+                            if before_prompt() is not None:
+                                raise ValueError('invalid_prompt_guard_result')
+                        except Exception:
+                            failure = "callback_failed"
+                            break
+                        failure = cancellation()
+                        if failure:
+                            break
+                        if time.monotonic() >= deadline:
+                            failure = "timeout"
+                            break
                     try:
                         written += os.write(key.fd, prompt_bytes[written:written + 16384])
                     except BlockingIOError:

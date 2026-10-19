@@ -96,18 +96,21 @@ class DevelopmentPlanner:
     def __init__(self, *, broker, store, runtime_journal, control_client, board_scope,
                  planner_policy, authorization, claim_id, instruction, model,
                  budgets=None, enabled=False, _test_anchor=None, _transport=None,
-                 _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None, fence_intent=None, fence_verify=None):
+                 _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None, fence_intent=None, fence_verify=None,
+                 local_guard=None):
         self.broker, self.store, self.runtime_journal = broker, store, runtime_journal
         self.client, self.scope, self.policy = control_client, dict(board_scope), planner_policy
         self.authorization, self.claim_id, self.clock = authorization, opaque(claim_id), _clock
         self.enabled, self.active_guard, self.journal, self.fence = enabled, None, None, None
+        self.local_guard, self._last_local_time = local_guard, None
         self._base_authorize = broker.authorize_scope
         if ((fence_intent is not None and (not callable(fence_intent) or not callable(fence_verify) or parent_operation is None))
                 or (fence_intent is None and fence_verify is not None)):
             raise DevelopmentError('invalid_planner_parent')
         self.fence_intent, self.fence_verify = fence_intent, fence_verify
         if (type(enabled) is not bool or type(_allow_fixture_backend) is not bool
-                or not callable(authorization)):
+                or not callable(authorization) or local_guard is not None and not callable(local_guard)
+                or fence_intent is not None and local_guard is None):
             raise DevelopmentError('invalid_planner_controller')
         if not enabled:
             # A disabled probe must not reserve a checkout indefinitely.
@@ -235,10 +238,12 @@ class DevelopmentPlanner:
 
     def _time(self, state):
         now = self.clock()
-        if type(now) not in (int, float) or not math.isfinite(now) or now < state['started_at']:
+        if (type(now) not in (int, float) or not math.isfinite(now) or now < state['started_at']
+                or self._last_local_time is not None and now < self._last_local_time):
             raise DevelopmentError('planner_clock_changed')
         if now >= state['deadline']:
             raise DevelopmentError('planner_wall_budget_exhausted')
+        self._last_local_time = now
         return now
 
     def _grant(self, action=None):
@@ -262,7 +267,8 @@ class DevelopmentPlanner:
         except Exception:
             raise DevelopmentError('planner_authorization_changed') from None
 
-    def _fresh(self, state, action=None, *, inspection=False):
+    def _local_fresh(self, state, *, inspection=False):
+        """Local polling only; never compose shared context or grant snapshots."""
         if not self.enabled:
             raise DevelopmentError('planner_disabled')
         if self.fence_verify is None:self.fence.verify(self.binding, self.operation_id)
@@ -271,14 +277,22 @@ class DevelopmentPlanner:
             self._time(state)
         if not inspection and self.journal.stopped():
             raise DevelopmentError('planner_stop_requested')
-        self._grant(action)
+        if self.local_guard is not None and self.local_guard(inspection=inspection) is not True:
+            raise DevelopmentError('planner_controller_stopped')
         for pin in self.configuration['pins'].values():
             if _directory_pin(pin['path']) != pin:
                 raise DevelopmentError('planner_directory_changed')
 
+    def _fresh(self, state, action=None, *, inspection=False):
+        self._local_fresh(state, inspection=inspection)
+        self._grant(action)
+        # A full remote snapshot may take time. It never extends local budgets
+        # or hides a stop/path replacement that happened while it was read.
+        self._local_fresh(state, inspection=inspection)
+
     def _cancelled(self, state):
         try:
-            self._fresh(state)
+            self._local_fresh(state)
             return bool(self.active_guard and self.active_guard.should_cancel())
         except Exception:
             return True
@@ -322,7 +336,8 @@ class DevelopmentPlanner:
             response = self.runner.run(self.work['id'], step['request_id'], step['prompt'],
                 timeout=min(self.configuration['budgets']['turn_timeout_seconds'],
                             max(0.01, state['deadline'] - self._time(state))),
-                should_cancel=lambda: self._cancelled(state))
+                should_cancel=lambda: self._cancelled(state),
+                before_prompt=lambda: self._fresh(state))
         finally:
             self.active_guard = None
         self._accept_model(state, response['result'], response['turn_id'])

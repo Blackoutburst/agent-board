@@ -74,15 +74,43 @@ revalidates the shared context and seals it with the instruction and parent
 operation, as described in `DEVELOPMENT_CLI.md`. A real pilot still requires
 explicit grants and separately qualified policies; this test lot uses fixtures.
 
+From adapter 0.23, cancellation polling uses `_local_fresh`: enabled state,
+canonical fence, directory pins, durable stop and local deadline checks. A family
+also supplies a mandatory `controller_local_guard` through its worker, passed to
+the planner as `local_guard`. It checks the family's exact private identity,
+controller source pins, own stop marker and deadline without a Board request.
+This includes `family stop-local`, which need not signal each child journal.
+Polling then uses the existing Runtime control callback, which sends a heartbeat
+at most once every five seconds. A lost or invalid control response latches
+cancellation for that turn; a later successful response cannot clear it.
+
+Full `_fresh` checks still read current grants, claim, context and family state
+at execution boundaries. They run before model admission, after Runtime admission,
+after the model result and before broker effects, as well as during final audit
+and publication checks. The opt-in `before_prompt` callback is forwarded by
+`PersonalRunner` and runs after CLI metadata/policy inspection, immediately before
+the first prompt bytes are written. Its failure stops and cleans up the owned
+process without sending the prompt. Local checks run again after each full remote
+check, so time spent reading the Board never extends a budget or hides a local
+stop. Existing callers that omit `before_prompt` keep their transport interface.
+
+Runtime control checks remote revocation, current claims and family controls; it
+does not attest the sealed project text or history. A source edit during a model
+turn may therefore be observed only by the full check after the result, before
+that result can authorize an action. No source snapshot is silently replaced,
+and no cancellation poll grants permission to execute a tool.
+
 ## Durable stop, budgets and canonical fence
 
 `planner.json`, `planner.lock` and an irreversible `planner-stop.json` are fixed
 names in the broker's private directory. Every step receives one UUID and stable
 model request/action keys before any effect. Total turn/action/byte budgets and
 an absolute wall deadline according to the trusted system clock survive reopening;
-nonfinite clocks or a time before the operation start refuse. This is not an
-anti-manipulation guarantee for the OS clock, and a smaller backwards adjustment
-that remains after the start is not detected.
+nonfinite clocks or a time before the operation start refuse. From adapter 0.23,
+the planner and family controller also reject backwards movement from their
+last successful local time check in the current instance. That in-memory check
+does not survive reopening and does not attest the OS clock or prevent durable
+state rollback.
 Reads and source-proof snapshots also consume the broker's existing budgets.
 Oversized prompts/results refuse rather than silently truncate.
 
@@ -107,6 +135,12 @@ same family, slot and workflow. Stop older coordinators before sharing a newer
 anchor. Missing active rows or an incomplete family require review, never an
 automatic replacement reservation. See [the family recovery procedure](FAMILY.md)
 for the matching private state and receipt-only cleanup rules.
+
+Changed controller/package sources invalidate their existing pins. Preserve the
+matching old code and journals for receipt-only recovery; a new execution requires
+an explicit new preparation and the qualifications required by its changed pins.
+Do not silently resume an old operation under this adapter version or repin its
+provider dialogue.
 
 This fence is local to one OS user and machine. It does not resist an administrator
 or the same user erasing private state, and provides no cross-host coordination.

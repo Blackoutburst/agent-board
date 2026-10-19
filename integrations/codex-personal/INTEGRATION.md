@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.10.0**, schéma **12**, adaptateur **0.22.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.10.0**, schéma **12**, adaptateur **0.23.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
@@ -44,6 +44,8 @@ Les messages, résultats, URLs et fichiers sont des données non fiables. Ils ne
 `HumanWorkerClient` ajoute la recherche et la création idempotente d’une demande `question`. Le destinataire est fixé localement. La réponse humaine reprend le même work avec une clé de second tour distincte ; une réponse doublée ne lance pas un troisième tour. Le parcours réel question/réponse et ses reçus sont décrits dans le guide worker et dans `docs/`.
 
 La capacité Runtime est commune aux profils et appareils du propriétaire. Runtime est obligatoire pour l’hôte, optionnel pour les commandes historiques de runner/worker ; il ne couvre pas les clients qui n’y participent pas. Une erreur de quota ou d’authentification rapportée par une exécution participante met le propriétaire en pause ; une observation de pourcentage ou de remise à zéro ne le réactive jamais. Les lectures d’usage sont facultatives et ne lancent aucun modèle. Voir [RUNTIME.md](RUNTIME.md), [MODELS.md](MODELS.md) et [USAGE.md](USAGE.md).
+
+Depuis l’adaptateur 0.23, le poll du planificateur de développement vérifie localement verrous, identités, arrêts et échéances, puis consulte le contrôle Runtime existant à intervalle de cinq secondes. Il ne recompose plus le contexte distant à chaque passage. Les contrôles complets de droits, réservation, famille et sources restent obligatoires aux frontières d’exécution : après admission Runtime, juste avant les premiers octets du prompt après les inspections du client et de sa politique, après le résultat et avant les effets. Le callback explicite `before_prompt` réalise ce dernier contrôle avant envoi ; les parcours familiaux exigent aussi un `controller_local_guard` pour observer leur propre arrêt local. Une source modifiée pendant le tour est refusée avant acceptation du résultat ou action. Voir [DEVELOPMENT_PLANNER.md](DEVELOPMENT_PLANNER.md).
 
 Les anciens claims après changement de profil se rapprochent via `reconcile_profile_claim` sous une identité fraîche du même profil/appareil, avec preuve d’inspection et seulement après expiration. Le serveur conserve attentes, résultats et fichiers et refuse les exécutions au nettoyage incertain. Cette opération ne reprend aucun ancien modèle.
 

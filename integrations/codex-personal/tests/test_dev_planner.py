@@ -137,8 +137,9 @@ class PlannerTests(unittest.TestCase):
     def transport(self, settings, prompt, workspace, **callbacks):
         self.assertEqual(str(workspace), str(self.planner_root))
         self.assertEqual(list(workspace.iterdir()), [])
-        self.transports.append({'prompt': prompt, 'resume': callbacks['resume_session_id']})
         callbacks['on_started'](999999999)
+        if 'before_prompt' in callbacks:callbacks['before_prompt']()
+        self.transports.append({'prompt': prompt, 'resume': callbacks['resume_session_id']})
         sid = callbacks['resume_session_id'] or str(uuid.uuid4())
         callbacks['on_session'](sid)
         if self.during_model:
