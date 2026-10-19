@@ -51,6 +51,13 @@ the six controller-module pins and from the model's data-file permissions.
 Adapter 0.25 sends bounded canonical JSON control frames through its owned
 pipe. Each frame binds schema 1, the exact job nonce, a consecutive sequence,
 monotonic `started_at` and `validated_at`, and `deadline = started_at + 1.5`.
+All shared timestamps use the explicit OS `clock_gettime(CLOCK_MONOTONIC)`
+domain in the controller and helper, never a runtime-relative epoch. This
+supports the protected system helper even when it uses macOS Python 3.9;
+[Python's default monotonic clock became system-wide there in 3.10](https://docs.python.org/3.12/library/time.html#time.monotonic).
+The [POSIX clock contract](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html)
+provides the common domain. An unavailable/failed clock refuses; there is no
+fallback or recalibration at receipt. Purely local wall timeouts remain separate.
 Every frame requires a new complete authorization collection. Collection and
 sending must finish before both its own deadline and the previous window's
 deadline. The 1.5-second TTL is unchanged; late validation never restarts it.

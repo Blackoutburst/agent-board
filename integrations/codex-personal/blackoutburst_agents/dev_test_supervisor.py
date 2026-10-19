@@ -38,6 +38,18 @@ MAX_CONTROL_FRAMES = 64
 MAX_CONTROL_SEQUENCE = 65536
 
 
+def _control_clock():
+    """One OS clock domain across protected helper/controller Python versions.
+
+    macOS Python <3.10 makes time.monotonic process-relative. POSIX's system
+    CLOCK_MONOTONIC is shared; absence/failure must never select another clock.
+    """
+    try:
+        return time.clock_gettime(time.CLOCK_MONOTONIC)
+    except (AttributeError, OSError, ValueError):
+        raise DevelopmentError('supervisor_clock_unavailable') from None
+
+
 def _control_number(value):
     if type(value) not in (int, float):
         return False
@@ -81,7 +93,7 @@ def _validate_control_window(value, *, nonce, now, previous=None, allow_expired=
 
 def _fresh_control_window(authorize, *, nonce, sequence, previous=None, clock=None):
     """One full fresh collection per frame; oldest data sets its age."""
-    clock = time.monotonic if clock is None else clock
+    clock = _control_clock if clock is None else clock
     started = _control_time(clock)
     if previous is not None and started < previous['validated_at']:
         raise DevelopmentError('supervisor_clock_changed')
@@ -104,7 +116,7 @@ def _fresh_control_window(authorize, *, nonce, sequence, previous=None, clock=No
 
 
 def _send_control_window(descriptor, value, *, previous=None, clock=None):
-    clock = time.monotonic if clock is None else clock
+    clock = _control_clock if clock is None else clock
     if type(value) is not dict or type(value.get('nonce')) is not str:
         raise DevelopmentError('supervisor_control_invalid')
     sent_at = _control_time(clock)
@@ -244,7 +256,7 @@ def prepare_supervision(directory, *, executable='/usr/bin/python3'):
 class _ControlPipe:
     def __init__(self, descriptor=0, *, nonce, initial, clock=None):
         self.fd = descriptor
-        self.clock = time.monotonic if clock is None else clock
+        self.clock = _control_clock if clock is None else clock
         self.last_now = _control_time(self.clock)
         _validate_control_window(initial, nonce=nonce, now=self.last_now, allow_expired=True)
         self.nonce, self.initial = nonce, decode(canonical(initial))
@@ -492,7 +504,7 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
     def _launch(self, packet_name):
         self._supervision_pins()
         packet = decode(self.private.read(packet_name, MAX_DOCUMENT))
-        _validate_control_window(packet['control'], nonce=packet['nonce'], now=_control_time(time.monotonic))
+        _validate_control_window(packet['control'], nonce=packet['nonce'], now=_control_time(_control_clock))
         package_root = str(Path(__file__).parent.parent)
         env = {key: os.environ[key] for key in ('HOME', 'CODEX_HOME', 'TMPDIR') if key in os.environ}
         env.update({'LANG': 'C', 'PATH': '/usr/bin:/bin'})

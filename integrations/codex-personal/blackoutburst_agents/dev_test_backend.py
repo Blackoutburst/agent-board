@@ -43,7 +43,7 @@ PRELAUNCH_REASONS = frozenset({'permission_revoked', 'test_backend_unqualified',
     'trusted_script_directory_refused', 'workspace_identity_changed',
     'supervisor_controller_changed', 'supervisor_workspace_overlap',
     'test_backend_busy', 'test_backend_access_failed', 'native_prelaunch_failed',
-    'supervisor_authorization_expired', 'supervisor_clock_changed', 'supervisor_control_invalid'})
+    'supervisor_authorization_expired', 'supervisor_clock_changed', 'supervisor_clock_unavailable', 'supervisor_control_invalid'})
 
 
 def _prelaunch_reason(error):

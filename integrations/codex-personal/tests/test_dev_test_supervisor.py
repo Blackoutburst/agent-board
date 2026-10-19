@@ -10,7 +10,7 @@ from unittest.mock import patch
 from blackoutburst_agents.dev_manifest import DevelopmentError, canonical, digest
 from blackoutburst_agents.dev_test_backend import _receipt
 from blackoutburst_agents.dev_test_supervisor import (SUPERVISED_CHECKS, SupervisedNativeNamedPythonBackend,
-    BOOTSTRAP, CONTROLLER_FILES, _ControlPipe, _ancestor_identities, prepare_supervision, supervise_packet)
+    BOOTSTRAP, CONTROLLER_FILES, _ControlPipe, _control_clock, _ancestor_identities, prepare_supervision, supervise_packet)
 import test_dev_test_backend as backend_fixture
 
 
@@ -155,7 +155,7 @@ class SupervisorTests(unittest.TestCase):
         read, write = os.pipe()
         self.addCleanup(os.close, read)
         import time
-        now=time.monotonic()
+        now=_control_clock()
         frame={'schema':1,'nonce':'a'*32,'sequence':1,'started_at':now,'validated_at':now,'deadline':now+1.5}
         control = _ControlPipe(read,nonce='a'*32,initial=frame)
         self.assertFalse(control.authorized())
@@ -171,7 +171,7 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(os.close, read)
         self.addCleanup(os.close, write)
         frame={'schema':1,'nonce':'a'*32,'sequence':1,'started_at':0.0,'validated_at':0.0,'deadline':1.5}
-        with patch('blackoutburst_agents.dev_test_supervisor.time.monotonic', return_value=0):
+        with patch('blackoutburst_agents.dev_test_supervisor._control_clock', return_value=0):
             control = _ControlPipe(read,nonce='a'*32,initial=frame)
             self.assertFalse(control.authorized())
             os.write(write, canonical(frame)+b'\n')
@@ -260,7 +260,7 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(os.close, read)
         self.addCleanup(os.close, write)
         import time
-        now=time.monotonic()
+        now=_control_clock()
         control = _ControlPipe(read,nonce='a'*32,initial={'schema':1,'nonce':'a'*32,'sequence':1,
             'started_at':now,'validated_at':now,'deadline':now+1.5})
         os.write(write, b'G!')

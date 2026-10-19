@@ -248,6 +248,7 @@ class SupervisorFreshStartupTests(unittest.TestCase):
             self.complete(packet)
             return helper
         with patch('blackoutburst_agents.dev_test_supervisor.time.monotonic', self.clock), \
+                patch('blackoutburst_agents.dev_test_supervisor._control_clock', self.clock), \
                 patch.object(self.backend, 'qualified_for', return_value=True), \
                 patch.object(self.backend, '_authorize', side_effect=lambda: authorizations.append(True)), \
                 patch.object(self.backend, '_launch', side_effect=launch):
@@ -262,6 +263,7 @@ class SupervisorFreshStartupTests(unittest.TestCase):
             if len(calls) == 3:
                 self.clock.advance(1.5)
         with patch('blackoutburst_agents.dev_test_supervisor.time.monotonic', self.clock), \
+                patch('blackoutburst_agents.dev_test_supervisor._control_clock', self.clock), \
                 patch.object(self.backend, 'qualified_for', return_value=True), \
                 patch.object(self.backend, '_authorize', side_effect=authorize), \
                 patch.object(self.backend, '_launch') as launch, self.assertRaises(DevelopmentError):
@@ -336,6 +338,7 @@ class SupervisorFreshStartupTests(unittest.TestCase):
                 sent.append((json.loads(raw), len(events)))
             return original_write(descriptor, raw)
         with patch('blackoutburst_agents.dev_test_supervisor.time.monotonic', self.clock), \
+                patch('blackoutburst_agents.dev_test_supervisor._control_clock', self.clock), \
                 patch('blackoutburst_agents.dev_test_supervisor.time.sleep', side_effect=self.clock.advance), \
                 patch('blackoutburst_agents.dev_test_supervisor.os.write', side_effect=write), \
                 patch.object(self.backend, 'qualified_for', return_value=True), \
