@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import threading
 import uuid
 
@@ -16,6 +17,203 @@ from .dev_manifest import (DevelopmentError, MAX_MANIFEST_BYTES, absolute_direct
 
 
 MAX_STATE_BYTES = 2 * 1024 * 1024
+
+
+def _lease_error():
+    raise DevelopmentError('journal_lock_lease_invalid') from None
+
+
+def _lease_chain(path):
+    descriptor = None
+    result = []
+    try:
+        descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in [None] + list(Path(path).parts[1:]):
+            if part is not None:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                os.close(descriptor);descriptor = child
+            info = os.fstat(descriptor)
+            result.append((info.st_dev, info.st_ino, info.st_uid, info.st_mode))
+        return tuple(result)
+    finally:
+        if descriptor is not None:os.close(descriptor)
+
+
+MAX_LOCK_FDINFO = 4096
+
+
+def _linux_lock_supported():
+    return sys.platform == 'linux'
+
+
+def _parse_lock_fdinfo(data, *, pid, device, inode):
+    """Strict observation codec, not authority without the private proc read."""
+    if (any(type(value) is not int for value in (pid,device,inode))
+            or pid <= 0 or device < 0 or inode <= 0
+            or type(data) is not bytes or not 0 < len(data) <= MAX_LOCK_FDINFO
+            or not data.endswith(b'\n') or b'\r' in data or b'\x00' in data):_lease_error()
+    try:
+        values = {}
+        for line in data.decode('ascii').splitlines():
+            key, value = line.split(':', 1)
+            if key in values: _lease_error()
+            values[key] = value.strip(' \t')
+        if set(values) != {'pos','flags','mnt_id','ino','lock'}:_lease_error()
+        def number(value, base=10, maximum=(1 << 64)-1):
+            pattern = '[0-9]{1,20}' if base == 10 else '[0-7]{1,16}' if base == 8 else '[0-9a-fA-F]{1,8}'
+            if not re.fullmatch(pattern, value):_lease_error()
+            result = int(value, base)
+            if result > maximum:_lease_error()
+            return result
+        number(values['pos'], maximum=(1 << 63)-1)
+        flags = number(values['flags'], 8, (1 << 32)-1)
+        mount = number(values['mnt_id'], maximum=(1 << 31)-1)
+        if not mount or number(values['ino']) != inode or flags & os.O_ACCMODE != os.O_RDWR:_lease_error()
+        lock = values['lock'].split()
+        if (len(lock) != 8 or not lock[0].endswith(':') or not number(lock[0][:-1])
+                or lock[1:4] != ['FLOCK','ADVISORY','WRITE'] or number(lock[4]) != pid
+                or lock[6:] != ['0','EOF']):_lease_error()
+        parts = lock[5].split(':')
+        if (len(parts) != 3 or number(parts[0],16) != os.major(device)
+                or number(parts[1],16) != os.minor(device) or number(parts[2]) != inode):_lease_error()
+        return mount, flags
+    except (UnicodeError,ValueError,TypeError,OverflowError):
+        _lease_error()
+
+
+def _linux_lock_observation(descriptor, *, pid, expected):
+    """Read this process's fd/OFD lock state; never acquire or upgrade it.
+
+    The kernel and procfs of the trusted host are prerequisites, not established
+    by this observation. Unsupported or unavailable observations fail closed.
+    """
+    directory = stream = None
+    try:
+        if (not _linux_lock_supported() or type(descriptor) is not int or descriptor < 0
+                or type(pid) is not int or pid <= 0 or os.getpid() != pid):_lease_error()
+        if os.readlink('/proc/self') != str(pid):_lease_error()
+        before = os.fstat(descriptor)
+        if identity(before) != expected:_lease_error()
+        directory = absolute_directory('/proc/' + str(pid) + '/fdinfo')
+        stream = os.open(str(descriptor), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(stream).st_mode):_lease_error()
+        data = b''
+        while len(data) <= MAX_LOCK_FDINFO:
+            part = os.read(stream, MAX_LOCK_FDINFO + 1 - len(data))
+            if not part:break
+            data += part
+        observation = _parse_lock_fdinfo(data, pid=pid, device=before.st_dev, inode=before.st_ino)
+        if identity(os.fstat(descriptor)) != expected or os.getpid() != pid:_lease_error()
+        return observation
+    except (OSError,ValueError,TypeError):
+        _lease_error()
+    finally:
+        if stream is not None:os.close(stream)
+        if directory is not None:os.close(directory)
+
+
+class _JournalLockLease:
+    """Private live controller handle; neither data nor authority to execute.
+
+    A dup retains the actual locked open-file description. An independent
+    observation must name that description, and the journal fd must report
+    the same held exclusive lock without any attempt to acquire it.
+    Python code running arbitrarily inside this trusted controller is outside
+    this cooperative boundary; it can mutate objects or close arbitrary fds.
+    """
+    __slots__ = ('_journal','_token','_thread','_pid','_lock_fd','_private_fd',
+                 '_identity','_chain','_guard','_active','_observation')
+
+    def __init__(self, journal, token):
+        self._journal,self._token = journal,token
+        self._thread,self._pid = threading.current_thread(),os.getpid()
+        self._lock_fd,self._private_fd,self._identity,_ = journal._lock_pin
+        self._chain,self._guard,self._observation = None,None,None
+        self._active = True
+
+    def _issue(self):
+        journal = self._journal
+        if (journal._lock_fd != self._lock_fd or journal.private.fd != self._private_fd
+                or identity(os.fstat(self._lock_fd)) != self._identity
+                or identity(os.fstat(self._private_fd)) != journal._lock_pin[3]):_lease_error()
+        journal.private.verify()
+        journal.private.validate_file(self._lock_fd)
+        self._chain = _lease_chain(journal.private.path)
+        self._guard = os.dup(self._lock_fd)
+        guard = _linux_lock_observation(self._guard, pid=self._pid, expected=self._identity)
+        original = _linux_lock_observation(self._lock_fd, pid=self._pid, expected=self._identity)
+        if guard != original:_lease_error()
+        self._observation = guard
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError('Live journal leases cannot be serialized')
+
+    def __copy__(self):
+        raise TypeError('Live journal leases cannot be copied')
+
+    def __deepcopy__(self, memo):
+        raise TypeError('Live journal leases cannot be copied')
+
+    def _owns(self, descriptor):
+        """Positive read-only kernel observation; cannot reacquire a lost lock."""
+        directory = None
+        try:
+            if identity(os.fstat(descriptor)) != self._identity:return False
+            directory = absolute_directory(self._journal.private.path)
+            if identity(os.fstat(directory)) != self._journal.private.identity:return False
+            current = os.stat('broker.lock', dir_fd=directory, follow_symlinks=False)
+            if identity(current) != self._identity:return False
+            observation = _linux_lock_observation(descriptor, pid=self._pid, expected=self._identity)
+            return self._observation is None or observation == self._observation
+        except (DevelopmentError,OSError,TypeError,ValueError):
+            return False
+        finally:
+            if directory is not None:os.close(directory)
+
+    def _validate(self, journal):
+        try:
+            if (not self._active or self._journal is not journal or journal._lease is not self
+                    or journal._lock_token is not self._token or not journal._in_lock
+                    or os.getpid() != self._pid or journal._process_id != self._pid
+                    or threading.current_thread() is not self._thread
+                    or journal._lock_owner != (self._pid,self._thread)
+                    or journal._lock_fd != self._lock_fd or journal.private.fd != self._private_fd):
+                _lease_error()
+            journal.private.verify()
+            if (identity(os.fstat(self._private_fd)) != journal.private.identity
+                    or _lease_chain(journal.private.path) != self._chain):_lease_error()
+            journal.private.validate_file(self._guard)
+            journal.private.validate_file(self._lock_fd)
+            if (not self._owns(self._guard) or not self._owns(self._lock_fd)):_lease_error()
+            manifest = validate_manifest(decode(journal.private.read('manifest.json',MAX_MANIFEST_BYTES)))
+            if digest(canonical(manifest)) != journal.manifest_hash:_lease_error()
+            return True
+        except (DevelopmentError,OSError,TypeError,ValueError):
+            self._active = False
+            _lease_error()
+
+    def _revoke(self):
+        # Invalidate before releasing any kernel lock. Unknown/reused numbers
+        # are left untouched; this is not a claim of cleanup after tampering.
+        self._active = False
+        # A child after fork must never unlock the parent's shared description.
+        if os.getpid() != self._pid:return
+        owns_guard,owns_original = self._owns(self._guard),self._owns(self._lock_fd)
+        try:
+            if identity(os.fstat(self._journal.private.fd)) != self._journal.private.identity:
+                self._journal.private.fd = None
+        except (OSError,TypeError):
+            self._journal.private.fd = None
+        original_registered = self._journal._lock_fd == self._lock_fd
+        if not owns_original or not original_registered:
+            self._journal._lock_fd = None
+        if owns_guard:
+            fcntl.flock(self._guard,fcntl.LOCK_UN)
+            os.close(self._guard)
+            self._guard = None
+        elif owns_original:
+            fcntl.flock(self._lock_fd,fcntl.LOCK_UN)
+        if owns_original and not original_registered:os.close(self._lock_fd)
 
 
 class PrivateDirectory:
@@ -163,6 +361,9 @@ class DevelopmentJournal:
         self._thread_lock = threading.RLock()
         self._in_lock = False
         self._lock_fd = None
+        self._lease,self._lock_token,self._lock_owner = None,None,None
+        self._lock_pin = None
+        self._process_id = os.getpid()
         try:
             raw = self.private.read('manifest.json', MAX_MANIFEST_BYTES)
             self._manifest = validate_manifest(decode(raw))
@@ -187,6 +388,9 @@ class DevelopmentJournal:
         return decode(canonical(self._manifest))
 
     def close(self):
+        if self._lease is not None:
+            self._lease._revoke();self._lease = None
+        self._lock_token,self._lock_owner,self._lock_pin = None,None,None
         if self._lock_fd is not None:
             os.close(self._lock_fd)
             self._lock_fd = None
@@ -202,6 +406,7 @@ class DevelopmentJournal:
             except (BlockingIOError, TypeError):
                 raise DevelopmentError('broker_busy') from None
             self._in_lock = True
+            self._lock_token,self._lock_owner = object(),(os.getpid(),threading.current_thread())
             try:
                 self.private.verify()
                 current = os.stat('broker.lock', dir_fd=self.private.fd, follow_symlinks=False)
@@ -213,12 +418,41 @@ class DevelopmentJournal:
                     raise DevelopmentError('manifest_changed')
                 state = decode(self.private.read('state.json', MAX_STATE_BYTES))
                 self.validate_state(state)
+                self._lock_pin = (self._lock_fd,self.private.fd,identity(current),self.private.identity)
                 yield state
             except OSError:
                 raise DevelopmentError('journal_access_failed') from None
             finally:
+                lease,self._lease = self._lease,None
+                self._lock_token,self._lock_owner = None,None
+                self._lock_pin = None
                 self._in_lock = False
-                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                if lease is not None:lease._revoke()
+                elif self._lock_fd is not None:fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+
+    def held_lock_lease(self):
+        """Issue only inside this thread/process's existing acquisition.
+
+        lock() still yields its original state dict. A live lease can be checked
+        repeatedly during that acquisition; it cannot be replayed in another.
+        """
+        if (not _linux_lock_supported() or not self._in_lock or self._lock_token is None
+                or self._lock_pin is None
+                or self._process_id != os.getpid()
+                or self._lock_owner != (os.getpid(),threading.current_thread())):_lease_error()
+        try:
+            if self._lease is None:
+                self._lease = _JournalLockLease(self,self._lock_token)
+                self._lease._issue()
+            self.require_lock_lease(self._lease)
+            return self._lease
+        except (DevelopmentError,OSError,TypeError,ValueError):
+            if self._lease is not None:self._lease._active = False
+            _lease_error()
+
+    def require_lock_lease(self, lease):
+        if type(lease) is not _JournalLockLease:_lease_error()
+        return lease._validate(self)
 
     def validate_state(self, state):
         if (type(state) is not dict or set(state) != {'schema', 'manifest_hash', 'used', 'operations'}

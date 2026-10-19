@@ -19,6 +19,8 @@ from blackoutburst_agents.linux_input_snapshot import (capture_input_snapshot,
 
 class LinuxInputSnapshotTests(unittest.TestCase):
     def setUp(self):
+        from linux_lock_fixture import LockObservationFixture
+        self.lock_observation = LockObservationFixture(self)
         temp = tempfile.TemporaryDirectory(dir='/private/tmp' if Path('/private/tmp').exists() else '/tmp')
         self.addCleanup(temp.cleanup)
         self.base = Path(temp.name).resolve()

@@ -10,7 +10,7 @@ from unittest.mock import patch
 import test_linux_input_snapshot as snapshot_fixture
 from blackoutburst_agents.dev_broker import DevelopmentBroker
 from blackoutburst_agents.dev_manifest import DevelopmentError,NamedTest,canonical,digest
-from blackoutburst_agents.linux_input_snapshot import capture_input_snapshot
+from blackoutburst_agents.linux_input_snapshot import capture_input_snapshot, capture_input_snapshot_locked
 from blackoutburst_agents.linux_test_protocol import (LinuxTestRequest,MAGIC,
     MAX_HEADER_BYTES,MAX_TOTAL_BYTES,encode_input_packet,decode_input_packet,
     linux_backend_id,validate_linux_request)
@@ -235,3 +235,47 @@ class LinuxTestProtocolTests(unittest.TestCase):
                             input_snapshot_sha256=digest(canonical(snapshot)))
             with self.subTest(backend_id=backend_id),self.assertRaises(DevelopmentError):
                 self.validate(request,manifest=manifest,snapshot=snapshot)
+
+    def test_codec_roundtrip_under_existing_lease_never_reacquires_broker_lock(self):
+        journal=self.broker.journal
+        with journal.lock() as state:
+            before=canonical(state)
+            lease=journal.held_lock_lease()
+            with capture_input_snapshot_locked(self.broker,lock_lease=lease,fence=self.fence,
+                    binding=self.binding,operation_id=self.operation,planner_snapshot=self.planner) as held:
+                document=held.document()
+                contents={path:held.read(path) for path in self.manifest['files']}
+                packet=encode_input_packet(contents,manifest=self.manifest,snapshot=document,planner_snapshot=self.planner)
+                self.assertEqual(document,self.snapshot)
+                self.assertEqual(packet,self.packet)
+                self.assertEqual(validate_linux_request(self.request,manifest=self.manifest,snapshot=document,
+                    planner_snapshot=self.planner,expected_plan_sha256=self.plan_hash,input_packet=packet),
+                    self.request.document())
+                self.assertTrue(journal.require_lock_lease(lease))
+            self.assertTrue(journal.require_lock_lease(lease))
+            self.assertEqual(canonical(state),before)
+        self.authorize.assert_not_called()
+        self.assertFalse(lease._active)
+
+    def test_valid_packet_does_not_grant_authority_to_replay_an_expired_lease(self):
+        journal=self.broker.journal
+        with journal.lock():
+            lease=journal.held_lock_lease()
+            with capture_input_snapshot_locked(self.broker,lock_lease=lease,fence=self.fence,
+                    binding=self.binding,operation_id=self.operation,planner_snapshot=self.planner) as held:
+                document=held.document()
+                contents={path:held.read(path) for path in self.manifest['files']}
+                packet=encode_input_packet(contents,manifest=self.manifest,snapshot=document,planner_snapshot=self.planner)
+        # Pure codecs keep validating immutable data; that is deliberately not
+        # a live lock, Board grant, backend receipt or permission to run a test.
+        self.assertEqual(decode_input_packet(packet,manifest=self.manifest,snapshot=document,
+            planner_snapshot=self.planner),contents)
+        self.assertEqual(validate_linux_request(self.request,manifest=self.manifest,snapshot=document,
+            planner_snapshot=self.planner,expected_plan_sha256=self.plan_hash,input_packet=packet),self.request.document())
+        with journal.lock():
+            with self.assertRaises(DevelopmentError) as refused:
+                with capture_input_snapshot_locked(self.broker,lock_lease=lease,fence=self.fence,
+                        binding=self.binding,operation_id=self.operation,planner_snapshot=self.planner):
+                    self.fail('Expired lease adopted from a valid packet')
+            self.assertEqual(refused.exception.code,'journal_lock_lease_invalid')
+        self.authorize.assert_not_called()
