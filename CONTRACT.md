@@ -55,7 +55,9 @@ thread-read expiration maintenance remains; no new claim, Runtime, renewal,
 message or execution is added.
 
 Arguments are bounded at 2 KiB, ASCII-escaped result data at 384 KiB, and the
-actual MCP result including text/structured copies at 1.5 MiB. Failures return a
+MCP CallToolResult including text/structured copies plus a 1 KiB envelope
+reserve at 1.5 MiB. This reserve covers the official client’s integer request ID,
+not an arbitrarily large JSON-RPC ID supplied by another client. Failures return a
 fixed code without partial observations or private exceptions. This tool has no
 compact view or arbitrary method batching. See [the sealed opt-in adapter mode](integrations/codex-personal/DEVELOPMENT_FRAMES.md).
 
