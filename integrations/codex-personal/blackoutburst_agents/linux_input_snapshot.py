@@ -1,7 +1,9 @@
 """Inert, private input copies for a future Linux named-test backend.
 
 This module does not qualify or register a backend. It never executes source,
-starts a process, calls Board RPC, writes a journal, or changes Darwin protocols.
+starts a process, writes a journal, or changes Darwin protocols. The default
+contexts perform no authorization callback; explicit authorize_reads=True in
+the locked context asks the concrete broker for both permissions each pass.
 The context owns the existing broker lock and checks its durable checkout fence;
 it is a cooperative controller boundary, not an atomic filesystem snapshot
 against an unrelated writer or an administrator. Future integration must charge
@@ -242,8 +244,10 @@ def _fence_record(broker, fence, binding, operation_id):
 
 class LinuxInputSnapshot:
     """Private controller copy, valid only while its real broker lock is held."""
-    def __init__(self, broker, fence, binding, operation_id, planner_snapshot, lock_lease):
+    def __init__(self, broker, fence, binding, operation_id, planner_snapshot, lock_lease, *, authorize_reads=False, _capture_permit=None):
         self._broker, self._fence = broker, fence
+        self._authorize_reads = authorize_reads
+        self._capture_permit = _capture_permit
         self._lock_lease = lock_lease
         self._binding, self._operation_id = decode(canonical(binding)), operation_id
         self._planner_snapshot = decode(canonical(planner_snapshot))
@@ -270,6 +274,15 @@ class LinuxInputSnapshot:
 
     def _capture(self):
         self._held()
+        if self._broker.journal._linux_input_profile:
+            from .linux_input_admission import _CapturePermit
+            if type(self._capture_permit) is not _CapturePermit:
+                _error('linux_input_capture_permit_invalid')
+            self._capture_permit.take(self)
+        if self._authorize_reads or self._broker.journal._linux_input_profile:
+            self._broker._authorize('repo.read_file')
+            self._broker._authorize('repo.run_test')
+            self._held()
         manifest = self._broker.manifest
         limits = _manifest(manifest)
         root_chain = _chain(manifest['root'])
@@ -366,21 +379,26 @@ def capture_input_snapshot(broker, *, fence, binding, operation_id, planner_snap
 
 
 @contextmanager
-def capture_input_snapshot_locked(broker, *, lock_lease, fence, binding, operation_id, planner_snapshot):
+def capture_input_snapshot_locked(broker, *, lock_lease, fence, binding, operation_id, planner_snapshot, authorize_reads=False, _capture_permit=None):
     """Capture under the exact live lease; never acquire or release its lock.
 
     The owner must keep DevelopmentJournal.lock() open for this complete
     context. A bool, callback, copied handle or expired acquisition is refused.
-    Authorization and durable read accounting remain the caller's obligations.
+    Durable read accounting remains the caller's obligation. With the explicit
+    authorize_reads flag each capture invokes the concrete broker permissions
+    (read_file and run_test); False preserves the original metadata-only API.
     """
     if (type(broker) is not DevelopmentBroker or type(broker.journal) is not DevelopmentJournal
             or type(fence) is not DevelopmentFence or broker.enabled is not True):
+        _error('linux_input_controller_required')
+    if type(authorize_reads) is not bool:
         _error('linux_input_controller_required')
     broker.journal.require_lock_lease(lock_lease)
     validate_planner_snapshot(planner_snapshot,broker.manifest)
     snapshot = None
     try:
-        snapshot = LinuxInputSnapshot(broker,fence,binding,operation_id,planner_snapshot,lock_lease)
+        snapshot = LinuxInputSnapshot(broker,fence,binding,operation_id,planner_snapshot,lock_lease,
+                                      authorize_reads=authorize_reads, _capture_permit=_capture_permit)
         yield snapshot
         snapshot.revalidate()
     finally:

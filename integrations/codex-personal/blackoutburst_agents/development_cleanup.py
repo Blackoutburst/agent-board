@@ -12,6 +12,8 @@ from .dev_runtime import DevelopmentRuntimeGuard,ToolRuntimeGuard,development_wo
 
 
 def _effect_receipt(step,manifest,broker):
+    if broker.get('schema') != 1:
+        raise DevelopmentError('development_input_preparation_is_not_cleanup_proof')
     action=parse_action(canonical(step['action']).decode('utf-8'),manifest,65536)
     kind=action['kind'];receipt=step['receipt']
     if kind in ('patch','test'):
@@ -73,6 +75,8 @@ def reconcile_cleanup(worker,operation_id):
             planner=decode(private.read('planner.json',2*1024*1024))
             manifest=validate_manifest(decode(private.read('manifest.json',128*1024)))
             broker=decode(private.read('state.json',2*1024*1024))
+        if type(broker) is not dict or broker.get('schema') != 1:
+            raise DevelopmentError('development_input_preparation_is_not_cleanup_proof')
         if (digest(canonical(manifest))!=config['manifest_hash'] or planner.get('operation_id')!=operation_id
                 or planner.get('configuration',{}).get('scope')!=scope
                 or planner['configuration'].get('manifest_hash')!=config['manifest_hash']

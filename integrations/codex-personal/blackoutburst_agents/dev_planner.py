@@ -116,6 +116,8 @@ class DevelopmentPlanner:
         if not enabled:
             # A disabled probe must not reserve a checkout indefinitely.
             raise DevelopmentError('planner_disabled')
+        if broker.journal._linux_input_profile:
+            raise DevelopmentError('planner_input_only_journal_forbidden')
         manifest = broker.manifest
         if enabled and not _allow_fixture_backend:
             if (not isinstance(broker.test_backend, SupervisedNativeNamedPythonBackend)

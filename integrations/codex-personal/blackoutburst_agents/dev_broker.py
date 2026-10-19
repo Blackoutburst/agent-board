@@ -120,8 +120,13 @@ class DevelopmentBroker:
         self.journal.save(state)
         return dict(receipt)
 
+    def _require_schema1(self):
+        if self.journal._linux_input_profile:
+            raise DevelopmentError('linux_input_only_journal')
+
     def read_file(self, path):
         """Explicit content channel. All other methods return only metadata."""
+        self._require_schema1()
         self._authorize('repo.read_file')
         path = self._path(path)
         with self.journal.lock() as state:
@@ -140,6 +145,7 @@ class DevelopmentBroker:
 
     def patch_file(self, key, path, expected_sha256, content):
         """Apply one exact full-file patch, never an interpreted patch command."""
+        self._require_schema1()
         self._authorize('repo.patch_file')
         path = self._path(path)
         sha256(expected_sha256)
@@ -258,6 +264,7 @@ class DevelopmentBroker:
 
     def admit_test(self, key, name):
         """Pin one exact attempt before preparations, without backend admission."""
+        self._require_schema1()
         self._authorize('repo.run_test')
         suite = self._test_suite(name)
         request = {'kind': 'test', **suite}
@@ -413,6 +420,8 @@ class DevelopmentBroker:
             operation = state['operations'].get(operation_id)
             if operation is None:
                 raise DevelopmentError('operation_not_found')
+            if state['schema'] == 2 or operation['kind'] == 'linux_input':
+                raise DevelopmentError('linux_input_reconciliation_forbidden')
             self._authorize('repo.patch_file' if operation['kind'] == 'patch' else 'repo.run_test')
             if operation['phase'] == 'complete':
                 return dict(operation['receipt'])
@@ -491,6 +500,7 @@ class DevelopmentBroker:
 
     def diff(self):
         """Hash-only comparison to the frozen manifest, without file content."""
+        self._require_schema1()
         self._authorize('repo.read_file')
         with self.journal.lock() as state:
             maximum = self.manifest['budgets']['max_file_bytes']

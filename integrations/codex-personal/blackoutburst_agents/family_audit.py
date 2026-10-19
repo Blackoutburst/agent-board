@@ -66,8 +66,15 @@ def _finished(record,manifest,client):
 
 def audit_workflow(worker,operation_id,*,manifest_hash,authorize,expected_hashes=None):
     """No new broker effect; cached tests plus current scoped file hashes only."""
+    op=worker.journal.get(operation_id)
+    # Read the private profile before any remote-capable authorization or
+    # checkout inspection. Input preparations are never family test evidence.
+    with PrivateDirectory(op['configuration']['pins']['broker']['path']) as private:
+        profile=decode(private.read('state.json',2*1024*1024))
+    if type(profile) is not dict or profile.get('schema') != 1:
+        raise DevelopmentError('family_input_preparation_is_not_test_proof')
     if authorize() is not True:raise DevelopmentError('family_authorization_changed')
-    op=worker.journal.get(operation_id);worker._pin_controller(op)
+    worker._pin_controller(op)
     if op['stage'] not in ('complete','result_ready'):
         raise DevelopmentError('family_workflow_not_review_ready')
     config=op['configuration'];pins=config['pins']
@@ -97,6 +104,8 @@ def audit_workflow(worker,operation_id,*,manifest_hash,authorize,expected_hashes
     validator=object.__new__(DevelopmentJournal)
     validator._manifest=manifest;validator.manifest_hash=manifest_hash
     validator.validate_state(broker)
+    if broker['schema'] != 1:
+        raise DevelopmentError('family_input_preparation_is_not_test_proof')
     if any(type(entry) is not dict or entry.get('phase')!='complete' for entry in broker['operations'].values()):
         raise DevelopmentError('family_cleanup_unconfirmed')
     review=receipt['review']
