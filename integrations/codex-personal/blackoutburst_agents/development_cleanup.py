@@ -31,10 +31,18 @@ def _effect_receipt(step,manifest,broker):
         if kind=='test' and raw.get('cleanup_confirmed') is not True:
             raise DevelopmentError('development_cleanup_receipt_missing')
         if kind=='test' and raw.get('result')=='not_started':
-            if (entry.get('admission',{}).get('dispatch')!='pending'
+            dispatch=entry.get('admission',{}).get('dispatch')
+            if (dispatch not in ('pending','dispatched')
+                    or dispatch=='dispatched' and type(raw.get('backend_admission')) is not dict
                     or raw.get('started') is not False
                     or raw.get('admission_sha256')!=digest(canonical(entry['admission']))):
                 raise DevelopmentError('development_cleanup_identity_changed')
+            if dispatch=='dispatched':
+                from .dev_broker import TestRequest,validate_backend_not_started
+                selected=suites[0]
+                native_request=TestRequest(entry['id'],digest(canonical(manifest)),manifest['root'],
+                    tuple(manifest['root_identity']),selected['name'],selected['timeout_seconds'],selected['max_output_bytes'])
+                validate_backend_not_started(native_request,selected['backend_id'],raw['backend_admission'])
             if receipt is not None and receipt.get('receipt')!=raw:
                 raise DevelopmentError('development_cleanup_identity_changed')
             return 'blocked'

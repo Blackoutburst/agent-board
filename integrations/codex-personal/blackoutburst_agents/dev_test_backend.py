@@ -38,6 +38,16 @@ HEADER = b'BB_NAMED_TEST_V1 '
 MAX_DOCUMENT = 128 * 1024
 REQUIRED_CHECKS = {'inside_read', 'inside_write', 'outside_read', 'outside_write',
                    'network_loopback', 'fork', 'spawn', 'session', 'process_group', 'nproc_raise'}
+PRELAUNCH_REASONS = frozenset({'permission_revoked', 'test_backend_unqualified',
+    'backend_executable_changed', 'trusted_script_changed', 'trusted_script_access_refused',
+    'trusted_script_directory_refused', 'workspace_identity_changed',
+    'supervisor_controller_changed', 'supervisor_workspace_overlap',
+    'test_backend_busy', 'test_backend_access_failed', 'native_prelaunch_failed'})
+
+
+def _prelaunch_reason(error):
+    code = getattr(error, 'code', None)
+    return code if type(code) is str and code in PRELAUNCH_REASONS else 'native_prelaunch_failed'
 
 # This is trusted controller code, not a script or argument supplied by a model.
 # The same process verifies the actual sandbox and hard limits immediately
@@ -372,6 +382,7 @@ class NativeNamedPythonBackend:
         self.private = PrivateDirectory(directory)
         self._lock = None
         self._thread_lock = threading.Lock()
+        self._active_admission = None
         try:
             self.document = decode(self.private.read('plan.json', MAX_DOCUMENT))
             if (type(self.document) is not dict or set(self.document) != {
@@ -436,7 +447,12 @@ class NativeNamedPythonBackend:
                 self._thread_lock.release()
 
     def _authorize(self):
-        authorize(self.authorize_scope, self.manifest, 'repo.run_test')
+        try:
+            authorize(self.authorize_scope, self.manifest, 'repo.run_test')
+        except DevelopmentError:
+            if getattr(self, '_active_admission', None) is not None:
+                self._active_admission['refusal_reason'] = 'permission_revoked'
+            raise
 
     def _pins(self):
         _validate_plan(self.plan)
@@ -513,10 +529,16 @@ class NativeNamedPythonBackend:
                     return None
             raise
         value = decode(raw)
-        if (type(value) is not dict or set(value) != {'schema', 'request_hash', 'phase', 'result', 'reason'}
-                or type(value['schema']) is not int or value['schema'] != 1 or value['request_hash'] != request_hash
+        if (type(value) is not dict or set(value) not in (
+                    {'schema', 'request_hash', 'phase', 'result', 'reason'},
+                    {'schema', 'request_hash', 'phase', 'result', 'reason', 'admission'})
+                or type(value['schema']) is not int or value['schema'] not in (1, 2) or value['request_hash'] != request_hash
                 or value['phase'] not in ('intent', 'complete')
                 or (value['phase'] == 'intent' and (value['result'] is not None or value['reason'] is not None))):
+            raise DevelopmentError('test_backend_journal_corrupt')
+        if value['schema'] == 2:
+            self._validate_admission(value, name, request_hash)
+        elif 'admission' in value:
             raise DevelopmentError('test_backend_journal_corrupt')
         if value['phase'] == 'complete':
             result = value['result']
@@ -528,6 +550,136 @@ class NativeNamedPythonBackend:
                 raise DevelopmentError('test_backend_journal_corrupt')
             sha256(result['output_sha256'])
         return value
+
+    def _admission_controller_hash(self):
+        """Bounded public controller source, never configuration or auth."""
+        descriptor = os.open(Path(__file__), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(descriptor)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid not in (0, os.geteuid())
+                    or before.st_nlink != 1 or before.st_mode & 0o022 or before.st_size > 1048576):
+                raise DevelopmentError('backend_controller_changed')
+            raw = os.read(descriptor, 1048577)
+            after = os.fstat(descriptor)
+            if (len(raw) > 1048576 or (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                raise DevelopmentError('backend_controller_changed')
+            return digest(raw)
+        finally:
+            os.close(descriptor)
+
+    def _validate_admission(self, value, name, request_hash):
+        admission = value.get('admission')
+        expected = {'schema', 'operation_id', 'request_hash', 'manifest_hash',
+                    'backend_id', 'plan_hash', 'controller_sha256', 'nonce', 'launch'}
+        if (type(admission) is not dict or set(admission) != expected
+                or type(admission['schema']) is not int or admission['schema'] != 1
+                or type(admission['operation_id']) is not str
+                or admission['operation_id'] + '.json' != name
+                or admission['request_hash'] != request_hash
+                or admission['manifest_hash'] != self.document['manifest_hash']
+                or admission['backend_id'] != self.backend_id
+                or admission['plan_hash'] != self.document['plan_hash']
+                or admission['controller_sha256'] != self._admission_controller_hash()
+                or type(admission['nonce']) is not str or not re.fullmatch('[0-9a-f]{32}', admission['nonce'])
+                or admission['launch'] not in ('pending', 'entered', 'not_started')):
+            raise DevelopmentError('test_backend_journal_corrupt')
+        for key in ('operation_id', 'request_hash', 'manifest_hash', 'plan_hash', 'controller_sha256'):
+            sha256(admission[key])
+        if value['phase'] == 'intent':
+            if admission['launch'] == 'not_started':
+                raise DevelopmentError('test_backend_journal_corrupt')
+        elif (admission['launch'] != 'not_started' or type(value['reason']) is not str
+                or value['reason'] not in PRELAUNCH_REASONS
+                or value['result'] != _receipt('cancelled', cleanup=True)):
+            raise DevelopmentError('test_backend_journal_corrupt')
+
+    def _mark_launch(self):
+        """Durable ambiguity boundary immediately before the owned Popen."""
+        active = self._active_admission
+        if active is None:
+            return  # Qualification or the already-owned supervisor process.
+        value = self._read_operation(active['name'], active['request_hash'])
+        if (value != active['value'] or active['entered']
+                or value['admission']['launch'] != 'pending'):
+            raise DevelopmentError('test_backend_journal_corrupt')
+        value['admission']['launch'] = 'entered'
+        self.private.replace(active['name'], canonical(value))
+        active['entered'] = True
+
+    def _record_not_started(self, error):
+        active = self._active_admission
+        if active is None or active['entered']:
+            return
+        value = self._read_operation(active['name'], active['request_hash'])
+        if value != active['value'] or value['admission']['launch'] != 'pending':
+            return
+        reason = _prelaunch_reason(error)
+        if reason == 'test_backend_unqualified' and active.get('refusal_reason') == 'permission_revoked':
+            reason = 'permission_revoked'
+        value['phase'], value['result'], value['reason'] = (
+            'complete', _receipt('cancelled', cleanup=True), reason)
+        value['admission']['launch'] = 'not_started'
+        self.private.replace(active['name'], canonical(value))
+
+    def lookup_not_started(self, request):
+        """Exact private terminal observation; no authorization or launch.
+
+        Absence, legacy/pending/entered records never establish non-launch.
+        The controller may use this after revocation only for identity cleanup.
+        """
+        request_hash = self._request(request)
+        with self.locked():
+            value = self._read_operation(request.operation_id + '.json', request_hash, request.max_output_bytes)
+            if (value is None or value['schema'] != 2 or value['phase'] != 'complete'
+                    or value['admission']['launch'] != 'not_started'):
+                return None
+            return {'schema': 1, **{key: value['admission'][key] for key in
+                ('operation_id', 'request_hash', 'manifest_hash', 'backend_id', 'plan_hash',
+                 'controller_sha256', 'nonce')}, 'started': False, 'cleanup_confirmed': True,
+                'reason': value['reason'], 'receipt_sha256': digest(canonical(value))}
+
+    def _run_request(self, request, execute, *, helper_receipt=False):
+        request_hash = self._request(request)
+        with self.locked():
+            name = request.operation_id + '.json'
+            old = self._read_operation(name, request_hash, request.max_output_bytes)
+            if old is not None:
+                self._authorize()
+                return dict(old['result']) if old['phase'] == 'complete' else _receipt()
+            self._require_settled()
+            admission = {'schema': 1, 'operation_id': request.operation_id,
+                'request_hash': request_hash, 'manifest_hash': request.manifest_hash,
+                'backend_id': self.backend_id, 'plan_hash': self.document['plan_hash'],
+                'controller_sha256': self._admission_controller_hash(),
+                'nonce': uuid.uuid4().hex, 'launch': 'pending'}
+            value = {'schema': 2, 'request_hash': request_hash, 'phase': 'intent',
+                     'result': None, 'reason': None, 'admission': admission}
+            self.private.create(name, canonical(value))  # Before any fallible callback.
+            self._active_admission = {'name': name, 'request_hash': request_hash,
+                                      'value': decode(canonical(value)), 'entered': False}
+            try:
+                self._authorize()
+                suite = {'name': request.name, 'backend_id': self.backend_id,
+                    'timeout_seconds': request.timeout_seconds, 'max_output_bytes': request.max_output_bytes}
+                if not self.qualified_for(request.manifest_hash, suite):
+                    raise DevelopmentError('test_backend_unqualified')
+                result, checks, reason = execute()
+                if not helper_receipt:
+                    self.private.replace(name, canonical({'schema': 1, 'request_hash': request_hash,
+                        'phase': 'complete', 'result': result, 'reason': reason}))
+                return result
+            except Exception as error:
+                # A live call can prove its own prelaunch refusal. A crash is
+                # BaseException and never reaches this branch; recovery cannot
+                # convert an old pending admission into a terminal proof.
+                try:
+                    self._record_not_started(error)
+                except (DevelopmentError, OSError, ValueError, TypeError):
+                    pass  # A failed proof write stays unknown.
+                raise
+            finally:
+                self._active_admission = None
 
     def _require_settled(self):
         names = os.listdir(self.private.fd)
@@ -545,25 +697,10 @@ class NativeNamedPythonBackend:
                 raise DevelopmentError('native_reconciliation_required')
 
     def run(self, request):
-        request_hash = self._request(request)
-        with self.locked():
+        def execute():
             self._authorize()
-            name = request.operation_id + '.json'
-            old = self._read_operation(name, request_hash, request.max_output_bytes)
-            if old is not None:
-                return dict(old['result']) if old['phase'] == 'complete' else _receipt()
-            self._require_settled()
-            suite = {'name': request.name, 'backend_id': self.backend_id,
-                'timeout_seconds': request.timeout_seconds, 'max_output_bytes': request.max_output_bytes}
-            if not self.qualified_for(request.manifest_hash, suite):
-                raise DevelopmentError('test_backend_unqualified')
-            self.private.create(name, canonical({'schema': 1, 'request_hash': request_hash,
-                'phase': 'intent', 'result': None, 'reason': None}))
-            self._authorize()
-            result, checks, reason = self._execute(request, qualify=False)
-            self.private.replace(name, canonical({'schema': 1, 'request_hash': request_hash,
-                'phase': 'complete', 'result': result, 'reason': reason}))
-            return result
+            return self._execute(request, qualify=False)
+        return self._run_request(request, execute)
 
     def lookup(self, request):
         request_hash = self._request(request)
@@ -638,6 +775,7 @@ class NativeNamedPythonBackend:
             cli_env = {key: os.environ[key] for key in ('HOME', 'CODEX_HOME', 'TMPDIR') if key in os.environ}
             cli_env.update({'PATH': '/usr/bin:/bin', 'LANG': 'C'})
             self._authorize()
+            self._mark_launch()
             child = subprocess.Popen(self._command(payload), cwd=self.plan['root'], env=cli_env,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 close_fds=True, start_new_session=True)
@@ -753,6 +891,8 @@ class NativeNamedPythonBackend:
             return {'status': status, 'cleanup_confirmed': cleanup,
                 'output_bytes': output_size, 'output_sha256': output.hexdigest()}, checks, reason
         except (OSError, DevelopmentError, ValueError, TypeError):
+            if self._active_admission is not None and not self._active_admission['entered']:
+                raise
             return _receipt(), checks, 'native_launch_uncertain'
         finally:
             if child is not None and not child.stdin.closed:

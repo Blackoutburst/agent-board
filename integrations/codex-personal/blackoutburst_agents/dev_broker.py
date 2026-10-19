@@ -29,6 +29,27 @@ class TestRequest:
     max_output_bytes: int
 
 
+def validate_backend_not_started(request, backend_id, value):
+    """Strict metadata from the backend's exact terminal observation API."""
+    from .dev_test_backend import PRELAUNCH_REASONS
+    fields = {'schema', 'operation_id', 'request_hash', 'manifest_hash', 'backend_id',
+              'plan_hash', 'controller_sha256', 'nonce', 'started', 'cleanup_confirmed',
+              'reason', 'receipt_sha256'}
+    if (type(value) is not dict or set(value) != fields
+            or type(value['schema']) is not int or value['schema'] != 1
+            or value['operation_id'] != request.operation_id
+            or value['request_hash'] != digest(canonical(vars(request)))
+            or value['manifest_hash'] != request.manifest_hash or value['backend_id'] != backend_id
+            or value['started'] is not False or value['cleanup_confirmed'] is not True
+            or type(value['reason']) is not str or value['reason'] not in PRELAUNCH_REASONS
+            or type(value['nonce']) is not str or not re.fullmatch('[0-9a-f]{32}', value['nonce'])):
+        raise DevelopmentError('invalid_backend_nonlaunch_receipt')
+    for key in ('operation_id', 'request_hash', 'manifest_hash', 'plan_hash',
+                'controller_sha256', 'receipt_sha256'):
+        sha256(value[key])
+    return dict(value)
+
+
 class DevelopmentBroker:
     def __init__(self, directory, *, authorize_scope, enabled=False, test_backend=None):
         if type(enabled) is not bool or not callable(authorize_scope):
@@ -291,6 +312,23 @@ class DevelopmentBroker:
             self._test_admissions.discard(operation['id'])
             return receipt
 
+    def _observe_backend_not_started(self, request, suite):
+        observer = getattr(self.test_backend, 'lookup_not_started', None)
+        if callable(observer):
+            try:
+                value = observer(request)
+                if value is not None:
+                    return validate_backend_not_started(request, suite['backend_id'], value)
+            except Exception:
+                pass
+        return None
+
+    def _finish_backend_not_started(self, state, operation, proof, reason=None):
+        return self._finish(state, operation, 'not_started', name=operation['detail']['name'],
+            cleanup_confirmed=True, started=False, reason=proof['reason'] if reason is None else reason,
+            manifest_hash=self.journal.manifest_hash, request_hash=operation['request_hash'],
+            admission_sha256=digest(canonical(operation['admission'])), backend_admission=proof)
+
     def run_test(self, key, name, *, _before_dispatch=None, _refusal_reason=None):
         if any(callback is not None and not callable(callback)
                for callback in (_before_dispatch, _refusal_reason)):
@@ -350,6 +388,15 @@ class DevelopmentBroker:
                 try:
                     raw = self.test_backend.run(test_request)
                 except Exception:
+                    proof = self._observe_backend_not_started(test_request, suite)
+                    if proof is not None:
+                        reason = proof['reason']
+                        if _refusal_reason is not None:
+                            known = _refusal_reason()
+                            if (type(known) is str and re.fullmatch('[a-z][a-z0-9_]{0,99}', known)):
+                                reason = known
+                        self._finish_backend_not_started(state, operation, proof, reason)
+                        raise DevelopmentError(reason) from None
                     raise DevelopmentError('test_outcome_uncertain') from None
                 result = self._test_result(raw, suite['max_output_bytes'])
                 outcome = result['status'] if result['cleanup_confirmed'] else 'needs_review'
@@ -376,6 +423,12 @@ class DevelopmentBroker:
                         # A crash before a final refusal receipt is deliberately
                         # not promoted into cleanup proof during recovery.
                         raise DevelopmentError('test_admission_requires_review')
+                    suite = self._test_suite(operation['detail']['name'])
+                    candidate = TestRequest(operation['id'], self.journal.manifest_hash, self.manifest['root'],
+                        tuple(self.manifest['root_identity']), suite['name'], suite['timeout_seconds'], suite['max_output_bytes'])
+                    proof = self._observe_backend_not_started(candidate, suite)
+                    if proof is not None:
+                        return self._finish_backend_not_started(state, operation, proof)
                     request = self._test_request(operation)
                     self._authorize('repo.run_test')
                     files.verify()

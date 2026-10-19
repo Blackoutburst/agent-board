@@ -55,13 +55,10 @@ class DevelopmentAuthorization:
         except Exception:
             raise DevelopmentError('development_grants_unavailable') from None
 
-    def ticket(self):
+    def _ticket_fields(self, response):
+        """Pure scope/eligibility checks; delegation is checked by its owner."""
         try:
-            response = self.client.call('get_ticket', {'ticket_id': self.scope['ticket_id']})
             project, ticket = response['project'], response['ticket']
-            if ticket.get('delegation') is not None or self.delegation_guard is not None:
-                if self.delegation_guard is None or self.delegation_guard(response) is not True:
-                    raise ValueError
             if (project['id'] != self.scope['project_id'] or ticket['id'] != self.scope['ticket_id']
                     or ticket['project_id'] != self.scope['project_id']
                     or self.scope['owner_id'] not in project['participants'] or project['archived'] is True
@@ -71,6 +68,18 @@ class DevelopmentAuthorization:
                     or ticket['assignee_owner_id'] not in (None, self.scope['owner_id'])
                     or ticket['assignee_agent_id'] not in (None, self.scope['agent_id'])):
                 raise ValueError
+            return response
+        except (KeyError, TypeError, ValueError):
+            raise DevelopmentError('development_ticket_unavailable') from None
+
+    def ticket(self):
+        try:
+            response = self.client.call('get_ticket', {'ticket_id': self.scope['ticket_id']})
+            project, ticket = response['project'], response['ticket']
+            if ticket.get('delegation') is not None or self.delegation_guard is not None:
+                if self.delegation_guard is None or self.delegation_guard(response) is not True:
+                    raise ValueError
+            self._ticket_fields(response)
             return response
         except Exception:
             raise DevelopmentError('development_ticket_unavailable') from None
@@ -102,6 +111,10 @@ class DevelopmentAuthorization:
             'sealed_claim_version':value, 'claimant':ticket['claimant']}))
 
     def snapshot(self, *, require_claim=False, remaining=0):
+        if self.delegation_guard is not None:
+            from .family_worker import FamilyAuthorizationGuard
+            if type(self.delegation_guard) is FamilyAuthorizationGuard:
+                return self.delegation_guard.snapshot(self, require_claim=require_claim, remaining=remaining)
         self._registration()
         policy = self._policy()
         first = self.ticket()
@@ -111,6 +124,9 @@ class DevelopmentAuthorization:
             scope=ContextScope(**{key:self.scope[key] for key in ('owner_id','agent_id','project_id','ticket_id')}),
             registration=self.registration)
         last = self.ticket()
+        return self._snapshot_result(policy, first, last, context, require_claim=require_claim, remaining=remaining)
+
+    def _snapshot_result(self, policy, first, last, context, *, require_claim, remaining):
         if (last['ticket']['version'] != first['ticket']['version']
                 or last['ticket']['version'] != context['sources']['ticket']['version']):
             raise DevelopmentError('development_context_changed')

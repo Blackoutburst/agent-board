@@ -1,0 +1,488 @@
+{
+  "date": "2026-10-19",
+  "scope": "step1_only_fixed_synthetic_canaries",
+  "qualification": "linux_unqualified",
+  "measured": {
+    "account_operations": 0,
+    "backend_execution_qualified": false,
+    "checks": {
+      "bounding_caps_zero_before_filter": true,
+      "caps_zero_after_filter": true,
+      "clone3": true,
+      "exec": true,
+      "fork": true,
+      "hard_limits": true,
+      "home_proc_private_state_absent": true,
+      "inside_read": true,
+      "inside_write": true,
+      "namespace_change_denied": true,
+      "network_loopback": true,
+      "network_unix_abstract": true,
+      "network_unix_path": true,
+      "no_new_privs_before_filter": true,
+      "nproc_raise_denied": true,
+      "old_root_absent": true,
+      "outside_process_hidden_before_filter": true,
+      "outside_read": true,
+      "outside_signal_denied": true,
+      "outside_write": true,
+      "pid_namespace_init": true,
+      "process_group": true,
+      "readonly_file_write": true,
+      "runtime_write": true,
+      "session": true,
+      "work_volume_bound": true,
+      "x32_abi_denied": true
+    },
+    "cleanup": {
+      "cleanup_confirmed": true,
+      "kernel_init_identity_received": true,
+      "launcher_reaped": true,
+      "namespace_init_exited": true
+    },
+    "component_sha256": {
+      "fixed_canaries": "bd0ba777ebfe1f5e53826d47cbafe7d911a0494efd970ad8db5120d8c4407059",
+      "inner_setup": "2ad091cdb6b53584d4875a258b6bf051978e40196ce8d2d822d8ef7ee671970d",
+      "lock_down": "d1f3b74da279f6cf8b34293dc9511346ca01667ffbd629989cf95c13d9088513",
+      "rootfs": "12af39b2979cf55aa6b2349241e9f6b8f7956c7c1f75fa03634eb3789f0109f6",
+      "run": "93af270ef9731c80c7567e90671c882ae10de4d4c89829a7823987ab7d0ca0e8",
+      "terminate_owned": "af8dc3b03974548c20d8a537b798f9e84be262c88be4bc7be6358206faca3aec"
+    },
+    "controller_crash_qualified": false,
+    "durable_supervisor_qualified": false,
+    "elapsed_seconds": 0.183757,
+    "errors": {
+      "clone3": 1,
+      "exec": 1,
+      "fork": 1,
+      "namespace_change_denied": 1,
+      "network_loopback": 1,
+      "network_unix_abstract": 1,
+      "network_unix_path": 1,
+      "outside_read": 2,
+      "outside_signal_denied": 1,
+      "outside_write": 30,
+      "process_group": 1,
+      "readonly_file_write": 30,
+      "runtime_write": 13,
+      "session": 1,
+      "x32_abi_denied": 1
+    },
+    "host": {
+      "machine": "x86_64",
+      "release": "5.15.0-198-generic",
+      "system": "Linux"
+    },
+    "host_configuration_changed": false,
+    "limits": {
+      "cleanup_seconds": 2,
+      "launcher_cpu_seconds": 1,
+      "max_processes_excluding_controller": 3,
+      "max_test_processes": 1,
+      "memory_bytes_each": 268435456,
+      "output_bytes": 16384,
+      "root_tmpfs_bytes": 33554432,
+      "startup_seconds": 5,
+      "supervisor_cpu_seconds": 5,
+      "test_cpu_seconds": 1,
+      "test_wall_seconds": 3,
+      "total_wall_seconds": 10,
+      "work_inodes": 128,
+      "work_tmpfs_bytes": 4194304
+    },
+    "models": 0,
+    "namespace_identity": {
+      "acquired_by": "SCM_RIGHTS_from_trusted_init",
+      "host_pid_namespace_identity": [
+        4,
+        4026531836
+      ],
+      "init_is_exact_launcher_child": true,
+      "init_pid_namespace_identity": [
+        4,
+        4026532589
+      ],
+      "kernel_fdinfo_nspid": [
+        89012,
+        1
+      ],
+      "namespace_numbers_used_for_host_signals": false
+    },
+    "outside_canary_after": {
+      "identity": [
+        64768,
+        10909250
+      ],
+      "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+      "size": 9
+    },
+    "outside_canary_before": {
+      "accessible_read_verified": true,
+      "identity": [
+        64768,
+        10909250
+      ],
+      "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+      "size": 9
+    },
+    "outside_canary_same_pin": true,
+    "outside_canary_unchanged": true,
+    "outside_signal_received": false,
+    "outside_write_host_absent": true,
+    "persistent_services": 0,
+    "prototype": "synthetic_linux_foundation",
+    "reason": "foundation_guards_passed",
+    "result": "linux_unqualified",
+    "runtime_files": 139,
+    "runtime_pin_sha256": "a9ff323669dc74877b36b982c0ad52eba6cb58f10a14a6d756417a36e7eb93e2",
+    "schema": 1,
+    "seccomp_sha256": "76914d2861e44be60ea103caa0a51e3ed7f12d289fad91cadd66432141ecd898",
+    "source_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+    "tool_pins": {
+      "/usr/bin/python3.10": {
+        "identity": [
+          64768,
+          5243331
+        ],
+        "sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+        "size": 5941864
+      },
+      "/usr/bin/unshare": {
+        "identity": [
+          64768,
+          5258917
+        ],
+        "sha256": "9f41a192393e7a05b843ae51bd187a76e09482392d37275d796f8881db97dde6",
+        "size": 31336
+      }
+    },
+    "work_input_pin": {
+      "identity": [
+        59,
+        2
+      ],
+      "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+      "size": 9
+    }
+  },
+  "not_measured": [
+    "controller SIGKILL",
+    "supervisor SIGKILL",
+    "ignored TERM timeout",
+    "durable restart/reconciliation",
+    "production test checkout",
+    "model or subscription"
+  ],
+  "earlier_attempts": [
+    {
+      "source_sha256": "be2aa91f4cd1ff95524051dba4e6e88d8ba190b1d53e8d570e30e3a9585bec8a",
+      "reason": "probe_start_or_exchange_failed",
+      "kernel_init_identity_received": true,
+      "cleanup_confirmed": true
+    },
+    {
+      "source_sha256": "fc4a53fbb2a9dd489d4dd1fde32ad3de374e22e02664b1f03cfbc30091eca6b9",
+      "reason": "bootstrap_runtime_inventory_errno_0",
+      "kernel_init_identity_received": true,
+      "cleanup_confirmed": true
+    },
+    {
+      "source_sha256": null,
+      "reason": "prototype_failed",
+      "cleanup_confirmed": null
+    }
+  ],
+  "limits": [
+    "Only /work is a 4 MiB synthetic ephemeral writable tmpfs; no actual product checkout was exposed writable.",
+    "System-wide configuration, accounts, services, sysctls and AppArmor were unchanged.",
+    "The complete native backend remains Linux-unqualified; this is not a qualification of Codex, bubblewrap or a model.",
+    "No reliable init pidfd means cleanup remains unknown even if the launcher exits.",
+    "Process disappearance uses a received kernel pidfd, not a namespace PID number.",
+    "Outside process invisibility was checked before generic seccomp signal denial."
+  ],
+  "earlier_measurements": [
+    {
+      "account_operations": 0,
+      "backend_execution_qualified": false,
+      "checks": {
+        "bounding_caps_zero_before_filter": true,
+        "caps_zero_after_filter": true,
+        "clone3": true,
+        "exec": true,
+        "fork": true,
+        "hard_limits": true,
+        "home_proc_private_state_absent": true,
+        "inside_read": true,
+        "inside_write": true,
+        "namespace_change_denied": true,
+        "network_loopback": true,
+        "network_unix_abstract": true,
+        "network_unix_path": true,
+        "no_new_privs_before_filter": true,
+        "nproc_raise_denied": true,
+        "old_root_absent": true,
+        "outside_process_hidden_before_filter": true,
+        "outside_read": true,
+        "outside_signal_denied": true,
+        "outside_write": true,
+        "pid_namespace_init": true,
+        "process_group": true,
+        "readonly_file_write": true,
+        "runtime_write": true,
+        "session": true,
+        "work_volume_bound": true,
+        "x32_abi_denied": true
+      },
+      "cleanup": {
+        "cleanup_confirmed": true,
+        "kernel_init_identity_received": true,
+        "launcher_reaped": true,
+        "namespace_init_exited": true
+      },
+      "controller_crash_qualified": false,
+      "durable_supervisor_qualified": false,
+      "elapsed_seconds": 0.180213,
+      "errors": {
+        "clone3": 1,
+        "exec": 1,
+        "fork": 1,
+        "namespace_change_denied": 1,
+        "network_loopback": 1,
+        "network_unix_abstract": 1,
+        "network_unix_path": 1,
+        "outside_read": 2,
+        "outside_signal_denied": 1,
+        "outside_write": 30,
+        "process_group": 1,
+        "readonly_file_write": 30,
+        "runtime_write": 13,
+        "session": 1,
+        "x32_abi_denied": 1
+      },
+      "host": {
+        "machine": "x86_64",
+        "release": "5.15.0-198-generic",
+        "system": "Linux"
+      },
+      "host_configuration_changed": false,
+      "limits": {
+        "cleanup_seconds": 2,
+        "launcher_cpu_seconds": 1,
+        "max_processes_excluding_controller": 3,
+        "max_test_processes": 1,
+        "memory_bytes_each": 268435456,
+        "output_bytes": 16384,
+        "root_tmpfs_bytes": 33554432,
+        "startup_seconds": 5,
+        "supervisor_cpu_seconds": 5,
+        "test_cpu_seconds": 1,
+        "test_wall_seconds": 3,
+        "total_wall_seconds": 10,
+        "work_inodes": 128,
+        "work_tmpfs_bytes": 4194304
+      },
+      "models": 0,
+      "outside_canary_unchanged": true,
+      "outside_signal_received": false,
+      "outside_write_host_absent": true,
+      "persistent_services": 0,
+      "prototype": "synthetic_linux_foundation",
+      "reason": "foundation_guards_passed",
+      "result": "linux_unqualified",
+      "runtime_files": 137,
+      "runtime_pin_sha256": "be6fe7abd3f72c64b856dbf5bc28baf6bac6f4742f960018a6be79624cf3bfc2",
+      "schema": 1,
+      "seccomp_sha256": "76914d2861e44be60ea103caa0a51e3ed7f12d289fad91cadd66432141ecd898",
+      "source_sha256": "f9c9c628075bc3fedb8dc4651d3b52c241f8e5e647e20bcd8ad3c8144de39a36",
+      "tool_pins": {
+        "/usr/bin/python3.10": {
+          "identity": [
+            64768,
+            5243331
+          ],
+          "sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+          "size": 5941864
+        },
+        "/usr/bin/unshare": {
+          "identity": [
+            64768,
+            5258917
+          ],
+          "sha256": "9f41a192393e7a05b843ae51bd187a76e09482392d37275d796f8881db97dde6",
+          "size": 31336
+        }
+      }
+    },
+    {
+      "account_operations": 0,
+      "backend_execution_qualified": false,
+      "checks": {
+        "bounding_caps_zero_before_filter": true,
+        "caps_zero_after_filter": true,
+        "clone3": true,
+        "exec": true,
+        "fork": true,
+        "hard_limits": true,
+        "home_proc_private_state_absent": true,
+        "inside_read": true,
+        "inside_write": true,
+        "namespace_change_denied": true,
+        "network_loopback": true,
+        "network_unix_abstract": true,
+        "network_unix_path": true,
+        "no_new_privs_before_filter": true,
+        "nproc_raise_denied": true,
+        "old_root_absent": true,
+        "outside_process_hidden_before_filter": true,
+        "outside_read": true,
+        "outside_signal_denied": true,
+        "outside_write": true,
+        "pid_namespace_init": true,
+        "process_group": true,
+        "readonly_file_write": true,
+        "runtime_write": true,
+        "session": true,
+        "work_volume_bound": true,
+        "x32_abi_denied": true
+      },
+      "cleanup": {
+        "cleanup_confirmed": true,
+        "kernel_init_identity_received": true,
+        "launcher_reaped": true,
+        "namespace_init_exited": true
+      },
+      "component_sha256": {
+        "fixed_canaries": "bd0ba777ebfe1f5e53826d47cbafe7d911a0494efd970ad8db5120d8c4407059",
+        "inner_setup": "2ad091cdb6b53584d4875a258b6bf051978e40196ce8d2d822d8ef7ee671970d",
+        "lock_down": "d1f3b74da279f6cf8b34293dc9511346ca01667ffbd629989cf95c13d9088513",
+        "rootfs": "12af39b2979cf55aa6b2349241e9f6b8f7956c7c1f75fa03634eb3789f0109f6",
+        "run": "93af270ef9731c80c7567e90671c882ae10de4d4c89829a7823987ab7d0ca0e8",
+        "terminate_owned": "8b194255c5b4f5b404faffc2a02bdcc1891ba45fe173f78067911032da8ef3f9"
+      },
+      "controller_crash_qualified": false,
+      "durable_supervisor_qualified": false,
+      "elapsed_seconds": 0.181934,
+      "errors": {
+        "clone3": 1,
+        "exec": 1,
+        "fork": 1,
+        "namespace_change_denied": 1,
+        "network_loopback": 1,
+        "network_unix_abstract": 1,
+        "network_unix_path": 1,
+        "outside_read": 2,
+        "outside_signal_denied": 1,
+        "outside_write": 30,
+        "process_group": 1,
+        "readonly_file_write": 30,
+        "runtime_write": 13,
+        "session": 1,
+        "x32_abi_denied": 1
+      },
+      "host": {
+        "machine": "x86_64",
+        "release": "5.15.0-198-generic",
+        "system": "Linux"
+      },
+      "host_configuration_changed": false,
+      "limits": {
+        "cleanup_seconds": 2,
+        "launcher_cpu_seconds": 1,
+        "max_processes_excluding_controller": 3,
+        "max_test_processes": 1,
+        "memory_bytes_each": 268435456,
+        "output_bytes": 16384,
+        "root_tmpfs_bytes": 33554432,
+        "startup_seconds": 5,
+        "supervisor_cpu_seconds": 5,
+        "test_cpu_seconds": 1,
+        "test_wall_seconds": 3,
+        "total_wall_seconds": 10,
+        "work_inodes": 128,
+        "work_tmpfs_bytes": 4194304
+      },
+      "models": 0,
+      "namespace_identity": {
+        "acquired_by": "SCM_RIGHTS_from_trusted_init",
+        "host_pid_namespace_identity": [
+          4,
+          4026531836
+        ],
+        "init_is_exact_launcher_child": true,
+        "init_pid_namespace_identity": [
+          4,
+          4026532589
+        ],
+        "kernel_fdinfo_nspid": [
+          88754,
+          1
+        ],
+        "namespace_numbers_used_for_host_signals": false
+      },
+      "outside_canary_after": {
+        "identity": [
+          64768,
+          10908650
+        ],
+        "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        "size": 9
+      },
+      "outside_canary_before": {
+        "accessible_read_verified": true,
+        "identity": [
+          64768,
+          10908650
+        ],
+        "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        "size": 9
+      },
+      "outside_canary_same_pin": true,
+      "outside_canary_unchanged": true,
+      "outside_signal_received": false,
+      "outside_write_host_absent": true,
+      "persistent_services": 0,
+      "prototype": "synthetic_linux_foundation",
+      "reason": "foundation_guards_passed",
+      "result": "linux_unqualified",
+      "runtime_files": 139,
+      "runtime_pin_sha256": "a9ff323669dc74877b36b982c0ad52eba6cb58f10a14a6d756417a36e7eb93e2",
+      "schema": 1,
+      "seccomp_sha256": "76914d2861e44be60ea103caa0a51e3ed7f12d289fad91cadd66432141ecd898",
+      "source_sha256": "e681c67ee03809e70348278cd67b5f2009ffea756aae7140740cd523ac5f9770",
+      "tool_pins": {
+        "/usr/bin/python3.10": {
+          "identity": [
+            64768,
+            5243331
+          ],
+          "sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+          "size": 5941864
+        },
+        "/usr/bin/unshare": {
+          "identity": [
+            64768,
+            5258917
+          ],
+          "sha256": "9f41a192393e7a05b843ae51bd187a76e09482392d37275d796f8881db97dde6",
+          "size": 31336
+        }
+      },
+      "work_input_pin": {
+        "identity": [
+          59,
+          2
+        ],
+        "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        "size": 9
+      }
+    }
+  ],
+  "unit_tests": {
+    "count": 18,
+    "native_execution": false,
+    "files": [
+      "tests/test_linux_foundation.py",
+      "tests/test_linux_feasibility.py"
+    ]
+  }
+}

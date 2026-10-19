@@ -307,10 +307,11 @@ class DevelopmentJournal:
             keys = common | {'name'}
             metadata = {'cleanup_confirmed', 'output_bytes', 'output_sha256'}
             if receipt.get('result') == 'not_started':
-                if (admission is None or admission['dispatch'] != 'pending'
+                extra = {'backend_admission'} if admission is not None and admission['dispatch'] == 'dispatched' else set()
+                if (admission is None
                         or operation['phase'] != 'complete'
                         or set(receipt) != keys | {'cleanup_confirmed', 'started', 'reason',
-                            'manifest_hash', 'request_hash', 'admission_sha256'}
+                            'manifest_hash', 'request_hash', 'admission_sha256'} | extra
                         or receipt['name'] != detail['name']
                         or receipt['cleanup_confirmed'] is not True or receipt['started'] is not False
                         or receipt['manifest_hash'] != self.manifest_hash
@@ -319,6 +320,12 @@ class DevelopmentJournal:
                         or type(receipt['reason']) is not str
                         or re.fullmatch('[a-z][a-z0-9_]{0,99}', receipt['reason']) is None):
                     raise DevelopmentError('journal_corrupt')
+                if extra:
+                    from .dev_broker import TestRequest, validate_backend_not_started
+                    request = TestRequest(key, self.manifest_hash, self._manifest['root'],
+                        tuple(self._manifest['root_identity']), detail['name'],
+                        detail['timeout_seconds'], detail['max_output_bytes'])
+                    validate_backend_not_started(request, detail['backend_id'], receipt['backend_admission'])
                 return
             if admission is not None and admission['dispatch'] != 'dispatched':
                 raise DevelopmentError('journal_corrupt')
