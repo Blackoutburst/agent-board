@@ -439,7 +439,7 @@ const Workspace = (() => {
     await refreshRequestCount();
   }
   function activityList(events) {
-    const descriptions = { ticket_created: "created this task", ticket_claimed: "started work", ticket_recovered: "recovered an expired claim", ticket_updated: "updated this task", ticket_progress: "reported progress", ticket_delegated: "delegated a subtask", ticket_unblocked: "unblocked this task", review_requested: "requested a review", review_reminder: "sent a review reminder", agent_block_recorded: "recorded a block", block_escalated: "escalated repeated blocks to a human", human_input_requested: "requested human input", human_input_resolved: "answered a human request" };
+    const descriptions = { ticket_created: "created this task", ticket_claimed: "started work", ticket_recovered: "recovered an expired claim", ticket_updated: "updated this task", ticket_progress: "reported progress", ticket_delegated: "delegated a subtask", ticket_unblocked: "unblocked this task", review_requested: "requested a review", review_reminder: "sent a review reminder", agent_block_recorded: "recorded a block", block_escalated: "escalated repeated blocks to a human", legacy_block_classified: "kept an earlier manual block", human_input_requested: "requested human input", human_input_resolved: "answered a human request" };
     if (!events.length) return box("No activity yet", "Claims, progress, handoffs, and completed work will appear here.");
     const rows = events.map(event => {
       const detail = el("div", {},

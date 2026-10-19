@@ -181,3 +181,39 @@ def test_review_reminder_maintenance_remains_scoped_and_idempotent(tmp_path):
     before=snapshot(board)
     board.get_work(actor)
     assert snapshot(board)==before
+
+
+def legacy_manual_block(board,human,ticket):
+    # The real human API supplies the provenance. Only the new metadata is
+    # erased to reproduce a schema13 block inherited from the older schema.
+    board.update_ticket(human,ticket['id'],ticket['version'],status='blocked')
+    with board._tx() as db:
+        db.execute("UPDATE tickets SET blocked_reason='',unblock_owner=NULL,recheck_at=NULL WHERE id=?",(ticket['id'],))
+
+
+@pytest.mark.parametrize('explicit_hidden',[False,True])
+def test_legacy_human_classification_has_no_effect_outside_profile_scope(tmp_path,explicit_hidden):
+    board,human,_,hidden,actor=readonly_scope(tmp_path)
+    ticket=board.create_ticket(human,hidden['id'],'Hidden human block',idempotency_key='human-hidden')
+    legacy_manual_block(board,human,ticket)
+    before=snapshot(board)
+    if explicit_hidden:
+        with pytest.raises(BoardError):board.get_work(actor,hidden['id'])
+    else:board.get_work(actor)
+    assert snapshot(board)==before
+
+
+def test_authorized_legacy_classification_preserves_manual_block_once(tmp_path):
+    board,human,allowed,_,actor=readonly_scope(tmp_path)
+    ticket=board.create_ticket(human,allowed['id'],'Human block',idempotency_key='human-allowed')
+    legacy_manual_block(board,human,ticket)
+    response=board.get_work(actor,allowed['id'])
+    assert ticket['id'] not in [item['id'] for item in response['ready']]
+    detail=board.get_ticket(human,ticket['id'])['ticket']
+    assert detail['status']=='blocked' and detail['blocked_reason'].startswith('Blocked manually by')
+    assert detail['unblock_owner']==human['owner_id'] and detail['recheck_at'] is None
+    events=board.list_activity(human,ticket_id=ticket['id'])
+    assert len([event for event in events if event['event']=='legacy_block_classified'])==1
+    before=snapshot(board)
+    board.get_work(actor,allowed['id'])
+    assert snapshot(board)==before

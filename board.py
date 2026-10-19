@@ -163,8 +163,9 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
                 db.execute("ALTER TABLE message_feeds ADD COLUMN pending_compact_json TEXT")
                 db.execute("PRAGMA user_version=12")
             if version < 13:
-                # A stored block must name a verifiable reason. Existing
-                # reasonless blocks are released by the first reevaluation.
+                # A stored block must name a verifiable reason. On the first
+                # reevaluation, an existing reasonless block keeps a manual
+                # reason when the audit shows a human set it; others are released.
                 columns = {row[1] for row in db.execute("PRAGMA table_info(tickets)")}
                 for name, kind in (("blocked_reason", "TEXT NOT NULL DEFAULT ''"), ("unblock_owner", "TEXT"),
                                    ("recheck_at", "REAL")):

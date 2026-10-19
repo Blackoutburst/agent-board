@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "kind": "legacy_human_block_fix",
+  "date": "2026-10-19",
+  "ticket": "Board overhaul #42 (independent review P1, Linux X670)",
+  "board_version": "2.12.2",
+  "database_schema": 13,
+  "adapter_version": "0.25.0",
+  "base_revision": "0090da09c5bc281e9ee62f3db6ded40e5b48f44f",
+  "defect": "A human manual block stored before schema 13 had no blocked_reason after migration and was released as a ghost by the first get_work",
+  "change": [
+    "Before releasing a reasonless block without recheck, the reevaluation reads the ticket audit: when the latest status-changing event is a human ticket_updated naming status, the block is kept with reason 'Blocked manually by <name>', unblock_owner set to that human and no recheck; a legacy_block_classified event is recorded",
+    "Status-neutral events (messages, progress, reviews, executions, runtime, profile refresh) are skipped; any other latest event, including agent updates and releases, keeps the previous release behaviour",
+    "A ticket_released without a status (claim release, which keeps a blocked status) and ticket_idle_assignment_released are skipped like status-neutral events; a release with status=blocked still counts as the latest status change (counter-review of f6ff49f)",
+    "Classification runs on every reevaluation, so databases already migrated to schema 13 are covered too",
+    "Web activity label for legacy_block_classified"
+  ],
+  "verification": {
+    "board_tests": "935 passed (933 + two upgrade tests through the real 12->13 migration: plain human block, and human block followed by an agent claim release without status; the second fails on f6ff49f)",
+    "reviewer_probe": {
+      "description": "Linux X670 migration_probe.py: schema-12 database created with the e390183 API (human update_ticket status=blocked), then reopened and polled",
+      "on_0090da0": {
+        "schema_after": 13,
+        "status_after_migration_before_poll": "blocked",
+        "status_after_poll": "todo",
+        "reason_after_migration": "",
+        "ready_after_poll": true,
+        "audit_unblocked_events": 1,
+        "open_human_requests": false,
+        "dependencies": []
+      },
+      "on_candidate": {
+        "schema_after": 13,
+        "status_after_migration_before_poll": "blocked",
+        "status_after_poll": "blocked",
+        "reason_after_migration": "",
+        "ready_after_poll": false,
+        "audit_unblocked_events": 0,
+        "open_human_requests": false,
+        "dependencies": []
+      }
+    },
+    "reviewer_probe_release_path": {
+      "description": "Same probe with an agent claim, human update_ticket(status=blocked), then agent release_ticket without status, all through the e390183 API",
+      "on_f6ff49f": {
+        "schema_after": 13,
+        "status_after_migration_before_poll": "blocked",
+        "status_after_poll": "todo",
+        "reason_after_migration": "",
+        "ready_after_poll": false,
+        "audit_unblocked_events": 1,
+        "open_human_requests": false,
+        "dependencies": []
+      },
+      "on_candidate": {
+        "schema_after": 13,
+        "status_after_migration_before_poll": "blocked",
+        "status_after_poll": "blocked",
+        "reason_after_migration": "",
+        "ready_after_poll": false,
+        "audit_unblocked_events": 0,
+        "open_human_requests": false,
+        "dependencies": []
+      }
+    }
+  },
+  "limits": [
+    "The audit records which fields an update changed, not their values; a block written outside the API after a human status update would be classified as human (no API path does this)",
+    "Tickets already released in production by 2.11-2.12.1 are not re-blocked; Studio #3 and retention #14 were restored by hand and carry explicit reasons"
+  ]
+}

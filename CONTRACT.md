@@ -101,6 +101,8 @@ The board reevaluates a blocked task whenever a dependency moves to `review` or 
 
 Unfinished executions or unconfirmed cleanup on the ticket or its family retain a generic `runtime_cleanup` block; a family stop retains `delegation`. These reasons disclose no other executor identity. A clean ordinary execution can become eligible for reevaluation, while a cancelled family is never reopened by this maintenance. Reasonless legacy blocks are released only after all current reasons are absent. The fixed `get_development_frame` endpoint skips the sweep on all four internal policy reads; it adds no ticket or discussion mutation. Existing `get_thread` legacy expiration maintenance remains.
 
+Before reevaluating a legacy block without a recorded reason or expiry, the board checks its status-changing audit history. A last human `ticket_updated` status edit preserves the block as `Blocked manually by <name>`, with that human as `unblock_owner`, no recheck and one `legacy_block_classified` event. A claim release with no explicit status preserves the prior status and is skipped when reconstructing this provenance. The classification runs only after the caller's current project scope and membership checks. It covers already-migrated schema13 data; it never re-blocks tickets that were previously released or reconstructs unaudited writes.
+
 When an explicit block expires and its `unblock_owner` is an active agent profile of the project, the task returns to `todo` assigned to that agent with a recheck message: expiry is not evidence that the wait is over, and that agent must verify it or block again with a reason before work starts (2.12.1).
 
 ## Review queue, reminders and block escalation (2.12)
