@@ -15,6 +15,7 @@ import uuid
 
 from .decision_memory import DecisionMemory, DecisionMemoryError
 from .board_reader import BoardReadError, _text
+from .client_lifecycle import own_client
 from .board_worker import BoardWorker
 from .human_client import HumanWorkerClient
 from .run_store import RunStore, StoreError
@@ -86,7 +87,7 @@ def runtime_worker_options(args, client, resources):
     if path is None:
         return {}
     journal = resources.enter_context(RuntimeJournal(path))
-    runtime_client = RuntimeBoardClient.from_worker(client)
+    runtime_client = own_client(resources, RuntimeBoardClient.from_worker(client))
     return {'runtime_guard_factory': lambda scope: RuntimeGuard(journal, runtime_client, scope)}
 
 
@@ -226,10 +227,11 @@ def run(args):
             if not workspace.is_dir():
                 raise ValueError
             client_class = HumanWorkerClient if args.human_owner is not None else WorkerBoardClient
-            client = client_class.from_connection_file(args.connection_file, session_id=args.session)
-            scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
-                     'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
-            with WorkJournal(args.journal) as journal, ExitStack() as resources:
+            with ExitStack() as resources:
+                client = own_client(resources, client_class.from_connection_file(args.connection_file, session_id=args.session))
+                scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
+                         'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
+                journal = resources.enter_context(WorkJournal(args.journal))
                 store = RunStore(args.state)
                 previous = {}
                 cancelled = threading.Event()

@@ -7,6 +7,7 @@ import re
 import stat
 
 from .board_reader import BoardReader, BoardReadError, _endpoint, _json
+from .client_lifecycle import managed_client
 from .model_policy import connection_identifier
 from .runner_cli import _write_private
 from .usage_observation import UsageError, validate_snapshot, validate_time, public_receipt
@@ -91,8 +92,8 @@ def run(args):
             output = observation if args.show else public_receipt(observation)
         else:
             observation = read_observation(args.observation_file)
-            client = UsageBoardClient.from_connection_file(args.connection_file, session_id=args.session)
-            output = client.report(args.owner, args.agent, observation)
+            with managed_client(UsageBoardClient.from_connection_file(args.connection_file, session_id=args.session)) as client:
+                output = client.report(args.owner, args.agent, observation)
         print(json.dumps(output, ensure_ascii=False, allow_nan=False, indent=2))
         return 0
     except KeyboardInterrupt:

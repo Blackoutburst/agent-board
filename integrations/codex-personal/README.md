@@ -20,6 +20,8 @@ L’adaptateur 0.18 ajoute le [parcours explicite de développement](DEVELOPMENT
 
 L’adaptateur 0.21 sépare les scripts de validation des fichiers modifiables par le modèle. Le plan natif épingle leurs octets et leur identité ; le processus de test exécute les octets vérifiés, sans rouvrir un chemin mutable. Les anciens plans non épinglés sont refusés et doivent être préparés et qualifiés explicitement à nouveau. Les reçus antérieurs restent des observations datées, jamais une autorisation de relancer un ancien script.
 
+L’adaptateur 0.24 conserve une connexion HTTP/TLS par lecteur MCP pour éviter les nouvelles connexions à chaque contrôle. Il conserve tous les RPC et barrières d’autorisation, sans cache d’autorité ni renvoi automatique après coupure. Les commandes et hôtes ferment explicitement leurs lecteurs et clients Runtime distincts. Le [contrat du transport persistant](PERSISTENT_MCP_TRANSPORT.md) présente les tests TLS locaux, les mesures datées et leurs limites.
+
 L’adaptateur 0.19 ajoute le [coordinateur familial](FAMILY.md) : un ticket parent choisi, deux agents temporaires du même propriétaire, trois espaces isolés et des modèles fixés explicitement. Après ouverture des tickets et qualification séparée des plans locaux, le contrôleur traite les deux enfants successivement, vérifie leurs fichiers/tests/nettoyages, puis fait vérifier leur intégration dans le parent. La publication du parent reste une commande distincte. Le verrou local de format 3 réserve les trois espaces atomiquement ; aucun service, sélection de ticket ou qualification automatique n’est activé. Les scénarios familiaux utilisent un vrai board temporaire et des modèles simulés ; ils ne constituent pas un pilote réel via l’abonnement.
 
 ## Utilisation

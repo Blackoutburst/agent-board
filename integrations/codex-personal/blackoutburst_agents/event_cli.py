@@ -10,6 +10,7 @@ import signal
 import threading
 
 from .board_worker import BoardWorker
+from .client_lifecycle import managed_client, own_client
 from .event_client import EventBoardClient, HumanEventBoardClient
 from .board_reader import _text
 from .event_drain import EventDrainer
@@ -100,14 +101,14 @@ def run(args):
                                             or previous.get('operation_id', operation.get('id')) != operation.get('id')):
                                         raise EventJournalError('resolution_mismatch')
                                     scope = operation['scope']
-                                    client = HumanEventBoardClient.from_connection_file(args.connection_file,
-                                        session_id=scope['board_session_id'])
-                                    if client.endpoint != scope['board_endpoint']:
-                                        raise ValueError
-                                    request = BoardWorker(work, None, client).lookup_human_question(operation)
-                                    if request is None:
-                                        raise EventJournalError('human_request_unresolved')
-                                    batch = journal.resolve_batch(args.batch, operation, verified_human_request=request)
+                                    with managed_client(HumanEventBoardClient.from_connection_file(args.connection_file,
+                                            session_id=scope['board_session_id'])) as client:
+                                        if client.endpoint != scope['board_endpoint']:
+                                            raise ValueError
+                                        request = BoardWorker(work, None, client).lookup_human_question(operation)
+                                        if request is None:
+                                            raise EventJournalError('human_request_unresolved')
+                                        batch = journal.resolve_batch(args.batch, operation, verified_human_request=request)
                                 else:
                                     batch = journal.resolve_batch(args.batch, operation)
                     output = {'status': 'reconciled', 'batch_id': batch['id'],
@@ -131,10 +132,10 @@ def run(args):
         if not workspace.is_dir():
             raise ValueError
         client_class = HumanEventBoardClient if args.human_owner is not None else EventBoardClient
-        client = client_class.from_connection_file(args.connection_file, session_id=args.session)
-        scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
-                 'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
         with ExitStack() as stack:
+            client = own_client(stack, client_class.from_connection_file(args.connection_file, session_id=args.session))
+            scope = {'owner_id': args.owner, 'agent_id': args.agent, 'project_id': args.project,
+                     'ticket_id': args.ticket, 'board_session_id': args.session, 'board_endpoint': client.endpoint}
             journal = stack.enter_context(EventJournal(args.journal))
             worker = None
             if args.execute:

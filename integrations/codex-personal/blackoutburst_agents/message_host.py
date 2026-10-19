@@ -2,6 +2,7 @@
 from contextlib import contextmanager, ExitStack
 from types import SimpleNamespace
 from .board_reader import BoardReadError
+from .client_lifecycle import own_client
 from .context import _hash
 from .host_config import HostError, digest, connection_digest
 from .message_client import MessageBoardClient
@@ -46,12 +47,12 @@ class PinnedMessageClient:
 @contextmanager
 def default_message_resources(host,target,config,cancelled):
     with ExitStack() as resources:
-        raw=MessageBoardClient.from_connection_file(target['connection_file'],session_id=target['board_session_id'])
+        raw=own_client(resources,MessageBoardClient.from_connection_file(target['connection_file'],session_id=target['board_session_id']))
         client=PinnedMessageClient(raw,host,target,config['owner_id'],cancelled)
         journal=resources.enter_context(MessageJournal(host.directory/'messages'))
         runs=RunStore(host.directory/'message-runs');resources.callback(runs.close)
         runtime=resources.enter_context(RuntimeJournal(host.directory/'message-runtime'))
-        control=MessageRuntimeClient.from_worker(raw)
+        control=own_client(resources,MessageRuntimeClient.from_worker(raw))
         worker=MessageWorker(journal,runs,client,runtime_guard_factory=lambda scope:MessageRuntimeGuard(runtime,control,scope))
         yield SimpleNamespace(journal=journal,worker=worker,client=client)
 

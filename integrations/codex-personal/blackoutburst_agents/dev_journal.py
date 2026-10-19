@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import threading
 import uuid
@@ -236,7 +237,8 @@ class DevelopmentJournal:
                     or operation.get('kind') not in ('patch', 'test')
                     or operation.get('phase') not in ('intent', 'complete', 'needs_review')
                     or type(operation.get('request_hash')) is not str
-                    or set(operation) != {'id', 'kind', 'phase', 'request_hash', 'detail', 'receipt'}
+                    or set(operation) not in ({'id', 'kind', 'phase', 'request_hash', 'detail', 'receipt'},
+                        {'id', 'kind', 'phase', 'request_hash', 'detail', 'receipt', 'admission'})
                     or type(operation['detail']) is not dict
                     or (operation['receipt'] is not None and type(operation['receipt']) is not dict)):
                 raise DevelopmentError('journal_corrupt')
@@ -250,7 +252,8 @@ class DevelopmentJournal:
         sha256(operation['request_hash'])
         detail, receipt = operation['detail'], operation['receipt']
         if operation['kind'] == 'patch':
-            if (set(detail) != {'kind', 'path', 'before_sha256', 'after_sha256', 'bytes', 'before_signature'}
+            if ('admission' in operation
+                    or set(detail) != {'kind', 'path', 'before_sha256', 'after_sha256', 'bytes', 'before_signature'}
                     or detail['kind'] != 'patch' or detail['path'] not in self._manifest['files']
                     or type(detail['bytes']) is not int or not 0 <= detail['bytes'] <= self._manifest['budgets']['max_file_bytes']
                     or type(detail['before_signature']) is not list or len(detail['before_signature']) != 8
@@ -265,6 +268,20 @@ class DevelopmentJournal:
             request = {'kind': 'test', **detail}
         if digest(canonical(request)) != operation['request_hash']:
             raise DevelopmentError('journal_corrupt')
+        admission = operation.get('admission')
+        if 'admission' in operation:
+            if type(admission) is not dict:
+                raise DevelopmentError('journal_corrupt')
+            expected = {'schema': 1, 'operation_id': key, 'manifest_hash': self.manifest_hash,
+                'request_hash': operation['request_hash'], 'backend_id': detail['backend_id'],
+                'root_identity': self._manifest['root_identity'], 'dispatch': admission.get('dispatch')}
+            if (admission != expected
+                    or type(admission['schema']) is not int
+                    or type(admission['root_identity']) is not list
+                    or len(admission['root_identity']) != 2
+                    or any(type(value) is not int for value in admission['root_identity'])
+                    or admission['dispatch'] not in ('pending', 'dispatched')):
+                raise DevelopmentError('journal_corrupt')
         if operation['phase'] == 'intent':
             if receipt is not None:
                 raise DevelopmentError('journal_corrupt')
@@ -289,6 +306,22 @@ class DevelopmentJournal:
         else:
             keys = common | {'name'}
             metadata = {'cleanup_confirmed', 'output_bytes', 'output_sha256'}
+            if receipt.get('result') == 'not_started':
+                if (admission is None or admission['dispatch'] != 'pending'
+                        or operation['phase'] != 'complete'
+                        or set(receipt) != keys | {'cleanup_confirmed', 'started', 'reason',
+                            'manifest_hash', 'request_hash', 'admission_sha256'}
+                        or receipt['name'] != detail['name']
+                        or receipt['cleanup_confirmed'] is not True or receipt['started'] is not False
+                        or receipt['manifest_hash'] != self.manifest_hash
+                        or receipt['request_hash'] != operation['request_hash']
+                        or receipt['admission_sha256'] != digest(canonical(admission))
+                        or type(receipt['reason']) is not str
+                        or re.fullmatch('[a-z][a-z0-9_]{0,99}', receipt['reason']) is None):
+                    raise DevelopmentError('journal_corrupt')
+                return
+            if admission is not None and admission['dispatch'] != 'dispatched':
+                raise DevelopmentError('journal_corrupt')
             if (receipt['name'] != detail['name'] or receipt['result'] not in ('passed', 'failed', 'cancelled', 'needs_review')
                     or set(receipt) not in (keys, keys | metadata)):
                 raise DevelopmentError('journal_corrupt')
@@ -310,9 +343,9 @@ class DevelopmentJournal:
             raise DevelopmentError('journal_full')
         self.private.replace('state.json', encoded)
 
-    def charge(self, state, *, read_bytes=0, patch_bytes=0, tests=0):
+    def charge(self, state, *, operations=1, read_bytes=0, patch_bytes=0, tests=0):
         limits = self.manifest['budgets']
-        values = {'operations': 1, 'read_bytes': read_bytes, 'patch_bytes': patch_bytes, 'tests': tests}
+        values = {'operations': operations, 'read_bytes': read_bytes, 'patch_bytes': patch_bytes, 'tests': tests}
         for key, amount in values.items():
             if state['used'][key] + amount > limits['max_' + key]:
                 raise DevelopmentError(key + '_budget_exhausted')
