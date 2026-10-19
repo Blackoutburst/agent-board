@@ -22,6 +22,10 @@ _QUEUE_EMPTY_PREFIX = '!queue-result-v1:'
 _QUEUE_EMPTY_REASONS = frozenset({'no_ready_ticket', 'unfinished_work', 'waiting_on_human'})
 # Default lifetime of an agent's explicit block before the board rechecks it.
 _DEFAULT_RECHECK_SECONDS = 24 * 3600
+# Reviews waiting longer than this get one reminder per review cycle.
+_REVIEW_REMINDER_SECONDS = 24 * 3600
+# Explicit agent blocks without a human decision before retries stop.
+_BLOCK_ESCALATION_ATTEMPTS = 3
 
 
 def strings(value, name, limit=50):
@@ -256,14 +260,28 @@ class CoordinationMixin(ProjectsMixin):
                     or self._ticket(row, db)['block_reasons']):
                 continue
             now = time.time()
+            # An expired explicit block goes back to the agent that owns its
+            # recheck, so it re-verifies the wait before anyone else starts.
+            recheck_agent = None
+            if row['blocked_reason'] and row['recheck_at'] and row['unblock_owner']:
+                try:
+                    recheck_agent = self._project_agent(db, row['project_id'], row['unblock_owner'])
+                except Exception:
+                    recheck_agent = None
             db.execute("""UPDATE tickets SET status='todo',waiting_for_dependencies=0,blocked_reason='',
-                unblock_owner=NULL,recheck_at=NULL,version=version+1,updated_at=? WHERE id=? AND status='blocked'""",
-                (now, ticket_id))
+                unblock_owner=NULL,recheck_at=NULL,assignee_agent_id=COALESCE(?,assignee_agent_id),
+                version=version+1,updated_at=? WHERE id=? AND status='blocked'""",
+                (recheck_agent, now, ticket_id))
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             previous = row['blocked_reason'] or ('expired explicit block' if row['recheck_at'] else 'no recorded reason')
             self._audit(db, actor, 'ticket_unblocked', {'ticket_id': ticket_id, 'trigger': trigger,
                                                         'previous_reason': previous[:500]})
-            if announce:
+            if announce and recheck_agent:
+                self._discussion_event(db, actor, row['thread_id'],
+                    f'Board recheck: the block "{row["blocked_reason"][:300]}" reached its recheck time. The task returns '
+                    'to the agent that set it, which must verify the wait is over (or block it again with a reason) '
+                    'before work starts. Expiry alone is not evidence that the wait is over.', [])
+            elif announce:
                 self._discussion_event(db, actor, row['thread_id'],
                     'Board reevaluation: no open human request, unfinished dependency or active block reason '
                     f'remains ({trigger}). This task is ready again for its assigned agent or any eligible worker.', [])
@@ -286,7 +304,90 @@ class CoordinationMixin(ProjectsMixin):
                 WHERE m.owner_id=? AND p.archived=0 AND t.status='blocked' AND (?='' OR t.project_id=?)
                 ORDER BY t.updated_at""", (actor['owner_id'], project_id, project_id))
                 if self._profile_project_allowed(db, actor, row['project_id'])]
-            return self._reevaluate_blocked(db, actor, ids, 'periodic reevaluation')
+            released = self._reevaluate_blocked(db, actor, ids, 'periodic reevaluation')
+            projects = [row[0] for row in db.execute("""SELECT p.id FROM projects p JOIN project_members m ON m.project_id=p.id
+                WHERE m.owner_id=? AND p.archived=0 AND (?='' OR p.id=?)""", (actor['owner_id'], project_id, project_id))
+                if self._profile_project_allowed(db, actor, row[0])]
+            self._remind_stale_reviews(db, actor, projects)
+            return released
+
+    def _review_origin(self, db, ticket_id):
+        """Who asked for this review and since when; author unknown is None."""
+        row = db.execute("""SELECT actor,created_at FROM ticket_events WHERE ticket_id=? AND event='review_requested'
+            ORDER BY id DESC LIMIT 1""", (ticket_id,)).fetchone()
+        if not row:
+            row = db.execute("""SELECT actor,created_at FROM ticket_events WHERE ticket_id=?
+                AND event IN ('ticket_claimed','ticket_recovered') ORDER BY id DESC LIMIT 1""", (ticket_id,)).fetchone()
+            since = db.execute('SELECT updated_at FROM tickets WHERE id=?', (ticket_id,)).fetchone()[0]
+        else:
+            since = row['created_at']
+        author = json.loads(row['actor']) if row else {}
+        return {'agent_id': author.get('agent_id'), 'owner_id': author.get('owner_id'), 'since': since}
+
+    def _record_review_request(self, db, actor, ticket_id):
+        self._audit(db, actor, 'review_requested', {'ticket_id': ticket_id})
+
+    def _review_candidates(self, db, actor, project_id=''):
+        """Unclaimed reviews this agent may take: never its own delivery."""
+        skills, identity = [], None
+        if actor['kind'] == 'agent':
+            session = db.execute('SELECT skills,agent_id FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()
+            skills, identity = json.loads(session['skills']), session['agent_id']
+        result = []
+        for row in db.execute("""SELECT t.*,p.name AS project_name FROM tickets t JOIN projects p ON p.id=t.project_id
+                JOIN project_members m ON m.project_id=p.id WHERE m.owner_id=? AND p.archived=0 AND p.automation_enabled=1
+                AND t.status='review' AND t.claimant IS NULL AND (?='' OR p.id=?)
+                AND (t.assignee_owner_id IS NULL OR t.assignee_owner_id=?)""",
+                (actor['owner_id'], project_id, project_id, actor['owner_id'])):
+            if not self._profile_project_allowed(db, actor, row['project_id']):
+                continue
+            origin = self._review_origin(db, row['id'])
+            if actor['kind'] == 'agent' and (origin['agent_id'] == identity
+                                             or not set(json.loads(row['required_skills'])).issubset(skills)):
+                continue
+            ticket = self._ticket(row, db)
+            ticket.update(project_name=row['project_name'], review_since=origin['since'],
+                          review_author_agent_id=origin['agent_id'])
+            result.append(ticket)
+        return sorted(result, key=lambda item: (item['review_since'], item['id']))
+
+    def _remind_stale_reviews(self, db, actor, project_ids):
+        """One thread message and notification per review cycle older than the delay."""
+        cutoff = time.time() - _REVIEW_REMINDER_SECONDS
+        for row in db.execute(f"""SELECT * FROM tickets WHERE status='review' AND claimant IS NULL
+                AND project_id IN ({','.join('?' * len(project_ids))})""", project_ids) if project_ids else []:
+            origin = self._review_origin(db, row['id'])
+            if origin['since'] > cutoff:
+                continue
+            key = f"review-reminder:{row['id']}:{int(origin['since'])}"
+            if db.execute("SELECT 1 FROM ticket_events WHERE ticket_id=? AND event='review_reminder' AND json_extract(detail,'$.key')=?",
+                          (row['id'], key)).fetchone():
+                continue
+            hours = int((time.time() - origin['since']) // 3600)
+            self._discussion_event(db, actor, row['thread_id'],
+                f'Board reminder: this task has waited {hours} h for review. Any eligible agent other than its author '
+                'can take it from get_work (review list), or a human can accept it or send it back to todo.', [])
+            owners = [r[0] for r in db.execute('SELECT owner_id FROM project_members WHERE project_id=?', (row['project_id'],))]
+            self._queue_notification(db, row['thread_id'], 'ready_for_verification', key, owners, row['title'])
+            self._audit(db, actor, 'review_reminder', {'ticket_id': row['id'], 'key': key, 'waited_hours': hours})
+
+    def _escalate_repeated_blocks(self, db, actor, row):
+        """After repeated agent blocks without human action, stop automatic retries."""
+        # A human decision or a delivered review restarts the count.
+        human = db.execute("""SELECT MAX(id) FROM ticket_events WHERE ticket_id=?
+            AND (json_extract(actor,'$.kind')='human' OR event='review_requested')""", (row['id'],)).fetchone()[0] or 0
+        count = db.execute("""SELECT COUNT(*) FROM ticket_events WHERE ticket_id=? AND event='agent_block_recorded'
+            AND id>?""", (row['id'], human)).fetchone()[0]
+        if count < _BLOCK_ESCALATION_ATTEMPTS:
+            return False
+        db.execute("UPDATE tickets SET recheck_at=NULL,unblock_owner='human' WHERE id=?", (row['id'],))
+        owners = [r[0] for r in db.execute('SELECT owner_id FROM project_members WHERE project_id=?', (row['project_id'],))]
+        self._discussion_event(db, actor, row['thread_id'],
+            f'Board escalation: agents blocked this task {count} times without a human decision. Automatic retries stop; '
+            'a human must resolve the block reason or reopen the task.', [])
+        self._queue_notification(db, row['thread_id'], 'needs_input', f"block-escalation:{row['id']}:{human}", owners, row['title'])
+        self._audit(db, actor, 'block_escalated', {'ticket_id': row['id'], 'attempts': count})
+        return True
 
     def _block_values(self, actor, values, now=None):
         """Normalize optional explicit block metadata from an edit."""
@@ -350,9 +451,10 @@ class CoordinationMixin(ProjectsMixin):
         now = time.time()
         lease = now + self.ticket_lease_seconds if actor['kind'] == 'agent' else None
         db.execute("""UPDATE tickets SET claimant=?,claim_started_version=version+1,lease_expires_at=?,
-            assignee_agent_id=?,status='in_progress',version=version+1,updated_at=? WHERE id=? AND version=?""",
+            assignee_agent_id=?,status=?,version=version+1,updated_at=? WHERE id=? AND version=?""",
             (_json(self._author(db, actor)), lease, None if release_assignment else row['assignee_agent_id'],
-             now, row['id'], expected_version))
+             # A reviewer's claim keeps the task visibly in review.
+             'review' if row['status'] == 'review' else 'in_progress', now, row['id'], expected_version))
         db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
         if release_assignment:
             self._audit(db, actor, 'ticket_idle_assignment_released',
@@ -430,6 +532,11 @@ class CoordinationMixin(ProjectsMixin):
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             self._remember(db, actor, 'release_ticket', idempotency_key, payload, ticket_id)
             self._audit(db, actor, 'ticket_released', dict(payload, version=expected_version+1))
+            if next_status == 'review' and row['status'] != 'review':
+                self._record_review_request(db, actor, ticket_id)
+            if explicit:
+                self._audit(db, actor, 'agent_block_recorded', {'ticket_id': ticket_id})
+                self._escalate_repeated_blocks(db, actor, db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone())
             if next_status in ('review', 'done'):
                 self._reevaluate_dependents(db, actor, ticket_id, f'#{row["number"]} moved to {next_status}')
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)
@@ -661,7 +768,9 @@ class CoordinationMixin(ProjectsMixin):
                     ON m.project_id=t.project_id WHERE m.owner_id=? AND t.status='blocked'
                     AND (t.assignee_agent_id=? OR t.assignee_owner_id=?) AND (?='' OR t.project_id=?)""",
                     (actor['owner_id'],identity,actor['owner_id'],project_id,project_id)) if self._profile_project_allowed(db, actor, row['project_id'])]
+            review = self._review_candidates(db, actor, project_id)
             return {'ready': ready if _mcp_all else ready[:limit], 'recovery': recovery if _mcp_all else recovery[:limit], 'assigned': owned, 'waiting': waiting,
+                    'review': review if _mcp_all else review[:limit],
                     'human_requests': self._list_requests_tx(db, actor, project_id),
                     'policy': self._effective_profile_policy(db, actor, self._profile_for_actor(db, actor)) if actor['kind'] == 'agent' else json.loads(self._owner(db, actor['owner_id'])['policy'])}
 

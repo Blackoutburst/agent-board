@@ -1,6 +1,6 @@
-# Board interface contract — 2.12.0
+# Board interface contract — 2.13.0
 
-The browser REST API and MCP act on one database. Application version is `2.12.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.13.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -100,6 +100,16 @@ A stored `blocked` status must be explained by an open human request, an unfinis
 The board reevaluates a blocked task whenever a dependency moves to `review` or `done`, a human request is answered, its dependencies are edited, and on ordinary `get_work` calls. This maintenance remains under `allow_read` within the caller's current project membership and profile scope. An explicit project is authorized before any mutation; a denied project read cannot commit a sweep first. A task with no remaining reason returns to `todo`, clearing its block fields, with a `ticket_unblocked` audit event and a thread message; answering a human request stays silent beyond the answer itself.
 
 Unfinished executions or unconfirmed cleanup on the ticket or its family retain a generic `runtime_cleanup` block; a family stop retains `delegation`. These reasons disclose no other executor identity. A clean ordinary execution can become eligible for reevaluation, while a cancelled family is never reopened by this maintenance. Reasonless legacy blocks are released only after all current reasons are absent. The fixed `get_development_frame` endpoint skips the sweep on all four internal policy reads; it adds no ticket or discussion mutation. Existing `get_thread` legacy expiration maintenance remains.
+
+When an explicit block expires and its `unblock_owner` is an active agent profile of the project, the task returns to `todo` assigned to that agent with a recheck message: expiry is not evidence that the wait is over, and that agent must verify it or block again with a reason before work starts (2.12.1).
+
+## Review queue, reminders and block escalation (2.12)
+
+`get_work` adds a `review` list: unclaimed `review` tasks in the caller's projects, oldest review first, offered to any eligible agent whose persistent profile did not request the review (recorded by a `review_requested` event when a task enters review; older reviews fall back to the last claimer) and whose skills cover the task. Each item carries `review_since` and `review_author_agent_id`. Claiming a task in review keeps its status `review`; the reviewer completes it with outcome and evidence, or returns it to `todo` with progress and `release_claim`.
+
+During the `get_work` reevaluation, an unclaimed review older than 24 hours receives exactly one thread reminder and one `ready_for_verification` notification per review cycle (`review_reminder` audit event). Reminder maintenance is restricted to the same current profile/project scope as blocked-task reevaluation and is skipped by every policy read inside `get_development_frame`.
+
+Every explicit agent block records `agent_block_recorded`. After three such blocks without an intervening human action or review request, the board stops automatic retries: `recheck_at` is cleared, `unblock_owner` becomes `human`, a thread message and one `needs_input` notification are queued, and `block_escalated` is audited. Any human decision restarts the count.
 
 ## Mutation and concurrency rules
 

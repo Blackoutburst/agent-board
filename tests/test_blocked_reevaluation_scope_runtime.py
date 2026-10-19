@@ -146,3 +146,38 @@ def test_uncertain_family_is_not_reopened_or_adopted(family, target):
     assert board.get_ticket(f['h'],selected['id'])['ticket']['status']=='blocked'
     assert 'delegation' in board.get_ticket(f['h'],selected['id'])['ticket']['block_reasons']
     assert board.get_delegation_family(f['h'],opened['id'])['state']=='cancelled'
+
+
+def stale_review(board, ticket_id):
+    with board._tx() as db:
+        db.execute("UPDATE tickets SET status='review',claimant=NULL,lease_expires_at=NULL,"
+                   "updated_at=? WHERE id=?", (time.time()-25*3600,ticket_id))
+
+
+@pytest.mark.parametrize('explicit_hidden', [False, True])
+def test_review_reminders_never_mutate_a_hidden_project(tmp_path, explicit_hidden):
+    board,human,_,hidden,actor=readonly_scope(tmp_path)
+    ticket=board.create_ticket(human,hidden['id'],'Hidden review',idempotency_key='review')
+    stale_review(board,ticket['id'])
+    before=snapshot(board)
+    if explicit_hidden:
+        with pytest.raises(BoardError): board.get_work(actor,hidden['id'])
+    else:
+        response=board.get_work(actor)
+        assert ticket['id'] not in [item['id'] for item in response['review']]
+    assert snapshot(board)==before
+
+
+def test_review_reminder_maintenance_remains_scoped_and_idempotent(tmp_path):
+    board,human,allowed,hidden,actor=readonly_scope(tmp_path)
+    tickets=[board.create_ticket(human,project['id'],project['name'],
+        idempotency_key=project['id']) for project in (allowed,hidden)]
+    for ticket in tickets: stale_review(board,ticket['id'])
+    response=board.get_work(actor)
+    assert [item['id'] for item in response['review']]==[tickets[0]['id']]
+    assert response['policy']['allow_messages'] is False
+    assert len(board.get_thread(human,tickets[0]['thread_id'])['messages'])==1
+    assert board.get_thread(human,tickets[1]['thread_id'])['messages']==[]
+    before=snapshot(board)
+    board.get_work(actor)
+    assert snapshot(board)==before

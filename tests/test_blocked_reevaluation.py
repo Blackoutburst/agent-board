@@ -162,3 +162,19 @@ def test_mcp_update_ticket_accepts_block_fields(space):
                                                       'recheck_after_seconds': 3600}
     with pytest.raises(Exception):
         TicketChanges(status='blocked', blocked_reason='Vendor', recheck_after_seconds=10)
+
+
+def test_expired_agent_block_returns_to_the_agent_that_must_recheck_it(space):
+    board, human, _, project, first, *_ = space
+    task = new(space)
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    blocked = board.update_ticket(first, task['id'], claimed['version'], status='blocked',
+                                  blocked_reason='Waiting for the operator receipt', release_claim=True)
+    owner = blocked['unblock_owner']
+    assert owner
+    with sqlite3.connect(board.db_path) as db:
+        db.execute("UPDATE tickets SET recheck_at=?,assignee_agent_id=NULL WHERE id=?", (time.time() - 1, task['id']))
+    board.get_work(first, project['id'])
+    released = board.get_ticket(human, task['id'])['ticket']
+    assert released['status'] == 'todo' and released['assignee_agent_id'] == owner
+    assert board.get_thread(human, task['thread_id'])['messages'][-1]['body'].startswith('Board recheck:')
