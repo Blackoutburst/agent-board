@@ -60,3 +60,5 @@ contrôles d'admission ; facturer durablement les lectures avant leur exécution
 et qualifier les changements avant de sélectionner un backend Linux. Rien de
 cela n'est activé dans cet incrément. Voir
 [le contrat d'intégration restant](LINUX_NATIVE_INTEGRATION.md).
+
+Le [codec de requête et de paquet d’entrées](LINUX_TEST_PROTOCOL.md) lie ces observations aux octets transmis. Il reste inerte et ne remplace ni la possession du verrou, ni un backend ou une qualification.
