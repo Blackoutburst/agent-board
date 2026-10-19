@@ -209,3 +209,39 @@ class FamilyAuthorizationFrameTests(TestCase):
         self.assertEqual(self.counts()['get_thread'],6)
         self.assertEqual(result['context']['sources']['history']['selected_count'],40)
         self.no_effects()
+
+
+    def terminal_parent(self):
+        result = self.worker.run()
+        self.assertEqual(result['status'], 'review_ready', result)
+        state = self.journal.read()
+        scope = state['payload']['slot_scopes']['parent']
+        manifest = json.loads((self.base / 'parent-broker/manifest.json').read_text())
+        guard = self.worker._worker(state, 'parent', terminal=True).delegation_guard
+        self.authority = DevelopmentAuthorization(self.parent, scope=scope, manifest=manifest,
+            registration=self.registrations['parent'], clock=lambda: self.now, delegation_guard=guard)
+        self.clear_calls()
+
+    def test_terminal_parent_rechecks_revoked_actions_after_history(self):
+        self.terminal_parent()
+        inferences = list(self.inferences)
+        runtime_calls = [list(worker.control.calls) for worker in self.workflows.values()]
+        def revoke(name, args, response):
+            if name == 'get_thread':
+                self.board.set_policy(self.human, True, True, True, True,
+                    ['repo.read_file'], ['repo:fixture'])
+        with self.intercept(self.parent, revoke), self.assertRaises(DevelopmentError):
+            self.snapshot()
+        self.assertEqual(self.inferences, inferences)
+        self.assertEqual([worker.control.calls for worker in self.workflows.values()], runtime_calls)
+
+    def test_terminal_parent_uses_four_policy_reads_without_new_effects(self):
+        self.terminal_parent()
+        inferences = list(self.inferences)
+        runtime_calls = [list(worker.control.calls) for worker in self.workflows.values()]
+        result = self.snapshot()
+        self.assertIn('repo.run_test', result['policy']['actions'])
+        self.assertEqual(sum(self.counts().values()), 12)
+        self.assertEqual(self.counts()['get_work'], 4)
+        self.assertEqual(self.inferences, inferences)
+        self.assertEqual([worker.control.calls for worker in self.workflows.values()], runtime_calls)

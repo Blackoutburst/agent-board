@@ -85,6 +85,12 @@ class FamilyAuthorizationGuard:
         # The family view recomputes current owner/profile/grants/resource,
         # parent claim and member state server-side through should_stop.
         family._view(state, terminal=self.terminal)
+        if self.terminal:
+            # review_ready is already a stop reason server-side, so that
+            # terminal view does not recompute current action/resource grants.
+            # Keep the former second callback's fresh policy checks explicit.
+            policy = authority._policy()
+            parent_policy = parent._policy()
         authority._ticket_fields(last)
         if not self._matches(last):
             raise DevelopmentError('development_ticket_unavailable')

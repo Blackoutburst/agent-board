@@ -16,7 +16,7 @@ Tout nouveau plan natif doit être préparé et qualifié avec ses sources et co
 
 Une vérification familiale concrète collecte les policies parent et enfant, leurs tickets et claims au début et à la fin, leurs pages de discussion bornées et les deux vues de famille. Les contextes sont composés avec les mêmes sélecteurs, hashes et limites qu’avant. Les contrôles locaux de source, de clôture, d’arrêt et de délai encadrent la collecte entière. Un callback de délégation personnalisé conserve son parcours complet.
 
-Une seule page par discussion demande **10 lectures**, contre 20 auparavant ; la pagination ajoute au plus quatre lectures avec les limites actuelles. Une seconde frontière refait une nouvelle collecte. Il n’existe ni cache de droits, ni durée de validité réutilisable, ni transaction atomique annoncée côté serveur.
+Une seule page par discussion demande **10 lectures**, contre 20 auparavant ; la pagination ajoute au plus quatre lectures avec les limites actuelles. Lors de la publication terminale du parent, les deux policies sont aussi relues en fin de collecte : 12 lectures usuelles, au plus 16 avec pagination, car une famille déjà prête pour revue court-circuite son calcul serveur de droits. Une seconde frontière refait une nouvelle collecte. Il n’existe ni cache de droits, ni durée de validité réutilisable, ni transaction atomique annoncée côté serveur.
 
 Le callback backend évite uniquement de rappeler un callback qui est exactement le même objet que celui déjà contrôlé par le broker. Deux callbacks distincts restent tous deux exécutés. Le broker conserve ses contrôles propres ; aucun contrôle opaque n’est déduit de sa seule ressemblance.
 
