@@ -68,7 +68,7 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Version: `2.10.0`; database schema: `12`
+- Source release: `2.11.0`; database schema: `12` (check `/health` for the installed version)
 
 Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12: rollback requires both the previous source and its matching database backup.
 
@@ -81,3 +81,10 @@ The [confirmed human-message feed](docs/MESSAGE-FEED.md) adds replayable opening
 The personal adapter also offers an explicitly configured [confirmed-message host](integrations/codex-personal/MESSAGE_HOST.md), disabled at creation and limited to a finite foreground budget. It replies without claiming tickets; migration and installation never start it.
 
 The opt-in personal adapter also exposes a finite [development command](integrations/codex-personal/DEVELOPMENT_CLI.md), with sealed permissions/context, one provider dialogue per operation and separate review publication. It shares Runtime capacity while keeping message and ticket cleanup scopes distinct. Installing this release starts no development operation.
+
+The opt-in [fixed development frame](integrations/codex-personal/DEVELOPMENT_FRAMES.md)
+reduces a complete family authorization collection to one MCP exchange while
+retaining fresh per-read permissions and final policies. Adapter 0.25 also uses
+[dated supervision control](integrations/codex-personal/SUPERVISED_TESTS.md).
+Installation, native qualification and a real family pilot remain separate;
+merging this source starts no executor or listener.

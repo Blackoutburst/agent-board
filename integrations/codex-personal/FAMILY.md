@@ -229,3 +229,15 @@ backend is returned for reading pins. It cannot authorize execution. Native test
 and model effects continue through the normal worker's own claim and Runtime
 admission. Revocation, stop, deadline and changed source or manifest still refuse
 inspection.
+
+## Explicit fresh read protocol (adapter 0.25)
+
+Preparation accepts `request.read_protocol` as `legacy-sequential-v1` (default)
+or `development-frame-v1`. The latter requires the server's exact fixed MCP tool
+at preparation and is sealed in configuration/source pins. Each authorization
+boundary makes a new call, validates the original full sources and consumes
+both final policies, including terminal review. There is no fallback on timeout,
+absence or error, and an existing operation cannot switch protocols. See
+[the frame contract](DEVELOPMENT_FRAMES.md). Native supervision still requires
+fresh dated windows under the unchanged 1.5-second TTL and new qualifications.
+Neither this mode nor a source update resumes an uncertain historical family.

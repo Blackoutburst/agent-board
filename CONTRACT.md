@@ -1,6 +1,6 @@
-# Board interface contract — 2.10.0
+# Board interface contract — 2.11.0
 
-The browser REST API and MCP act on one database. Application version is `2.10.0`; schema version is `12`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.11.0`; schema version is `12`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (55)
+## MCP tools (56)
 
 | Purpose | Tools |
 | --- | --- |
@@ -17,6 +17,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
 | Bounded delegation families | `open_delegation_family`, `get_delegation_family`, `lookup_delegation_family`, `stop_delegation_family`, `accept_delegation_result`, `finalize_delegation_family` |
+| Fixed development observations | `get_development_frame` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools |
 | Informational subscription observations | `report_usage_observation` |
@@ -33,6 +34,30 @@ Use project tickets for normal collaborative work. The legacy action-task API re
 MCP reads default to compact, byte-bounded pages. Omitted prose is labelled with previews and hashes; use `get_text` or explicit `view="full"` for original source. Collection reads follow `next_cursor`, and threads use `next_before`. See [the bounded read and migration contract](docs/MCP-READS.md).
 
 `read_inbox` defaults to `messages`, `cursor`, `session` only. Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
+
+## Fixed development observation frame
+
+`get_development_frame(session_id, ticket_id, family_id, terminal)` accepts only
+these four required arguments, with a strict boolean `terminal` and bounded
+opaque identifiers; extra arguments and coercions are refused. The authenticated
+session must be the exact stored coordinator or selected child of that family,
+with matching owner, profile/version and device. Project and coordinator session
+are derived from the family, never supplied by the caller. Both sessions are
+reauthenticated for every ordinary Board read and at both selection brackets.
+
+One HTTP call performs 12 ordinary business reads (at most 16 with pagination):
+initial policies, tickets and family, both discussion histories, final tickets
+and family, then both final policies. Each role retains at most 40 distinct
+messages across three real cursor pages. Full sources and exact page arguments
+are returned for the adapter's existing claim, context, family and grant checks.
+The window is sequential, not atomic, and confers no cached authority. Existing
+thread-read expiration maintenance remains; no new claim, Runtime, renewal,
+message or execution is added.
+
+Arguments are bounded at 2 KiB, ASCII-escaped result data at 384 KiB, and the
+actual MCP result including text/structured copies at 1.5 MiB. Failures return a
+fixed code without partial observations or private exceptions. This tool has no
+compact view or arbitrary method batching. See [the sealed opt-in adapter mode](integrations/codex-personal/DEVELOPMENT_FRAMES.md).
 
 ## Profile configuration and boundaries
 
