@@ -237,6 +237,7 @@ class CoordinationMixin(ProjectsMixin):
         'ticket_message_posted', 'ticket_progress', 'review_reminder', 'review_requested',
         'agent_block_recorded', 'block_escalated', 'execution_reserved', 'execution_started',
         'execution_finished', 'execution_stop_requested', 'message_execution_reserved',
+        'ticket_idle_assignment_released',
         'runtime_provider_block_observed', 'runtime_limits_changed', 'ticket_profile_refreshed',
         'ticket_profile_claim_reconciled', 'legacy_block_classified'})
 
@@ -248,6 +249,10 @@ class CoordinationMixin(ProjectsMixin):
                 continue
             detail = json.loads(event['detail'] or '{}')
             if event['event'] == 'ticket_updated' and 'status' not in detail.get('fields', []):
+                continue
+            # A release without a status only frees the claim; it moves
+            # in_progress to todo, so a ticket blocked now kept its status.
+            if event['event'] == 'ticket_released' and not detail.get('status'):
                 continue
             author = json.loads(event['actor'] or '{}')
             return author if event['event'] == 'ticket_updated' and author.get('kind') == 'human' else None

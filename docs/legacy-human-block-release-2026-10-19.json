@@ -11,11 +11,12 @@
   "change": [
     "Before releasing a reasonless block without recheck, the reevaluation reads the ticket audit: when the latest status-changing event is a human ticket_updated naming status, the block is kept with reason 'Blocked manually by <name>', unblock_owner set to that human and no recheck; a legacy_block_classified event is recorded",
     "Status-neutral events (messages, progress, reviews, executions, runtime, profile refresh) are skipped; any other latest event, including agent updates and releases, keeps the previous release behaviour",
+    "A ticket_released without a status (claim release, which keeps a blocked status) and ticket_idle_assignment_released are skipped like status-neutral events; a release with status=blocked still counts as the latest status change (counter-review of f6ff49f)",
     "Classification runs on every reevaluation, so databases already migrated to schema 13 are covered too",
     "Web activity label for legacy_block_classified"
   ],
   "verification": {
-    "board_tests": "934 passed (933 + test_upgrade_keeps_a_human_manual_block_from_before_schema_13, which drops the schema-13 columns, reopens the database through the real migration and polls; it fails on 0090da0)",
+    "board_tests": "935 passed (933 + two upgrade tests through the real 12->13 migration: plain human block, and human block followed by an agent claim release without status; the second fails on f6ff49f)",
     "reviewer_probe": {
       "description": "Linux X670 migration_probe.py: schema-12 database created with the e390183 API (human update_ticket status=blocked), then reopened and polled",
       "on_0090da0": {
@@ -24,6 +25,29 @@
         "status_after_poll": "todo",
         "reason_after_migration": "",
         "ready_after_poll": true,
+        "audit_unblocked_events": 1,
+        "open_human_requests": false,
+        "dependencies": []
+      },
+      "on_candidate": {
+        "schema_after": 13,
+        "status_after_migration_before_poll": "blocked",
+        "status_after_poll": "blocked",
+        "reason_after_migration": "",
+        "ready_after_poll": false,
+        "audit_unblocked_events": 0,
+        "open_human_requests": false,
+        "dependencies": []
+      }
+    },
+    "reviewer_probe_release_path": {
+      "description": "Same probe with an agent claim, human update_ticket(status=blocked), then agent release_ticket without status, all through the e390183 API",
+      "on_f6ff49f": {
+        "schema_after": 13,
+        "status_after_migration_before_poll": "blocked",
+        "status_after_poll": "todo",
+        "reason_after_migration": "",
+        "ready_after_poll": false,
         "audit_unblocked_events": 1,
         "open_human_requests": false,
         "dependencies": []

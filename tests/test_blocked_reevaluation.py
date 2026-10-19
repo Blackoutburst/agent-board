@@ -219,3 +219,23 @@ def test_upgrade_keeps_a_human_manual_block_from_before_schema_13(space):
     upgraded.get_work(first, project['id'])
     assert upgraded.get_ticket(human, manual['id'])['ticket']['version'] == kept['version']
     assert upgraded.update_ticket(human, manual['id'], kept['version'], status='todo')['status'] == 'todo'
+
+
+def test_upgrade_keeps_a_human_block_whose_claim_was_released_without_a_status(space):
+    board, human, _, project, first, *_ = space
+    task, control = new(space, 'Claimed'), new(space, 'Control')
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    blocked = board.update_ticket(human, task['id'], claimed['version'], status='blocked')
+    released = board.release_ticket(first, task['id'], blocked['version'], 'release-claim', 'Handing back')
+    assert released['status'] == 'blocked'
+    claimed = board.claim_ticket(first, control['id'], control['version'])
+    board.release_ticket(first, control['id'], claimed['version'], 'release-control', 'Failed', status='blocked')
+    schema12(board)
+    upgraded = Board(board.db_path.parent, base_url='https://board.test')
+    upgraded.get_work(first, project['id'])
+    kept = upgraded.get_ticket(human, task['id'])['ticket']
+    assert kept['status'] == 'blocked' and kept['blocked_reason'] == 'Blocked manually by Blackoutburst'
+    assert kept['unblock_owner'] == 'blackoutburst' and kept['recheck_at'] is None
+    assert blocked_state(upgraded, control['id'])[0] == 'todo'
+    upgraded.get_work(first, project['id'])
+    assert upgraded.get_ticket(human, task['id'])['ticket']['version'] == kept['version']
