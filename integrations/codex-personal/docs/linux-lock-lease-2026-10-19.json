@@ -1,0 +1,121 @@
+{
+  "account_file_reads": 0,
+  "adapter_candidate_version": "0.27.0",
+  "cases": [
+    {
+      "case": "valid_snapshot",
+      "passed": true
+    },
+    {
+      "case": "lost_lock",
+      "passed": true
+    },
+    {
+      "case": "competing_owner_released",
+      "passed": true
+    },
+    {
+      "case": "shared_downgrade",
+      "passed": true
+    },
+    {
+      "case": "closed_original",
+      "passed": true
+    },
+    {
+      "case": "reused_original_foreign",
+      "passed": true
+    },
+    {
+      "case": "reopened_same_inode",
+      "passed": true
+    },
+    {
+      "case": "reused_guard_foreign",
+      "passed": true
+    }
+  ],
+  "changed_component_files": [
+    "__init__.py"
+  ],
+  "child_processes": 0,
+  "complete_integrated_package_qualified": false,
+  "externally_held_launcher_sha256": "8aa34665f5df8019a69de03ab6cb4c44ef0cf29303f5953481df097b81ff6b36",
+  "fixture_cleanup_confirmed": true,
+  "host": {
+    "machine": "x86_64",
+    "node": "ubuntu",
+    "procfs_magic": "0x9fa0",
+    "python": [
+      3,
+      10,
+      12
+    ],
+    "release": "5.15.0-198-generic",
+    "sysname": "Linux",
+    "uid": 1000
+  },
+  "integration_base_commit": "e590ddd768fcd5b4757d24358edeb10742c9e6e2",
+  "isolated_owner_host_qualified": false,
+  "limits": [
+    "eight_synthetic_cases_only",
+    "trusted_kernel_and_procfs",
+    "cooperative_single_thread_controller",
+    "no_actual_fork_or_pid_inheritance_qualification",
+    "no_arbitrary_same_process_fd_continuity",
+    "no_adoption_of_previous_darwin_026_qualifications",
+    "no_backend_or_planner_activation_receipt"
+  ],
+  "matching_component_files": [
+    "dev_broker.py",
+    "dev_fence.py",
+    "dev_journal.py",
+    "dev_manifest.py",
+    "linux_input_snapshot.py",
+    "work_journal.py"
+  ],
+  "mcp_calls": 0,
+  "model_calls": 0,
+  "namespace_backend_qualified": false,
+  "original_qualification_receipt_sha256": "970fe2cde39fb1f15b336f6e22485a1dccc8ce76f6ede1c48b1bdae0a03ced2c",
+  "planner_qualified": false,
+  "proof_scope": "historical_synthetic_kernel_observation_only",
+  "public_bundle_inventory_sha256": "ce192e97d20fb3a3dc5822cb56bbeb9eec507e322d9fb815583dd2d27b018a74",
+  "qualified_public_component_pins": {
+    "__init__.py": {
+      "bytes": 94,
+      "sha256": "d9a67e9ed9e0045463a8c618bee8a9c5d561b0aa0d434f46cd24a8bff1427cf8"
+    },
+    "dev_broker.py": {
+      "bytes": 27795,
+      "sha256": "0621df9b10003d35fab9fdac313b9c750c3849dbef3934e2cc79c90e369cafcc"
+    },
+    "dev_fence.py": {
+      "bytes": 33111,
+      "sha256": "d950137527623a2ba5a3410afee9cb0cbdac9faa3c5567bd1c0335c29b63ef9e"
+    },
+    "dev_journal.py": {
+      "bytes": 29168,
+      "sha256": "8991bbc94d0b9b454405fbdecfcd4830c932a979cc3f1c7b1f1815b59c29f6c1"
+    },
+    "dev_manifest.py": {
+      "bytes": 14950,
+      "sha256": "561a04535d6da43aadb24b8c627ed32a94378d5adcb621a0605937243b12f644"
+    },
+    "linux_input_snapshot.py": {
+      "bytes": 17633,
+      "sha256": "0b123ca29a123c3a221a97bb55df81b67721740702283c32a831b9e8fdd3673e"
+    },
+    "work_journal.py": {
+      "bytes": 19687,
+      "sha256": "1d07670005d929aea61ec54fbaaa2c65b34a319e9b629a309cfef88ac648b29c"
+    }
+  },
+  "qualified_source_commit": "72d3673166ab5af719de60b27f77d9a563f28785",
+  "result": "passed_real_linux_flock_fdinfo",
+  "runtime_activation": false,
+  "schema": "blackoutburst-linux-lock-kernel-observation-summary-v1",
+  "simulated_observations": false,
+  "uid994_qualified": false,
+  "worker_linux_enabled": false
+}

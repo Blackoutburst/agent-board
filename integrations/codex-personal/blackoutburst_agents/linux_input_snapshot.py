@@ -242,8 +242,9 @@ def _fence_record(broker, fence, binding, operation_id):
 
 class LinuxInputSnapshot:
     """Private controller copy, valid only while its real broker lock is held."""
-    def __init__(self, broker, fence, binding, operation_id, planner_snapshot):
+    def __init__(self, broker, fence, binding, operation_id, planner_snapshot, lock_lease):
         self._broker, self._fence = broker, fence
+        self._lock_lease = lock_lease
         self._binding, self._operation_id = decode(canonical(binding)), operation_id
         self._planner_snapshot = decode(canonical(planner_snapshot))
         self._thread = threading.get_ident()
@@ -256,6 +257,7 @@ class LinuxInputSnapshot:
         if (not self._active or threading.get_ident() != self._thread
                 or not self._broker.journal._in_lock):
             _error('linux_input_snapshot_not_held')
+        self._broker.journal.require_lock_lease(self._lock_lease)
         private = self._broker.journal.private
         private.verify()
         private.validate_file(self._broker.journal._lock_fd)
@@ -357,12 +359,29 @@ def capture_input_snapshot(broker, *, fence, binding, operation_id, planner_snap
             or type(fence) is not DevelopmentFence or broker.enabled is not True):
         _error('linux_input_controller_required')
     validate_planner_snapshot(planner_snapshot, broker.manifest)
-    snapshot = None
     with broker.journal.lock():
-        try:
-            snapshot = LinuxInputSnapshot(broker, fence, binding, operation_id, planner_snapshot)
+        with capture_input_snapshot_locked(broker,lock_lease=broker.journal.held_lock_lease(),
+                fence=fence,binding=binding,operation_id=operation_id,planner_snapshot=planner_snapshot) as snapshot:
             yield snapshot
-            snapshot.revalidate()
-        finally:
-            if snapshot is not None:
-                snapshot._close()
+
+
+@contextmanager
+def capture_input_snapshot_locked(broker, *, lock_lease, fence, binding, operation_id, planner_snapshot):
+    """Capture under the exact live lease; never acquire or release its lock.
+
+    The owner must keep DevelopmentJournal.lock() open for this complete
+    context. A bool, callback, copied handle or expired acquisition is refused.
+    Authorization and durable read accounting remain the caller's obligations.
+    """
+    if (type(broker) is not DevelopmentBroker or type(broker.journal) is not DevelopmentJournal
+            or type(fence) is not DevelopmentFence or broker.enabled is not True):
+        _error('linux_input_controller_required')
+    broker.journal.require_lock_lease(lock_lease)
+    validate_planner_snapshot(planner_snapshot,broker.manifest)
+    snapshot = None
+    try:
+        snapshot = LinuxInputSnapshot(broker,fence,binding,operation_id,planner_snapshot,lock_lease)
+        yield snapshot
+        snapshot.revalidate()
+    finally:
+        if snapshot is not None:snapshot._close()

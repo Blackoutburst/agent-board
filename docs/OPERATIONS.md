@@ -1,7 +1,10 @@
 # Operations and release procedure
 
-Current source is Board 2.13.0/schema 13 with adapter 0.26.0. It combines
-verifiable task blocks and the explicit fixed development-frame protocol.
+Current source is Board 2.13.0/schema 13 with adapter 0.27.0. It combines
+verifiable task blocks, the explicit fixed development-frame protocol, and an
+inactive Linux input-lock lease foundation. The latter adds no Linux backend
+or planner; its separate kernel observation covers synthetic UID 1000 fixtures
+only. Historical adapter 0.26 native receipts are not adopted by version 0.27.
 Older qualification receipts remain tied to their exact source and private pins;
 they do not qualify this integrated source or authorize a deployment.
 
