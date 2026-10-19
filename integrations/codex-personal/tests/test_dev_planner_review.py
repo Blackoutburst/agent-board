@@ -100,12 +100,12 @@ class PlannerIndependentReview(unittest.TestCase):
         self.assertEqual(len(self.transports),1)
         self.assertEqual(self.backend.calls,[])
 
-    def test_resource_withdrawal_during_model_requests_immediate_cooperative_stop(self):
+    def test_resource_withdrawal_during_model_is_rejected_before_result_becomes_action(self):
         self.actions = [self.action('read',path='main.py')]
 
         def withdraw(callbacks):
             self.grant['resources'] = []
-            self.assertTrue(callbacks['should_cancel']())
+            self.assertFalse(callbacks['should_cancel']())
 
         self.during_model = withdraw
         result = self.create().run()

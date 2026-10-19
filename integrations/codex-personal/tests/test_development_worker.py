@@ -99,8 +99,9 @@ class DevelopmentWorkerTests(unittest.TestCase):
         values.update(options);return self.worker.prepare(**values)
 
     def transport(self,settings,prompt,workspace,**callbacks):
-        self.inferences.append(json.loads(prompt))
         callbacks['on_started'](999999999)
+        if 'before_prompt' in callbacks:callbacks['before_prompt']()
+        self.inferences.append(json.loads(prompt))
         sid=callbacks['resume_session_id'] or str(uuid.uuid4());callbacks['on_session'](sid)
         if self.after_model:self.after_model(callbacks)
         return {'status':'completed','reason':'verified','session_id':sid,'text':json.dumps(self.actions.pop(0)),
@@ -179,7 +180,9 @@ class DevelopmentWorkerTests(unittest.TestCase):
         prepared=self.prepare();self.successful_actions()
         def mutate(callbacks):
             ticket=self.read_ticket();self.board.update_ticket(self.human,ticket['id'],ticket['version'],description='Changed')
-            self.assertTrue(callbacks['should_cancel']())
+            # The remote context is checked at the next forced boundary;
+            # in-flight polling uses local controls and Runtime heartbeats.
+            self.assertFalse(callbacks['should_cancel']())
         self.after_model=mutate
         result=self.worker.run(prepared['operation_id'])
         self.assertEqual(result['status'],'needs_review')

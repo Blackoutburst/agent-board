@@ -30,6 +30,7 @@ class DevelopmentFamilyWorker:
                for worker in workflows.values()):raise DevelopmentError('invalid_family_workflows')
         self.journal,self.workflows,self.registrations,self.clock=journal,workflows,registrations,clock
         self.client=workflows['parent'].client
+        self._last_local_time=None
 
     @staticmethod
     def _public(state):
@@ -189,16 +190,24 @@ class DevelopmentFamilyWorker:
                 raise DevelopmentError('family_stopped')
         return value
 
-    def _live(self,state,*,terminal=False):
+    def _local_live(self,state,*,terminal=False,inspection=False):
+        """Durable identity/configuration/stop checks; no Board request."""
         self.journal.verify(state)
         if controller_sources(state['configuration']['roots'])!=state['configuration']['controller_sources']:
             raise DevelopmentError('family_controller_sources_changed')
-        now=self.clock()
-        if type(now) not in (int,float) or not math.isfinite(now) or now<state['started_at']:
-            raise DevelopmentError('family_clock_invalid')
-        if self.journal.stopped():raise DevelopmentError('family_stop_requested')
-        if not terminal and now>=state['configuration']['opening']['limits']['deadline']:
-            raise DevelopmentError('family_deadline')
+        if not inspection:
+            now=self.clock()
+            if (type(now) not in (int,float) or not math.isfinite(now) or now<state['started_at']
+                    or self._last_local_time is not None and now<self._last_local_time):
+                raise DevelopmentError('family_clock_invalid')
+            if self.journal.stopped():raise DevelopmentError('family_stop_requested')
+            if not terminal and now>=state['configuration']['opening']['limits']['deadline']:
+                raise DevelopmentError('family_deadline')
+            self._last_local_time=now
+        return True
+
+    def _live(self,state,*,terminal=False):
+        self._local_live(state,terminal=terminal)
         self._root(state)
         return self._view(state,terminal=terminal) if 'family_id' in state['payload'] else None
 
@@ -290,6 +299,7 @@ class DevelopmentFamilyWorker:
             'family_id':state['payload']['family_id'],'slot':slot,'plan_sha256':config['server_plan_sha256'],
             'configuration_sha256':state['configuration_sha256'],'journal':_directory_pin(self.journal.directory)}
         def live():self._live(state,terminal=terminal);return True
+        def local(**options):return self._local_live(state,terminal=terminal,**options)
         def delegated(response):
             live();metadata=response['ticket'].get('delegation')
             expected=state['payload']['slot_scopes'][slot]
@@ -301,6 +311,7 @@ class DevelopmentFamilyWorker:
             backend_factory=base.backend_factory,policy_factory=base.policy_factory,planner_factory=base.planner_factory,
             _transport=base.transport,_test_anchor=base.test_anchor,_allow_fixture_backend=base.allow_fixture,
             clock=self.clock,controller_scope=descriptor,controller_guard=live,delegation_guard=delegated,
+            controller_local_guard=local,
             fence_intent=lambda stage,target:self.journal.record_target(state,slot,stage,target))
 
     def _prepare_workflow(self,state,slot,instruction):

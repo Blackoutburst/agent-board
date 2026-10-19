@@ -100,7 +100,9 @@ class FamilyWorkerTests(unittest.TestCase):
             {'schema':1,'kind':'test','name':'unit'},{'schema':1,'kind':'final','summary':'verified'}]
 
     def transport(self,slot,settings,prompt,workspace,**callbacks):
-        self.inferences.append((slot,json.loads(prompt)));callbacks['on_started'](999999999)
+        callbacks['on_started'](999999999)
+        if 'before_prompt' in callbacks:callbacks['before_prompt']()
+        self.inferences.append((slot,json.loads(prompt)))
         sid=callbacks['resume_session_id'] or str(uuid.uuid4());callbacks['on_session'](sid)
         if self.after_model:self.after_model(slot,callbacks)
         return {'status':'completed','reason':'verified','session_id':sid,'text':json.dumps(self.actions[slot].pop(0)),

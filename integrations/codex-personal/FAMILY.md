@@ -165,8 +165,12 @@ stays pending. A recovered ready phase still needs an explicit `run`; changed
 authority or incompatible receipts remain for review.
 
 `stop-local` writes an irreversible private family marker without a connection
-or waiting for the execution lock. Participating workflows observe it before
-further effects and through their current control checks. `stop --connection-file
+or waiting for the execution lock. From adapter 0.23, participating workflows
+require a `controller_local_guard`, forwarded to the planner as `local_guard`.
+Each model cancellation poll checks the family's own marker, deadline, private
+identity and controller source pins locally; it does not need a child stop marker
+or a Board response. Full current authority and source checks remain mandatory
+at model/action boundaries. `stop --connection-file
 CONNECTION` also signals known local workflows and requests the server stop at
 the recorded revision. A lost/stale server confirmation remains pending; it
 does not clear the local stop. The owner can also request server stop from the
@@ -200,6 +204,21 @@ the running process or its OS sandbox. There is no expiry, release/rekey shortcu
 provider-session adoption. This fence coordinates one OS user and machine only;
 it cannot protect against an administrator rolling back all state or coordinate
 multiple hosts. Restoring state does not reverse source or external effects.
+
+Adapter 0.23 separates local polling from full remote validation. The existing
+Runtime heartbeat, at most once every five seconds, still checks remote stops,
+revocation and live family/claim authority; failed control latches cancellation.
+Before the first prompt bytes, `before_prompt` forces a full check after CLI
+metadata and policy inspection. Further full checks precede accepting the model
+result and every broker effect. Runtime control alone does not compare all sealed
+project text/history, so source drift during a turn is rejected at that next full
+boundary rather than recomposing the prompt while inference runs.
+
+The current controller instance rejects local clock movement backwards, including
+movement that remains after its start. This is neither OS attestation nor durable
+rollback protection. Old source pins do not become valid under the new adapter:
+preserve matching code/state for recovery, and explicitly prepare and qualify a
+new proposal before another execution. No provider session is adopted or repinned.
 
 
 From adapter 0.22, native qualification inspection uses the coordinator's live
