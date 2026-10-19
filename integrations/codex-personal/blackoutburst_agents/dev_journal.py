@@ -363,6 +363,8 @@ class DevelopmentJournal:
         self._lock_fd = None
         self._lease,self._lock_token,self._lock_owner = None,None,None
         self._lock_pin = None
+        self._lock_state,self._state_hash = None,None
+        self._linux_input_profile = False
         self._process_id = os.getpid()
         try:
             raw = self.private.read('manifest.json', MAX_MANIFEST_BYTES)
@@ -391,6 +393,7 @@ class DevelopmentJournal:
         if self._lease is not None:
             self._lease._revoke();self._lease = None
         self._lock_token,self._lock_owner,self._lock_pin = None,None,None
+        self._lock_state,self._state_hash = None,None
         if self._lock_fd is not None:
             os.close(self._lock_fd)
             self._lock_fd = None
@@ -418,7 +421,11 @@ class DevelopmentJournal:
                     raise DevelopmentError('manifest_changed')
                 state = decode(self.private.read('state.json', MAX_STATE_BYTES))
                 self.validate_state(state)
+                if self._linux_input_profile and state['schema'] != 2:
+                    raise DevelopmentError('linux_input_state_changed')
+                self._linux_input_profile = state['schema'] == 2
                 self._lock_pin = (self._lock_fd,self.private.fd,identity(current),self.private.identity)
+                self._lock_state,self._state_hash = state,digest(canonical(state))
                 yield state
             except OSError:
                 raise DevelopmentError('journal_access_failed') from None
@@ -426,6 +433,7 @@ class DevelopmentJournal:
                 lease,self._lease = self._lease,None
                 self._lock_token,self._lock_owner = None,None
                 self._lock_pin = None
+                self._lock_state,self._state_hash = None,None
                 self._in_lock = False
                 if lease is not None:lease._revoke()
                 elif self._lock_fd is not None:fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
@@ -455,6 +463,9 @@ class DevelopmentJournal:
         return lease._validate(self)
 
     def validate_state(self, state):
+        if type(state) is dict and type(state.get('schema')) is int and state.get('schema') == 2:
+            self._validate_linux_input_state(state)
+            return
         if (type(state) is not dict or set(state) != {'schema', 'manifest_hash', 'used', 'operations'}
                 or type(state['schema']) is not int or state['schema'] != 1
                 or state['manifest_hash'] != self.manifest_hash
@@ -577,12 +588,83 @@ class DevelopmentJournal:
                     raise DevelopmentError('journal_corrupt')
                 sha256(receipt['output_sha256'])
 
+    def _validate_linux_input_state(self, state):
+        from .linux_input_state import unique_id, validate_operation
+        if (set(state) != {'schema','manifest_hash','used','operations','linux_input_origin'}
+                or state['manifest_hash'] != self.manifest_hash
+                or type(state['used']) is not dict
+                or set(state['used']) != {'operations','read_bytes','patch_bytes','tests'}
+                or any(type(item) is not int or item < 0 for item in state['used'].values())
+                or type(state['operations']) is not dict or len(state['operations']) > 256):
+            raise DevelopmentError('journal_corrupt')
+        try:
+            unique_id(state['linux_input_origin'])
+            for key, operation in state['operations'].items():
+                if type(operation) is not dict: raise DevelopmentError('journal_corrupt')
+                validate_operation(key,operation,origin=state['linux_input_origin'],manifest=self._manifest)
+            nonces = [op['detail']['nonce'] for op in state['operations'].values()]
+            if len(set(nonces)) != len(nonces): raise DevelopmentError('journal_corrupt')
+            expected = {'operations':len(state['operations']), 'patch_bytes':0, 'tests':0,
+                'read_bytes':sum(op['detail']['reserved_read_bytes'] for op in state['operations'].values())}
+            if (state['used'] != expected or any(amount > self._manifest['budgets']['max_' + key]
+                    for key,amount in expected.items())): raise DevelopmentError('journal_corrupt')
+        except (KeyError,TypeError,ValueError,DevelopmentError):
+            raise DevelopmentError('journal_corrupt') from None
+
+    def _linux_input_state_for_lease(self, lease):
+        self.require_lock_lease(lease)
+        state = self._lock_state
+        if type(state) is not dict or state.get('schema') != 2:
+            raise DevelopmentError('linux_input_fresh_journal_required')
+        durable = self._linux_input_durable()
+        if canonical(state) != canonical(durable):
+            raise DevelopmentError('linux_input_state_changed')
+        return state
+
+    def _linux_input_durable(self):
+        durable = decode(self.private.read('state.json',MAX_STATE_BYTES))
+        self.validate_state(durable)
+        if durable.get('schema') != 2 or digest(canonical(durable)) != self._state_hash:
+            raise DevelopmentError('linux_input_state_changed')
+        return durable
+
+    def _guard_linux_input_save(self, state):
+        self.require_lock_lease(self._lease)
+        if state is not self._lock_state:
+            raise DevelopmentError('linux_input_state_changed')
+        old = self._linux_input_durable()
+        if state['linux_input_origin'] != old['linux_input_origin']:
+            raise DevelopmentError('linux_input_state_changed')
+        previous,current = old['operations'],state['operations']
+        if not set(previous) <= set(current): raise DevelopmentError('linux_input_state_changed')
+        added = set(current) - set(previous)
+        if len(added) > 1: raise DevelopmentError('linux_input_state_changed')
+        if added:
+            self.require_settled(old)
+            op = current[next(iter(added))]
+            if (op['phase'] != 'intent' or op['detail']['prior_state_sha256'] != self._state_hash
+                    or any(current[key] != value for key,value in previous.items())):
+                raise DevelopmentError('linux_input_state_changed')
+        else:
+            changed = [key for key in previous if previous[key] != current[key]]
+            if len(changed) != 1: raise DevelopmentError('linux_input_state_changed')
+            before,after = previous[changed[0]],current[changed[0]]
+            if (before['phase'] != 'intent' or after['phase'] not in ('complete','needs_review')
+                    or any(before[key] != after[key] for key in ('id','kind','request_hash','detail'))):
+                raise DevelopmentError('linux_input_state_changed')
+
     def save(self, state):
         self.validate_state(state)
+        if self._linux_input_profile or state['schema'] == 2:
+            if state['schema'] != 2:
+                raise DevelopmentError('linux_input_state_changed')
+            self._guard_linux_input_save(state)
         encoded = canonical(state)
         if len(encoded) > MAX_STATE_BYTES:
             raise DevelopmentError('journal_full')
         self.private.replace('state.json', encoded)
+        if state['schema'] == 2:
+            self._state_hash = digest(encoded)
 
     def charge(self, state, *, operations=1, read_bytes=0, patch_bytes=0, tests=0):
         limits = self.manifest['budgets']

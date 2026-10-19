@@ -1,9 +1,9 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence de cette source : board **2.13.0**, schéma **13**, adaptateur **0.27.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence de cette source : board **2.13.0**, schéma **13**, adaptateur **0.28.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 
-Les qualifications natives historiques 0.26 restent attachées à leurs octets et pins. La fondation de bail Linux ajoutée en 0.27 ne les adopte pas et n’active aucun backend ou planner Linux ; sa preuve noyau synthétique reste limitée à Ubuntu UID 1000. Une version de distribution ne constitue pas une qualification ou une preuve de déploiement.
+Les qualifications natives historiques 0.26 restent attachées à leurs octets et pins. La fondation de bail Linux ajoutée en 0.27 ne les adopte pas et n’active aucun backend ou planner Linux ; sa preuve noyau synthétique reste limitée à Ubuntu UID 1000. La préparation d’entrée Linux 0.28 reste un autre lot inerte : son journal privé neuf schema 2 ne migre ni ne reprend les états 0.24/0.26/0.27. Les qualifications natives 0.27 restent attachées à leur source exacte et ne qualifient pas 0.28. Le [contrat de préparation](LINUX_INPUT_ADMISSION.md) détaille ses réservations durables et ses refus. Une version de distribution ne constitue pas une qualification ou une preuve de déploiement.
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
