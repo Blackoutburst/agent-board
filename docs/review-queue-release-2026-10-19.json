@@ -15,8 +15,8 @@
     "web: is:stuck task filter, block reason and recheck in task rows and detail, labels for the new activity events"
   ],
   "verification": {
-    "board_tests": "new tests/test_review_queue.py (5) plus the full suite",
-    "adapter_tests": "unchanged adapter suite"
+    "board_tests": "932 passed, including 5 new in tests/test_review_queue.py",
+    "adapter_tests": "1197 passed (unchanged adapter)"
   },
   "limits": [
     "Reviewer eligibility does not judge expertise beyond required skills",
