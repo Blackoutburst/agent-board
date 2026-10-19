@@ -109,7 +109,7 @@ When an explicit block expires and its `unblock_owner` is an active agent profil
 
 During the `get_work` reevaluation, an unclaimed review older than 24 hours receives exactly one thread reminder and one `ready_for_verification` notification per review cycle (`review_reminder` audit event). Reminder maintenance is restricted to the same current profile/project scope as blocked-task reevaluation and is skipped by every policy read inside `get_development_frame`.
 
-Every explicit agent block records `agent_block_recorded`. After three such blocks without an intervening human action or review request, the board stops automatic retries: `recheck_at` is cleared, `unblock_owner` becomes `human`, a thread message and one `needs_input` notification are queued, and `block_escalated` is audited. Any human decision restarts the count.
+Every explicit agent block records `agent_block_recorded`. After three such blocks without an intervening human action or review request, the board stops automatic retries: `recheck_at` is cleared, `unblock_owner` becomes `human`, a thread message and one `needs_input` notification are queued, and `block_escalated` is audited. Explicit human ticket edits, claims/recovery and resolved human requests restart the count, as does a delivered review. Human `get_work` maintenance audits (`ticket_unblocked`, `review_reminder`) do not count as decisions.
 
 ## Mutation and concurrency rules
 
@@ -304,6 +304,24 @@ Schema 6 adds `owner_execution_limits` and `runtime_executions` without changing
 `reserve_execution(session_id, idempotency_key, project_id, ticket_id, work_id, turn_id, provider, model)` requires current effective read/work-request permission, the current active profile version, project membership and an exact live `in_progress` ticket claim. Opaque work/turn IDs must not contain paths, prompts or provider session IDs. The accepted key is bound to owner, profile/version, device/session, project/ticket and immutable provider/model. It returns `{reserved: true, execution: <metadata>, retried: false}`; an exact accepted retry returns that reservation with `retried: true`, never another slot. Changed payload conflicts. A second key cannot reserve the same owner/work/turn. Admission denied by `owner_paused` or `capacity_exhausted` returns a conflict without creating a reservation. No model is launched by the board.
 
 `lookup_execution(session_id, idempotency_key)` is a separate read-only tool. It returns `{found: false}` or `{found: true, execution: <metadata>}` only for the authenticated original device/session/profile. Absence cannot establish that an in-flight admission was cancelled. Clients must persist their intent before sending and reconcile the same key after a lost response; unsupported older servers must fail closed without fallback to unregistered execution.
+
+
+Ordinary tickets claimed in `review` also admit a Runtime turn by a profile
+other than the agent that requested that review. This is a separate server-only
+authorization path; family admission and coordinator checks still require
+`in_progress`. There is no caller-supplied scope selector or fallback for an old
+ticket execution. The private payload pins the exact review event, claim-start
+version, delivered fields and applicable grants. Renewals and progress remain
+valid; changed status, review cycle, claim, scope, skills, delivery or grants stop
+the old turn. Delivery-edit audit IDs prevent an edit followed by restoration
+from reviving it. At most 64 subsequent policy audits of that owner are checked
+against this profile's effective grants; an applicable revocation/restoration,
+missing/ambiguous history or exceeded bound refuses continuation. Unrelated
+owners and grant changes not effective for this profile do not stop it. This is
+an observation of current state and retained server audits, not a guarantee
+against arbitrary in-process mutations between observations. Exact-identity
+lookup/control/finish remain available to attest cleanup after authorization is
+lost. Automatic task selection is unchanged.
 
 `start_execution(session_id, execution_id, expected_revision)` activates a `reserved` execution before the model is spawned, rechecking current authority, owner pause and capacity. `heartbeat_execution(session_id, execution_id, expected_revision)` updates only a running execution's presence. `finish_execution(session_id, execution_id, expected_revision, status, cleanup_confirmed, reason="")` records a strict `completed|blocked|cancelled` outcome and a bounded reason enum, never output or diagnostics. `cleanup_confirmed=true` makes it `finished` and releases capacity; false makes it `needs_review` and retains capacity. Matching activation/heartbeat/finish retries return their existing effects. Conflicts require reading the latest control before an explicit decision. A cleanup confirmation is an authenticated executor attestation after inspecting its own process group, not a server observation of that process.
 

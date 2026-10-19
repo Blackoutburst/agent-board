@@ -373,9 +373,14 @@ class CoordinationMixin(ProjectsMixin):
 
     def _escalate_repeated_blocks(self, db, actor, row):
         """After repeated agent blocks without human action, stop automatic retries."""
-        # A human decision or a delivered review restarts the count.
-        human = db.execute("""SELECT MAX(id) FROM ticket_events WHERE ticket_id=?
-            AND (json_extract(actor,'$.kind')='human' OR event='review_requested')""", (row['id'],)).fetchone()[0] or 0
+        # Explicit edits, taking responsibility or answering a request are
+        # decisions. A human poll can also write maintenance audits; those must
+        # never erase the history of failed agent retries.
+        human = db.execute("""SELECT MAX(id) FROM ticket_events WHERE ticket_id=? AND (
+            event='review_requested' OR (json_extract(actor,'$.kind')='human' AND (
+                event IN ('human_input_resolved','ticket_claimed','ticket_recovered')
+                OR (event='ticket_updated' AND json_array_length(detail,'$.fields')>0))))""",
+            (row['id'],)).fetchone()[0] or 0
         count = db.execute("""SELECT COUNT(*) FROM ticket_events WHERE ticket_id=? AND event='agent_block_recorded'
             AND id>?""", (row['id'], human)).fetchone()[0]
         if count < _BLOCK_ESCALATION_ATTEMPTS:
