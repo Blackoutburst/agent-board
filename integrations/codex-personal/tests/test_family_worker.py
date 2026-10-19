@@ -300,3 +300,22 @@ def _test_parent_publication_is_separate_explicit_review_and_cached(self):
     self.assertEqual(self.ticket()['status'],'review');self.assertIsNone(self.ticket()['claimant'])
     self.assertEqual(self.worker.publish_parent(),published);self.assertEqual(len(self.inferences),prior)
 FamilyWorkerTests.test_parent_publication_is_separate_explicit_review_and_cached=_test_parent_publication_is_separate_explicit_review_and_cached
+
+
+def _test_context_source_change_refuses_before_any_runtime(self):
+    from unittest.mock import patch
+    from blackoutburst_agents import family_sources
+    source = Path(family_sources.__file__).parent
+    held = self.base / 'controller-source-copy'
+    held.mkdir(mode=0o700)
+    for name in set(family_sources.MODULES) | {'context.py'}:
+        (held / name).write_bytes((source / name).read_bytes())
+    with patch.object(family_sources, '__file__', str(held / 'family_sources.py')):
+        self.ready()
+        context = held / 'context.py'
+        context.write_bytes(context.read_bytes() + b'\n# changed context collector\n')
+        result = self.worker.run()
+    self.assertEqual(result['reason'], 'family_controller_sources_changed')
+    self.assertFalse(self.inferences)
+    self.assertFalse(any(w.control.calls for w in self.workflows.values()))
+FamilyWorkerTests.test_context_source_change_refuses_before_any_runtime = _test_context_source_change_refuses_before_any_runtime
