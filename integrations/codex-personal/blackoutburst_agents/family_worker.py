@@ -18,8 +18,93 @@ from .dev_planner import _directory_pin
 from .dev_planner_journal import PlannerBudgets
 from .family_audit import audit_workflow,manifest_document,MAX_AUDIT_BYTES,MAX_CANDIDATE_BYTES
 from .family_journal import SLOTS
-from .family_plan import build_configuration,root_sources
+from .family_plan import build_configuration,root_sources,validate_root_start,validate_root_reads
+from .context import ContextScope,read_context_pages,build_context_from_reads
 from .family_sources import controller_sources
+
+
+class FamilyAuthorizationGuard:
+    """One concrete family controller, not an arbitrary permission callback.
+
+    A snapshot groups the existing parent/child observations into a single
+    bounded read window. It is discarded after validation; there is no grant
+    cache, server transaction, registration refresh or effect in this class.
+    """
+    def __init__(self, family, state, slot, *, terminal=False):
+        self.family, self.state, self.slot, self.terminal = family, state, slot, terminal
+
+    def _matches(self, response):
+        metadata = response['ticket'].get('delegation')
+        expected = self.state['payload']['slot_scopes'][self.slot]
+        return (type(metadata) is dict and metadata.get('family_id') == self.state['payload']['family_id']
+                and metadata.get('parent_ticket_id') == self.state['configuration']['scope']['ticket_id']
+                and metadata.get('owner_id') == expected['owner_id']
+                and metadata.get('agent_id') == expected['agent_id']
+                and response['ticket']['id'] == expected['ticket_id'])
+
+    def __call__(self, response):
+        # Opaque callers still receive a full fresh family check.
+        self.family._live(self.state, terminal=self.terminal)
+        return self._matches(response)
+
+    def snapshot(self, authority, *, require_claim, remaining):
+        family, state, slot = self.family, self.state, self.slot
+        config = state['configuration']
+        if (authority.client is not family.workflows[slot].client
+                or authority.scope != state['payload']['slot_scopes'][slot]
+                or authority.registration != config['registrations'][slot]
+                or digest(canonical(authority.manifest)) != state['payload']['bindings'][slot]['manifest_sha256']):
+            raise DevelopmentError('family_authorization_scope_changed')
+        # All local pins/stop/deadline checks bracket the complete remote read
+        # window, including slow reads and the pure context composition below.
+        family._local_live(state, terminal=self.terminal)
+        authority._registration()
+        parent = DevelopmentAuthorization(family.client, scope=config['scope'],
+            manifest=config['parent_manifest'], registration=config['registrations']['parent'],
+            clock=family.clock)
+        policy = authority._policy()
+        parent_policy = parent._policy()
+        first = deepcopy(authority.client.call('get_ticket', {'ticket_id': authority.scope['ticket_id']}))
+        authority._ticket_fields(first)
+        if not self._matches(first):
+            raise DevelopmentError('development_ticket_unavailable')
+        if require_claim and not authority.own_claim(first['ticket'], remaining=remaining):
+            raise DevelopmentError('development_claim_lost')
+        root_first = deepcopy(family.client.call('get_ticket', {'ticket_id': config['scope']['ticket_id']}))
+        children = [scope['ticket_id'] for name, scope in state['payload']['slot_scopes'].items() if name != 'parent']
+        validate_root_start(parent, root_first, config['scope'], config['parent_manifest'], children=children)
+        family._view(state, terminal=self.terminal)
+        selected = ContextScope(**{key: authority.scope[key] for key in
+                                  ('owner_id', 'agent_id', 'project_id', 'ticket_id')})
+        root_scope = ContextScope(**{key: config['scope'][key] for key in
+                                    ('owner_id', 'agent_id', 'project_id', 'ticket_id')})
+        pages = read_context_pages(authority.client.call, scope=selected, first_response=first)
+        root_pages = read_context_pages(family.client.call, scope=root_scope, first_response=root_first)
+        last = deepcopy(authority.client.call('get_ticket', {'ticket_id': authority.scope['ticket_id']}))
+        root_last = deepcopy(family.client.call('get_ticket', {'ticket_id': config['scope']['ticket_id']}))
+        # The family view recomputes current owner/profile/grants/resource,
+        # parent claim and member state server-side through should_stop.
+        family._view(state, terminal=self.terminal)
+        if self.terminal:
+            # review_ready is already a stop reason server-side, so that
+            # terminal view does not recompute current action/resource grants.
+            # Keep the former second callback's fresh policy checks explicit.
+            policy = authority._policy()
+            parent_policy = parent._policy()
+        authority._ticket_fields(last)
+        if not self._matches(last):
+            raise DevelopmentError('development_ticket_unavailable')
+        context = build_context_from_reads(scope=selected, registration=authority.registration,
+            first_response=first, pages=pages, final_response=last)
+        root_context = build_context_from_reads(scope=root_scope, registration=config['registrations']['parent'],
+            first_response=root_first, pages=root_pages, final_response=root_last)
+        validate_root_reads(parent, root_first, root_last, root_context, parent_policy,
+            config['scope'], config['parent_manifest'], children=children, baseline=config['root_frame'])
+        result = authority._snapshot_result(policy, first, last, context,
+            require_claim=require_claim, remaining=remaining)
+        authority._registration()
+        family._local_live(state, terminal=self.terminal)
+        return result
 
 
 class DevelopmentFamilyWorker:
@@ -300,13 +385,7 @@ class DevelopmentFamilyWorker:
             'configuration_sha256':state['configuration_sha256'],'journal':_directory_pin(self.journal.directory)}
         def live():self._live(state,terminal=terminal);return True
         def local(**options):return self._local_live(state,terminal=terminal,**options)
-        def delegated(response):
-            live();metadata=response['ticket'].get('delegation')
-            expected=state['payload']['slot_scopes'][slot]
-            return (type(metadata) is dict and metadata.get('family_id')==descriptor['family_id']
-                    and metadata.get('parent_ticket_id')==config['scope']['ticket_id']
-                    and metadata.get('owner_id')==expected['owner_id'] and metadata.get('agent_id')==expected['agent_id']
-                    and response['ticket']['id']==expected['ticket_id'])
+        delegated = FamilyAuthorizationGuard(self, state, slot, terminal=terminal)
         return DevelopmentBoardWorker(base.journal,base.store,base.runtime,base.client,base.control,
             backend_factory=base.backend_factory,policy_factory=base.policy_factory,planner_factory=base.planner_factory,
             _transport=base.transport,_test_anchor=base.test_anchor,_allow_fixture_backend=base.allow_fixture,

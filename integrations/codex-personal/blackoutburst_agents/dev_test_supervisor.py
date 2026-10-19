@@ -288,25 +288,12 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
             return value
 
     def run(self, request):
-        request_hash = self._request(request)
-        with self.locked():
-            self._authorize()
-            name = request.operation_id + '.json'
-            old = self._read_operation(name, request_hash, request.max_output_bytes)
-            if old is not None:
-                return dict(old['result']) if old['phase'] == 'complete' else _receipt()
-            self._require_settled()
-            suite = {'name': request.name, 'backend_id': self.backend_id,
-                'timeout_seconds': request.timeout_seconds, 'max_output_bytes': request.max_output_bytes}
-            if not self.qualified_for(request.manifest_hash, suite):
-                raise DevelopmentError('test_backend_unqualified')
-            self.private.create(name, canonical({'schema': 1, 'request_hash': request_hash,
-                'phase': 'intent', 'result': None, 'reason': None}))
-            result, checks, reason = self._run_supervised(request, qualify=False)
-            # The helper is the sole receipt writer after launch. Parent loss
-            # cannot prevent its durable completion; the parent never invents
-            # a completion when the helper's state is uncertain.
-            return result
+        return self._run_request(request, lambda: self._run_supervised(request, qualify=False),
+                                 helper_receipt=True)
+
+    def _admission_controller_hash(self):
+        return digest(canonical({'controller_files': _controller_pin(),
+                                 'supervision_sha256': digest(canonical(self.supervision))}))
 
     def _read_job(self, state_name, nonce, request_hash):
         value = decode(self.private.read(state_name, MAX_DOCUMENT))
@@ -350,6 +337,7 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
         package_root = str(Path(__file__).parent.parent)
         env = {key: os.environ[key] for key in ('HOME', 'CODEX_HOME', 'TMPDIR') if key in os.environ}
         env.update({'LANG': 'C', 'PATH': '/usr/bin:/bin'})
+        self._mark_launch()
         return subprocess.Popen([self.supervision['executable'], '-I', '-S', '-c', BOOTSTRAP,
             package_root, canonical(self.supervision['controller_files']).decode(),
             str(self.private.path / packet_name)], cwd=self.private.path, env=env,
@@ -444,6 +432,11 @@ def supervise_packet(packet_path):
             backend._request(request)
             if path.name != 'supervision-' + request.operation_id + '.job.json':
                 return 78
+            original = backend._read_operation(request.operation_id + '.json',
+                backend._request(request), request.max_output_bytes)
+            if (original is None or original['phase'] != 'intent'
+                    or (original['schema'] == 2 and original['admission']['launch'] != 'entered')):
+                return 78  # A stale prepared packet cannot revive a refused attempt.
         lock = os.open(path.name + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=private.fd)
         private.validate_file(lock)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

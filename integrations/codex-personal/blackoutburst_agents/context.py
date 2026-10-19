@@ -9,6 +9,7 @@ JSON (``ensure_ascii=False, sort_keys=True, separators=(',', ':')``).
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -265,6 +266,95 @@ def _seal(artifact):
     return artifact
 
 
+def _read_history(call, scope, thread_id, limits):
+    messages, by_id, thread, before, anchor = [], {}, None, None, None
+    history_omitted = False
+    pages = []
+    for page_index in range(limits.max_pages):
+        requested = min(limits.page_size, max(1, limits.max_messages - len(messages)))
+        args = {'thread_id': thread_id, 'limit': requested}
+        if before is not None:
+            args['before'] = before
+        response = _fetch(call, 'get_thread', args)
+        # Copy each actual response before another callback can mutate it.
+        response = deepcopy(response)
+        pages.append({'arguments': dict(args), 'response': response})
+        page_thread, page, next_before = _page(response, scope, thread_id, requested)
+        if thread is not None and _hash(thread) != _hash(page_thread):
+            raise ContextError('context_changed')
+        thread = page_thread
+        if page_index == 0:
+            anchor = page[-1]['id'] if page else None
+        older = []
+        for message in page:
+            previous = by_id.get(message['id'])
+            if previous is not None:
+                if _hash(previous) != _hash(message):
+                    raise ContextError('context_changed')
+                if before is not None and message['id'] != before:
+                    raise ContextError('invalid_context_pagination')
+                continue
+            by_id[message['id']] = message
+            older.append(message)
+        messages = older + messages
+        if len(messages) > limits.max_messages:
+            messages = messages[-limits.max_messages:] if limits.max_messages else []
+            history_omitted = True
+        if next_before is None:
+            break
+        if next_before == before or not older:
+            raise ContextError('invalid_context_pagination')
+        if len(messages) >= limits.max_messages or page_index + 1 == limits.max_pages:
+            history_omitted = True
+            break
+        before = next_before
+
+    return messages, thread, before, anchor, history_omitted, pages
+
+
+def read_context_pages(call, *, scope, first_response, limits=None):
+    """Read bounded real pages; return data, never authority or a cache."""
+    if not isinstance(scope, ContextScope) or not callable(call):
+        raise ContextError('invalid_context_source')
+    limits = ContextLimits() if limits is None else limits
+    if not isinstance(limits, ContextLimits):
+        raise ContextError('invalid_context_limits')
+    _, ticket = _ticket_sources(first_response, scope)
+    return _read_history(call, scope, ticket['thread_id'], limits)[-1]
+
+
+def build_context_from_reads(*, scope, registration, first_response, pages, final_response, limits=None):
+    """Compose from one exact bounded read sequence, with the usual checks.
+
+    This performs no I/O and never declares an atomic remote snapshot. Inputs
+    are private observations for this one authorization boundary only.
+    """
+    limits = ContextLimits() if limits is None else limits
+    if (not isinstance(scope, ContextScope) or not isinstance(limits, ContextLimits)
+            or type(pages) is not list or not 1 <= len(pages) <= limits.max_pages):
+        raise ContextError('invalid_context_source')
+    frames = [('get_ticket', {'ticket_id': scope.ticket_id}, first_response)]
+    for page in pages:
+        if type(page) is not dict or set(page) != {'arguments', 'response'}:
+            raise ContextError('invalid_context_source')
+        frames.append(('get_thread', page['arguments'], page['response']))
+    frames.append(('get_ticket', {'ticket_id': scope.ticket_id}, final_response))
+    position = 0
+    def consume(name, args):
+        nonlocal position
+        if position >= len(frames):
+            raise ContextError('invalid_context_source')
+        expected_name, expected_args, value = frames[position]
+        if name != expected_name or args != expected_args:
+            raise ContextError('invalid_context_source')
+        position += 1
+        return deepcopy(value)
+    result = build_context(consume, scope=scope, registration=registration, limits=limits)
+    if position != len(frames):
+        raise ContextError('invalid_context_source')
+    return result
+
+
 def build_context(call: Callable, *, scope: ContextScope, registration: dict,
                   limits: ContextLimits | None = None, decision_memory=None,
                   decision_descriptor=None, board_endpoint=None) -> dict:
@@ -295,42 +385,7 @@ def build_context(call: Callable, *, scope: ContextScope, registration: dict,
         memory_snapshot = decision_memory.verified(selected_memory_scope,memory_pin,call,thread_id)
     elif decision_descriptor is not None:
         raise ContextError('decision_memory_required')
-    messages, by_id, thread, before, anchor = [], {}, None, None, None
-    history_omitted = False
-    for page_index in range(limits.max_pages):
-        requested = min(limits.page_size, max(1, limits.max_messages - len(messages)))
-        args = {'thread_id': thread_id, 'limit': requested}
-        if before is not None:
-            args['before'] = before
-        page_thread, page, next_before = _page(_fetch(call, 'get_thread', args), scope, thread_id, requested)
-        if thread is not None and _hash(thread) != _hash(page_thread):
-            raise ContextError('context_changed')
-        thread = page_thread
-        if page_index == 0:
-            anchor = page[-1]['id'] if page else None
-        older = []
-        for message in page:
-            previous = by_id.get(message['id'])
-            if previous is not None:
-                if _hash(previous) != _hash(message):
-                    raise ContextError('context_changed')
-                if before is not None and message['id'] != before:
-                    raise ContextError('invalid_context_pagination')
-                continue
-            by_id[message['id']] = message
-            older.append(message)
-        messages = older + messages
-        if len(messages) > limits.max_messages:
-            messages = messages[-limits.max_messages:] if limits.max_messages else []
-            history_omitted = True
-        if next_before is None:
-            break
-        if next_before == before or not older:
-            raise ContextError('invalid_context_pagination')
-        if len(messages) >= limits.max_messages or page_index + 1 == limits.max_pages:
-            history_omitted = True
-            break
-        before = next_before
+    messages, thread, before, anchor, history_omitted, _ = _read_history(call, scope, thread_id, limits)
 
     final_project, final_ticket = _ticket_sources(
         _fetch(call, 'get_ticket', {'ticket_id': scope.ticket_id}), scope)

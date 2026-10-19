@@ -25,6 +25,14 @@ def root_sources(client,scope,manifest,registration,*,children=(),baseline=None,
     authority=DevelopmentAuthorization(client,scope=scope,manifest=manifest,registration=registration,clock=clock)
     authority._registration();policy=authority._policy()
     first=client.call('get_ticket',{'ticket_id':scope['ticket_id']})
+    validate_root_start(authority, first, scope, manifest, children=children)
+    context=build_context(client.call,scope=ContextScope(**{k:scope[k] for k in
+        ('owner_id','agent_id','project_id','ticket_id')}),registration=registration)
+    last=client.call('get_ticket',{'ticket_id':scope['ticket_id']})
+    return validate_root_reads(authority, first, last, context, policy, scope, manifest, children=children, baseline=baseline)
+
+
+def validate_root_start(authority, first, scope, manifest, *, children=()):
     project,ticket=first['project'],first['ticket']
     child_ids=set(children)
     if (project['id']!=scope['project_id'] or project['archived'] is not False
@@ -39,10 +47,12 @@ def root_sources(client,scope,manifest,registration,*,children=(),baseline=None,
         raise DevelopmentError('family_root_authorization_changed')
     if not children and ticket.get('delegation') is not None:
         raise DevelopmentError('family_root_already_delegated')
-    context=build_context(client.call,scope=ContextScope(**{k:scope[k] for k in
-        ('owner_id','agent_id','project_id','ticket_id')}),registration=registration)
-    last=client.call('get_ticket',{'ticket_id':scope['ticket_id']})
-    if last['ticket']['version']!=ticket['version'] or not authority.own_claim(last['ticket'],remaining=10):
+
+
+def validate_root_reads(authority, first, last, context, policy, scope, manifest, *, children=(), baseline=None):
+    """Pure validation of one bounded root read window; not server atomicity."""
+    validate_root_start(authority, first, scope, manifest, children=children)
+    if last['ticket']['version']!=first['ticket']['version'] or not authority.own_claim(last['ticket'],remaining=10):
         raise DevelopmentError('family_root_source_changed')
     _,selected=_ticket_sources(last,ContextScope(**{k:scope[k] for k in
         ('owner_id','agent_id','project_id','ticket_id')}))
