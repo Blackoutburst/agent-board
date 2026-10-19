@@ -17,6 +17,7 @@ from .run_store import RunStore,StoreError
 from .runtime_client import RuntimeBoardClient
 from .runtime_journal import RuntimeJournal
 from .work_journal import WorkJournal,JournalError,_encode
+from .development_frame import LEGACY, read_protocol
 
 
 def configure_parser(parser):
@@ -74,6 +75,7 @@ def _preflight(args,spec):
     request=spec['request']
     if (type(request) is not dict or type(request.get('children')) is not list
             or len(request['children'])!=2):raise DevelopmentError('invalid_family_configuration')
+    read_protocol(request.get('read_protocol',LEGACY))
     parent,_=manifest_document(request['parent']['broker_directory'])
     roots={'parent':_directory_pin(parent['root']),**{
         'child_'+str(i):_directory_pin(child['root']) for i,child in enumerate(request['children'])}}
@@ -107,6 +109,8 @@ def _local_state(directory,*,stop=False):
 def _resume_preflight(args,state):
     from .dev_planner import _directory_pin
     config=state['configuration'];roots=config['roots']
+    if read_protocol(config.get('read_protocol',LEGACY))!=read_protocol(config['request'].get('read_protocol',LEGACY)):
+        raise DevelopmentError('family_read_protocol_changed')
     descriptor=state['payload']['fence_descriptor']
     if _directory_pin(args.journal)!=descriptor['journal']:
         raise DevelopmentError('family_directory_changed')

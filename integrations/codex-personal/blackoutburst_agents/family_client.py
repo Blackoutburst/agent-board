@@ -67,6 +67,33 @@ def _arguments(name,args):
 
 
 class FamilyBoardClient(DevelopmentBoardClient):
+    def require_development_frame(self):
+        """Explicit preparation probe; never fallback or refresh registration."""
+        if not self._registered:raise BoardReadError('development_registration_required')
+        self._initialize()
+        result=self._rpc('tools/list',{})
+        try:
+            tools=result['tools']
+            if type(tools) is not list or len(tools)>256:raise ValueError
+            matches=[tool for tool in tools if type(tool) is dict and tool.get('name')=='get_development_frame']
+            if len(matches)!=1:raise ValueError
+            schema=matches[0]['inputSchema']
+            if (type(schema) is not dict or set(schema['properties'])!={'session_id','ticket_id','family_id','terminal'}
+                    or set(schema['required'])!=set(schema['properties'])
+                    or schema.get('additionalProperties') is not False
+                    or schema['properties']['terminal'].get('type')!='boolean'):raise ValueError
+        except (KeyError,TypeError,ValueError):
+            raise BoardReadError('development_frame_unavailable') from None
+
+    def get_development_frame(self, *, ticket_id, family_id, terminal):
+        if (not self._registered or any(type(value) is not str or not re.fullmatch(
+                    r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}',value) for value in (self.session_id,ticket_id,family_id))
+                or type(terminal) is not bool):raise BoardReadError('invalid_arguments')
+        self._initialize()
+        # Dedicated method; no arbitrary names, parent sessions or batch args.
+        return self._tool('get_development_frame',dict(session_id=self.session_id,
+            ticket_id=ticket_id,family_id=family_id,terminal=terminal))
+
     def call(self,name,args):
         if name not in _NAMES:return super().call(name,args)
         if not self._registered:raise BoardReadError('development_registration_required')

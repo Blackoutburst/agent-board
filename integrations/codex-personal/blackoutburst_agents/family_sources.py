@@ -7,7 +7,7 @@ from .dev_test_supervisor import _ancestor_identities
 
 MODULES=('family_journal.py','family_client.py','family_audit.py','family_plan.py','family_worker.py',
          'family_cli.py','family_sources.py','context.py','development_worker.py','development_authorization.py',
-         'development_cleanup.py','dev_planner.py','dev_fence.py')
+         'development_cleanup.py','development_frame.py','dev_planner.py','dev_fence.py')
 
 
 def controller_sources(roots=None):

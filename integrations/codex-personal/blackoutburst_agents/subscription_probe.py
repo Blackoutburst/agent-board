@@ -316,12 +316,26 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
         "turn_completed": False,
         "nonce_verified": False,
     }
+    # Counts describe decoded item events, never executions or side effects.
+    # Only these fixed keys leave the parser; unknown names are not retained.
+    categories = ("agent_message", "reasoning", "command_execution", "file_change",
+                  "mcp_tool_call", "web_search", "todo_list", "unknown")
+    item_events = dict.fromkeys(categories, 0)
+    saturated = False
+    maximum_events = 1024
+
+    def rejected(reason: str) -> dict[str, object]:
+        return {"ok": False, "reason": reason, "verification": verification,
+                "diagnostic": {"schema_version": 1, "item_events": dict(item_events),
+                               "saturated": saturated}}
+
     if result.failure is not None:
-        return {"ok": False, "reason": result.failure, "verification": verification}
+        # No permissive second pass over failed/truncated transport output.
+        return rejected(result.failure)
     try:
         text = result.stdout.decode("utf-8", "strict")
     except UnicodeDecodeError:
-        return {"ok": False, "reason": "protocol_error", "verification": verification}
+        return rejected("protocol_error")
     protocol_error = False
     terminal_failure = False
     tool_event = False
@@ -357,6 +371,11 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
             if not isinstance(item, dict) or not isinstance(item.get("type"), str):
                 protocol_error = True
                 continue
+            category = item["type"] if item["type"] in item_events else "unknown"
+            if item_events[category] < maximum_events:
+                item_events[category] += 1
+            else:
+                saturated = True
             if item["type"] not in ("agent_message", "reasoning"):
                 tool_event = True
             if item["type"] == "agent_message" and event_type == "item.completed":
@@ -383,7 +402,9 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
         reason = "nonce_mismatch"
     else:
         reason = "verified"
-    return {"ok": reason == "verified", "reason": reason, "verification": verification}
+    if reason != "verified":
+        return rejected(reason)
+    return {"ok": True, "reason": reason, "verification": verification}
 
 
 def run_subscription_probe(settings: ProbeSettings) -> dict[str, object]:

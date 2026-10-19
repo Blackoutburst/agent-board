@@ -20,6 +20,7 @@ from .family_audit import audit_workflow,manifest_document,MAX_AUDIT_BYTES,MAX_C
 from .family_journal import SLOTS
 from .family_plan import build_configuration,root_sources,validate_root_start,validate_root_reads
 from .context import ContextScope,read_context_pages,build_context_from_reads
+from .development_frame import LEGACY, FRAME, parse_frame, read_protocol
 from .family_sources import controller_sources
 
 
@@ -58,10 +59,14 @@ class FamilyAuthorizationGuard:
         # All local pins/stop/deadline checks bracket the complete remote read
         # window, including slow reads and the pure context composition below.
         family._local_live(state, terminal=self.terminal)
-        authority._registration()
+        protocol=read_protocol(config.get('read_protocol',LEGACY))
+        if protocol==FRAME:authority._local_registration()
+        else:authority._registration()
         parent = DevelopmentAuthorization(family.client, scope=config['scope'],
             manifest=config['parent_manifest'], registration=config['registrations']['parent'],
             clock=family.clock)
+        if protocol == FRAME:
+            return self._frame_snapshot(authority,parent,require_claim=require_claim,remaining=remaining)
         policy = authority._policy()
         parent_policy = parent._policy()
         first = deepcopy(authority.client.call('get_ticket', {'ticket_id': authority.scope['ticket_id']}))
@@ -104,6 +109,48 @@ class FamilyAuthorizationGuard:
             require_claim=require_claim, remaining=remaining)
         authority._registration()
         family._local_live(state, terminal=self.terminal)
+        return result
+
+    def _frame_snapshot(self, authority, parent, *, require_claim, remaining):
+        family,state=self.family,self.state
+        config=state['configuration']
+        observed=authority.client.get_development_frame(ticket_id=authority.scope['ticket_id'],
+            family_id=state['payload']['family_id'],terminal=self.terminal)
+        # A stop/deadline/pin change while the network was blocked is checked
+        # before any observation is composed, as well as after composition.
+        authority._local_registration();parent._registration()
+        family._local_live(state,terminal=self.terminal)
+        frame=parse_frame(observed,scope=authority.scope,manifest=authority.manifest,
+            parent_scope=config['scope'],parent_manifest=config['parent_manifest'],
+            family_id=state['payload']['family_id'],terminal=self.terminal)
+        child,root=frame['selected'],frame['parent']
+        authority._policy_response(child['policy_first'])
+        parent._policy_response(root['policy_first'])
+        first,last=child['first'],child['last']
+        root_first,root_last=root['first'],root['last']
+        authority._ticket_fields(first)
+        if not self._matches(first):raise DevelopmentError('development_ticket_unavailable')
+        if require_claim and not authority.own_claim(first['ticket'],remaining=remaining):
+            raise DevelopmentError('development_claim_lost')
+        children=[scope['ticket_id'] for name,scope in state['payload']['slot_scopes'].items() if name!='parent']
+        validate_root_start(parent,root_first,config['scope'],config['parent_manifest'],children=children)
+        family._validate_view(state,frame['family']['first'],terminal=self.terminal)
+        selected=ContextScope(**{key:authority.scope[key] for key in ('owner_id','agent_id','project_id','ticket_id')})
+        root_scope=ContextScope(**{key:config['scope'][key] for key in ('owner_id','agent_id','project_id','ticket_id')})
+        context=build_context_from_reads(scope=selected,registration=authority.registration,
+            first_response=first,pages=child['pages'],final_response=last)
+        root_context=build_context_from_reads(scope=root_scope,registration=config['registrations']['parent'],
+            first_response=root_first,pages=root['pages'],final_response=root_last)
+        family._validate_view(state,frame['family']['last'],terminal=self.terminal)
+        policy=authority._policy_response(child['policy_last'])
+        parent_policy=parent._policy_response(root['policy_last'])
+        authority._ticket_fields(last)
+        if not self._matches(last):raise DevelopmentError('development_ticket_unavailable')
+        validate_root_reads(parent,root_first,root_last,root_context,parent_policy,
+            config['scope'],config['parent_manifest'],children=children,baseline=config['root_frame'])
+        result=authority._snapshot_result(policy,first,last,context,require_claim=require_claim,remaining=remaining)
+        authority._local_registration();parent._registration()
+        family._local_live(state,terminal=self.terminal)
         return result
 
 
@@ -245,8 +292,12 @@ class DevelopmentFamilyWorker:
             baseline=config['root_frame'],clock=self.clock)
 
     def _view(self,state,*,terminal=False):
+        value=self.client.call('get_delegation_family',{'family_id':state['payload']['family_id']})
+        return self._validate_view(state,value,terminal=terminal)
+
+    def _validate_view(self,state,value,*,terminal=False):
+        """Same validation for a live method response or a fresh fixed frame."""
         payload,config=state['payload'],state['configuration']
-        value=self.client.call('get_delegation_family',{'family_id':payload['family_id']})
         if (type(value) is not dict or value.get('id')!=payload['family_id']
                 or any(value.get(key)!=config['scope'][key] for key in ('owner_id','agent_id','project_id'))
                 or value.get('parent_ticket_id')!=config['scope']['ticket_id']
@@ -278,6 +329,9 @@ class DevelopmentFamilyWorker:
     def _local_live(self,state,*,terminal=False,inspection=False):
         """Durable identity/configuration/stop checks; no Board request."""
         self.journal.verify(state)
+        protocol=read_protocol(state['configuration'].get('read_protocol',LEGACY))
+        if protocol!=read_protocol(state['configuration']['request'].get('read_protocol',LEGACY)):
+            raise DevelopmentError('family_read_protocol_changed')
         if controller_sources(state['configuration']['roots'])!=state['configuration']['controller_sources']:
             raise DevelopmentError('family_controller_sources_changed')
         if not inspection:

@@ -222,11 +222,7 @@ class SupervisorPrelaunchAdmissionTests(unittest.TestCase):
             self.assertEqual(len(calls), denied)
             if denied == 3:
                 packet = self.fixture.directory / ('supervision-' + request.operation_id + '.job.json')
-                self.assertTrue(packet.exists())
-                with patch('blackoutburst_agents.dev_test_supervisor._ControlPipe'), \
-                        patch('blackoutburst_agents.dev_test_supervisor._SignalCanary', side_effect=AssertionError('stale packet cannot launch')), \
-                        patch('subprocess.Popen', side_effect=AssertionError('no process')):
-                    self.assertEqual(supervise_packet(packet), 78)
+                self.assertFalse(packet.exists())  # Initial fresh collection precedes packet creation.
 
     def test_popen_entry_is_marked_before_an_uncertain_launch_error(self):
         self.qualify()

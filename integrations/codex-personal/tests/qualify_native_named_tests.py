@@ -4,6 +4,7 @@ Run only on an authorized host. It uses a temporary fixture and never opens
 authentication files, calls a model, uses SSH, or enables a production backend.
 """
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -82,7 +83,7 @@ def main():
     report = {'schema': 1, 'model_calls': 0, 'controller_authentication_files_read': False,
               'auth_rpc_calls_requested': 0,
               'real_repository_tests': False, 'production_enabled': False, 'checks': {},
-              'observed_on': '2026-10-16',
+              'observed_on': datetime.now(timezone.utc).date().isoformat(),
               'backend_source_sha256': digest(Path(dev_test_backend.__file__).read_bytes())}
     backend = broker = None
     try:

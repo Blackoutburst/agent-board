@@ -1,5 +1,6 @@
 """Explicit Mac synthetic hard-crash proof; no model, account or production."""
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -69,7 +70,7 @@ def main():
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
     directory = Path(tempfile.mkdtemp(prefix='named-supervisor-proof-', dir='/private/tmp')).resolve()
-    report = {'schema': 1, 'observed_on': '2026-10-16', 'model_calls': 0,
+    report = {'schema': 1, 'observed_on': datetime.now(timezone.utc).date().isoformat(), 'model_calls': 0,
         'controller_authentication_files_read': False, 'auth_rpc_calls_requested': 0,
         'production_enabled': False, 'checks': {}, 'result': 'not_finished',
         'backend_source_sha256': digest(Path(dev_test_backend.__file__).read_bytes()),

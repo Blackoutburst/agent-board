@@ -1,6 +1,6 @@
-# Board interface contract — 2.12.2
+# Board interface contract — 2.13.0
 
-The browser REST API and MCP act on one database. Application version is `2.12.2`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.13.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -8,7 +8,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (55)
+## MCP tools (58)
 
 | Purpose | Tools |
 | --- | --- |
@@ -17,6 +17,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
 | Bounded delegation families | `open_delegation_family`, `get_delegation_family`, `lookup_delegation_family`, `stop_delegation_family`, `accept_delegation_result`, `finalize_delegation_family` |
+| Fixed development observations | `get_development_frame` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools |
 | Informational subscription observations | `report_usage_observation` |
@@ -33,6 +34,32 @@ Use project tickets for normal collaborative work. The legacy action-task API re
 MCP reads default to compact, byte-bounded pages. Omitted prose is labelled with previews and hashes; use `get_text` or explicit `view="full"` for original source. Collection reads follow `next_cursor`, and threads use `next_before`. See [the bounded read and migration contract](docs/MCP-READS.md).
 
 `read_inbox` defaults to `messages`, `cursor`, `session` only. Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
+
+## Fixed development observation frame
+
+`get_development_frame(session_id, ticket_id, family_id, terminal)` accepts only
+these four required arguments, with a strict boolean `terminal` and bounded
+opaque identifiers; extra arguments and coercions are refused. The authenticated
+session must be the exact stored coordinator or selected child of that family,
+with matching owner, profile/version and device. Project and coordinator session
+are derived from the family, never supplied by the caller. Both sessions are
+reauthenticated for every ordinary Board read and at both selection brackets.
+
+One HTTP call performs 12 ordinary business reads (at most 16 with pagination):
+initial policies, tickets and family, both discussion histories, final tickets
+and family, then both final policies. Each role retains at most 40 distinct
+messages across three real cursor pages. Full sources and exact page arguments
+are returned for the adapter's existing claim, context, family and grant checks.
+The window is sequential, not atomic, and confers no cached authority. Existing
+thread-read expiration maintenance remains; no new claim, Runtime, renewal,
+message or execution is added.
+
+Arguments are bounded at 2 KiB, ASCII-escaped result data at 384 KiB, and the
+MCP CallToolResult including text/structured copies plus a 1 KiB envelope
+reserve at 1.5 MiB. This reserve covers the official client’s integer request ID,
+not an arbitrarily large JSON-RPC ID supplied by another client. Failures return a
+fixed code without partial observations or private exceptions. This tool has no
+compact view or arbitrary method batching. See [the sealed opt-in adapter mode](integrations/codex-personal/DEVELOPMENT_FRAMES.md).
 
 ## Profile configuration and boundaries
 
@@ -68,9 +95,13 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 
 A stored `blocked` status must be explained by an open human request, an unfinished dependency, or an explicit `blocked_reason`. Agents setting `status=blocked` through `update_ticket` must supply `blocked_reason` unless one of the first two applies; `recheck_after_seconds` (300–1209600, default 86400) sets `recheck_at`, and `unblock_owner` defaults to the agent profile. `release_ticket(status="blocked")` stores its `reason` the same way with the default recheck. A human editor may block without a reason; it is recorded as a manual block without recheck and is never released automatically.
 
-`blocked_reason`, `unblock_owner`, `recheck_at` and the derived `block_reasons` (`human_request`, `dependency`, `explicit`) are returned with each task. A dependency in `review` has delivered its result: it no longer appears in `blocked_by`, is listed in `delivered_dependencies`, and only prevents the dependent from reaching `done`.
+`blocked_reason`, `unblock_owner`, `recheck_at` and the derived `block_reasons` (`human_request`, `dependency`, `explicit`, `runtime_cleanup`, `delegation`) are returned with each task. A dependency in `review` has delivered its result: it no longer appears in `blocked_by`, is listed in `delivered_dependencies`, and only prevents the dependent from reaching `done`.
 
-The board reevaluates a blocked task whenever a dependency moves to `review` or `done`, a human request is answered, its dependencies are edited, and on every `get_work` call for the caller's projects. A task with no remaining reason returns to `todo`, clearing its block fields, with a `ticket_unblocked` audit event and a thread message; answering a human request stays silent beyond the answer itself. Reasonless blocks left by older releases are released by the first reevaluation after deployment, except a human manual block: when the latest status change in the ticket's audit is a `ticket_updated` by a human (a claim release without a status does not count as a status change), the block is kept, its reason becomes `Blocked manually by <name>` with that human as `unblock_owner` and no recheck, and a `legacy_block_classified` event is recorded (2.12.2).
+The board reevaluates a blocked task whenever a dependency moves to `review` or `done`, a human request is answered, its dependencies are edited, and on ordinary `get_work` calls. This maintenance remains under `allow_read` within the caller's current project membership and profile scope. An explicit project is authorized before any mutation; a denied project read cannot commit a sweep first. A task with no remaining reason returns to `todo`, clearing its block fields, with a `ticket_unblocked` audit event and a thread message; answering a human request stays silent beyond the answer itself.
+
+Unfinished executions or unconfirmed cleanup on the ticket or its family retain a generic `runtime_cleanup` block; a family stop retains `delegation`. These reasons disclose no other executor identity. A clean ordinary execution can become eligible for reevaluation, while a cancelled family is never reopened by this maintenance. Reasonless legacy blocks are released only after all current reasons are absent. The fixed `get_development_frame` endpoint skips the sweep on all four internal policy reads; it adds no ticket or discussion mutation. Existing `get_thread` legacy expiration maintenance remains.
+
+Before reevaluating a legacy block without a recorded reason or expiry, the board checks its status-changing audit history. A last human `ticket_updated` status edit preserves the block as `Blocked manually by <name>`, with that human as `unblock_owner`, no recheck and one `legacy_block_classified` event. A claim release with no explicit status preserves the prior status and is skipped when reconstructing this provenance. The classification runs only after the caller's current project scope and membership checks. It covers already-migrated schema13 data; it never re-blocks tickets that were previously released or reconstructs unaudited writes.
 
 When an explicit block expires and its `unblock_owner` is an active agent profile of the project, the task returns to `todo` assigned to that agent with a recheck message: expiry is not evidence that the wait is over, and that agent must verify it or block again with a reason before work starts (2.12.1).
 
@@ -78,9 +109,9 @@ When an explicit block expires and its `unblock_owner` is an active agent profil
 
 `get_work` adds a `review` list: unclaimed `review` tasks in the caller's projects, oldest review first, offered to any eligible agent whose persistent profile did not request the review (recorded by a `review_requested` event when a task enters review; older reviews fall back to the last claimer) and whose skills cover the task. Each item carries `review_since` and `review_author_agent_id`. Claiming a task in review keeps its status `review`; the reviewer completes it with outcome and evidence, or returns it to `todo` with progress and `release_claim`.
 
-During the `get_work` reevaluation, an unclaimed review older than 24 hours receives exactly one thread reminder and one `ready_for_verification` notification per review cycle (`review_reminder` audit event).
+During the `get_work` reevaluation, an unclaimed review older than 24 hours receives exactly one thread reminder and one `ready_for_verification` notification per review cycle (`review_reminder` audit event). Reminder maintenance is restricted to the same current profile/project scope as blocked-task reevaluation and is skipped by every policy read inside `get_development_frame`.
 
-Every explicit agent block records `agent_block_recorded`. After three such blocks without an intervening human action or review request, the board stops automatic retries: `recheck_at` is cleared, `unblock_owner` becomes `human`, a thread message and one `needs_input` notification are queued, and `block_escalated` is audited. Any human decision restarts the count.
+Every explicit agent block records `agent_block_recorded`. After three such blocks without an intervening human action or review request, the board stops automatic retries: `recheck_at` is cleared, `unblock_owner` becomes `human`, a thread message and one `needs_input` notification are queued, and `block_escalated` is audited. Explicit human ticket edits, claims/recovery and resolved human requests restart the count, as does a delivered review. Human `get_work` maintenance audits (`ticket_unblocked`, `review_reminder`) do not count as decisions.
 
 ## Mutation and concurrency rules
 
@@ -275,6 +306,41 @@ Schema 6 adds `owner_execution_limits` and `runtime_executions` without changing
 `reserve_execution(session_id, idempotency_key, project_id, ticket_id, work_id, turn_id, provider, model)` requires current effective read/work-request permission, the current active profile version, project membership and an exact live `in_progress` ticket claim. Opaque work/turn IDs must not contain paths, prompts or provider session IDs. The accepted key is bound to owner, profile/version, device/session, project/ticket and immutable provider/model. It returns `{reserved: true, execution: <metadata>, retried: false}`; an exact accepted retry returns that reservation with `retried: true`, never another slot. Changed payload conflicts. A second key cannot reserve the same owner/work/turn. Admission denied by `owner_paused` or `capacity_exhausted` returns a conflict without creating a reservation. No model is launched by the board.
 
 `lookup_execution(session_id, idempotency_key)` is a separate read-only tool. It returns `{found: false}` or `{found: true, execution: <metadata>}` only for the authenticated original device/session/profile. Absence cannot establish that an in-flight admission was cancelled. Clients must persist their intent before sending and reconcile the same key after a lost response; unsupported older servers must fail closed without fallback to unregistered execution.
+
+
+Ordinary tickets claimed in `review` also admit a Runtime turn by a profile
+other than the agent that requested that review. This is a separate server-only
+authorization path; family admission and coordinator checks still require
+`in_progress`. There is no caller-supplied scope selector or fallback for an old
+ticket execution. The private payload pins the exact review event, claim-start
+version, delivered fields and applicable grants. Renewals and progress remain
+valid; changed status, review cycle, claim, scope, skills, delivery or grants stop
+the old turn. Delivery-edit audit IDs prevent an edit followed by restoration
+from reviving it. At most 64 subsequent policy audits of that owner are checked
+against this profile's effective grants; an applicable revocation/restoration,
+missing/ambiguous history or exceeded bound refuses continuation. Unrelated
+owners and grant changes not effective for this profile do not stop it. This is
+an observation of current state and retained server audits, not a guarantee
+against arbitrary in-process mutations between observations. Exact-identity
+lookup/control/finish remain available to attest cleanup after authorization is
+lost. Current prerequisite IDs, eligible statuses and their latest retained
+status-change audits form a separate eligibility pin: a dependency status
+round-trip does not revive a review reservation. The proof reads at most 100
+current prerequisites and, newest first, 64 candidate audits per prerequisite
+until its latest status audit is established. Details are fetched individually
+only after their text type and byte length are checked: at most 128 KiB each and
+1 MiB in total per control. Explicit JSON/event shapes reject duplicate keys,
+non-finite values, ambiguous field lists and invalid Unicode; no SQL JSON
+function parses these unvalidated prerequisite details. Missing, malformed,
+ambiguous or over-bound history refuses that path with the same bounded stop
+instruction, without audit text. These limits bound fetched/parsed records and
+bytes; they do not bound SQLite's internal heap while measuring stored text,
+nor impose a wall-clock limit on its metadata search. The
+read sequence remains an observation, not an atomic snapshot against external
+writers. Dependency claims that keep review status, progress, comments and
+content edits outside this guard do not invalidate it. Their delivered text is
+not silently added to the review's direct model source. Automatic task selection
+is unchanged.
 
 `start_execution(session_id, execution_id, expected_revision)` activates a `reserved` execution before the model is spawned, rechecking current authority, owner pause and capacity. `heartbeat_execution(session_id, execution_id, expected_revision)` updates only a running execution's presence. `finish_execution(session_id, execution_id, expected_revision, status, cleanup_confirmed, reason="")` records a strict `completed|blocked|cancelled` outcome and a bounded reason enum, never output or diagnostics. `cleanup_confirmed=true` makes it `finished` and releases capacity; false makes it `needs_review` and retains capacity. Matching activation/heartbeat/finish retries return their existing effects. Conflicts require reading the latest control before an explicit decision. A cleanup confirmation is an authenticated executor attestation after inspecting its own process group, not a server observation of that process.
 

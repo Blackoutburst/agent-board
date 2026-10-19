@@ -48,12 +48,37 @@ the wrapper digest-checks and compiles those bytes instead of reopening a path.
 An old unpinned native plan or a changed script refuses. This is separate from
 the six controller-module pins and from the model's data-file permissions.
 
-The controller sends only a one-byte authorization heartbeat through its owned
-pipe. The helper verifies the exact scope/action/resource and consumes that
-pipe before each effect and while observing the native test. EOF cancels
-immediately; absence of fresh heartbeats for 1.5 seconds also cancels. Queued
-heartbeats do not mask EOF. The pipe is never inherited by the source test,
-which receives its separate validated ACK gate and then `/dev/null` as stdin.
+Adapter 0.25 sends bounded canonical JSON control frames through its owned
+pipe. Each frame binds schema 1, the exact job nonce, a consecutive sequence,
+monotonic `started_at` and `validated_at`, and `deadline = started_at + 1.5`.
+All shared timestamps use the explicit OS `clock_gettime(CLOCK_MONOTONIC)`
+domain in the controller and helper, never a runtime-relative epoch. This
+supports the protected system helper even when it uses macOS Python 3.9;
+[Python's default monotonic clock became system-wide there in 3.10](https://docs.python.org/3.12/library/time.html#time.monotonic).
+The [POSIX clock contract](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html)
+provides the common domain. An unavailable/failed clock refuses; there is no
+fallback or recalibration at receipt. Purely local wall timeouts remain separate.
+Every frame requires a new complete authorization collection. Collection and
+sending must finish before both its own deadline and the previous window's
+deadline. The 1.5-second TTL is unchanged; late validation never restarts it.
+
+The initial full collection occurs before launch and is pinned in the private
+packet. The helper waits inertly for that exact first frame until the original
+deadline: it launches no canary or source while waiting. The controller sends it
+immediately after launch, without another network collection first. Old raw
+one-byte heartbeats, partial/noncanonical frames, wrong nonce or sequence,
+clock rollback, EOF, overflow or expiry cancel permanently. Queued frames can
+prove continuous coverage only within their original windows; none can revive
+an observed expiration. Limits are 512 bytes per frame, 32 KiB and 64 frames per
+control check, with at most 65,536 sequence values.
+
+The pipe is never inherited by the source test, which receives its separate
+validated ACK gate and then `/dev/null` as stdin. The optional
+[fixed MCP frame](DEVELOPMENT_FRAMES.md) reduces network round trips but does not
+change authorization checks or this TTL. It requires a separately deployed
+server and real latency measurements. This changed protocol requires a fresh
+native qualification on the final source; historical receipts do not qualify
+adapter 0.25 or adopt old jobs.
 The controller keeps `HOME`/`CODEX_HOME` values for the trusted CLI without
 copying authentication files; the source test still has only the fixed minimal
 environment.

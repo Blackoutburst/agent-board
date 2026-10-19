@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.12.2**, schéma **13**, adaptateur **0.25.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.13.0**, schéma **13**, adaptateur **0.26.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
@@ -68,3 +68,11 @@ Le [backend supervisé](SUPERVISED_TESTS.md), introduit en 0.14, fournit une qua
 Le [parcours familial explicite](FAMILY.md) de 0.19 compose deux workers temporaires et leur coordinateur sous un même propriétaire, profil et appareil. Il réserve atomiquement trois checkouts distincts, vérifie les manifestes et qualifications fournis après création des tickets, inspecte les résultats et leurs reçus de nettoyage, puis fait intégrer et tester les changements par le parent. La finalisation ne termine pas le ticket parent : sa publication en revue reste une commande séparée. Le worker ordinaire refuse un ticket familial sans ce contrôleur. Le verrou global passe au format 3 ; les anciens coordinateurs doivent être arrêtés avant de partager cet état.
 
 Restent à valider les pilotes réels de développement avec les droits explicites des propriétaires, puis la recette distante avec plusieurs agents par propriétaire. Les preuves synthétiques et personnelles locales ne valent pas qualification d’un service mutualisé. Installation, mise à jour, observation de quotas et redémarrage du board n’activent aucun listener ou hôte personnel.
+
+Le board 2.11 expose `get_development_frame` pour le mode explicite
+`development-frame-v1` de l’adaptateur 0.25 : un appel HTTP, permissions fraîches
+à chaque lecture et policies finales, sans batch arbitraire ni cache d’autorité.
+La configuration scelle ce choix et refuse tout repli automatique. Le protocole
+natif daté conserve le TTL de 1,5 seconde ; mesurer le chemin réel et qualifier
+les sources finales précède tout nouveau pilote. Voir [DEVELOPMENT_FRAMES.md](DEVELOPMENT_FRAMES.md)
+et [SUPERVISED_TESTS.md](SUPERVISED_TESTS.md).

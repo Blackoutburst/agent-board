@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -30,6 +31,113 @@ from .dev_test_backend import (MAX_DOCUMENT, REQUIRED_CHECKS, NativeNamedPythonB
 CONTROLLER_FILES = ('__init__.py', 'dev_manifest.py', 'dev_journal.py', 'dev_broker.py',
                     'dev_test_backend.py', 'dev_test_supervisor.py')
 SUPERVISED_CHECKS = REQUIRED_CHECKS | {'outside_signal'}
+CONTROL_TTL = 1.5
+MAX_CONTROL_FRAME = 512
+MAX_CONTROL_BYTES = 32768
+MAX_CONTROL_FRAMES = 64
+MAX_CONTROL_SEQUENCE = 65536
+
+
+def _control_clock():
+    """One OS clock domain across protected helper/controller Python versions.
+
+    macOS Python <3.10 makes time.monotonic process-relative. POSIX's system
+    CLOCK_MONOTONIC is shared; absence/failure must never select another clock.
+    """
+    try:
+        return time.clock_gettime(time.CLOCK_MONOTONIC)
+    except (AttributeError, OSError, ValueError):
+        raise DevelopmentError('supervisor_clock_unavailable') from None
+
+
+def _control_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
+def _control_time(clock):
+    value = clock()
+    if not _control_number(value):
+        raise DevelopmentError('supervisor_clock_changed')
+    return value
+
+
+def _validate_control_window(value, *, nonce, now, previous=None, allow_expired=False):
+    fields = {'schema', 'nonce', 'sequence', 'started_at', 'validated_at', 'deadline'}
+    if (not _control_number(now) or type(value) is not dict or set(value) != fields
+            or type(value['schema']) is not int or value['schema'] != 1
+            or type(nonce) is not str or not re.fullmatch('[0-9a-f]{32}', nonce)
+            or value['nonce'] != nonce
+            or type(value['sequence']) is not int or not 1 <= value['sequence'] <= MAX_CONTROL_SEQUENCE
+            or any(not _control_number(value[key]) for key in ('started_at', 'validated_at', 'deadline'))
+            or not value['started_at'] <= value['validated_at'] <= now
+            or value['validated_at'] >= value['deadline']
+            or value['deadline'] != value['started_at'] + CONTROL_TTL):
+        raise DevelopmentError('supervisor_control_invalid')
+    if previous is None:
+        if value['sequence'] != 1:
+            raise DevelopmentError('supervisor_control_invalid')
+    elif (previous['nonce'] != nonce or value['sequence'] != previous['sequence'] + 1
+            or value['started_at'] < previous['validated_at']
+            or value['validated_at'] < previous['validated_at']
+            or value['validated_at'] >= previous['deadline']):
+        raise DevelopmentError('supervisor_control_invalid')
+    if not allow_expired and now >= value['deadline']:
+        raise DevelopmentError('supervisor_authorization_expired')
+    return value
+
+
+def _fresh_control_window(authorize, *, nonce, sequence, previous=None, clock=None):
+    """One full fresh collection per frame; oldest data sets its age."""
+    clock = _control_clock if clock is None else clock
+    started = _control_time(clock)
+    if previous is not None and started < previous['validated_at']:
+        raise DevelopmentError('supervisor_clock_changed')
+    if previous is not None and started >= previous['deadline']:
+        raise DevelopmentError('supervisor_authorization_expired')
+    _validate_control_window({'schema': 1, 'nonce': nonce, 'sequence': sequence,
+        'started_at': started, 'validated_at': started, 'deadline': started + CONTROL_TTL},
+        nonce=nonce, now=started, previous=previous)
+    result = authorize()
+    if result is not None and result is not True:
+        raise DevelopmentError('permission_revoked')
+    validated = _control_time(clock)
+    if validated < started:
+        raise DevelopmentError('supervisor_clock_changed')
+    if validated >= started + CONTROL_TTL or previous is not None and validated >= previous['deadline']:
+        raise DevelopmentError('supervisor_authorization_expired')
+    value = {'schema': 1, 'nonce': nonce, 'sequence': sequence, 'started_at': started,
+             'validated_at': validated, 'deadline': started + CONTROL_TTL}
+    return _validate_control_window(value, nonce=nonce, now=validated, previous=previous)
+
+
+def _send_control_window(descriptor, value, *, previous=None, clock=None):
+    clock = _control_clock if clock is None else clock
+    if type(value) is not dict or type(value.get('nonce')) is not str:
+        raise DevelopmentError('supervisor_control_invalid')
+    sent_at = _control_time(clock)
+    _validate_control_window(value, nonce=value['nonce'], now=sent_at, previous=previous)
+    if previous is not None and sent_at >= previous['deadline']:
+        raise DevelopmentError('supervisor_authorization_expired')
+    raw = canonical(value) + b'\n'
+    if len(raw) > MAX_CONTROL_FRAME:
+        raise DevelopmentError('supervisor_control_invalid')
+    try:
+        if os.write(descriptor, raw) != len(raw):
+            raise DevelopmentError('supervisor_control_write_failed')
+    except OSError:
+        raise DevelopmentError('supervisor_control_write_failed') from None
+    after = _control_time(clock)
+    if after < sent_at:
+        raise DevelopmentError('supervisor_clock_changed')
+    if after >= value['deadline'] or previous is not None and after >= previous['deadline']:
+        raise DevelopmentError('supervisor_authorization_expired')
+
+
 BOOTSTRAP = r'''
 import hashlib,json,os,sys,types
 root,pins,packet=sys.argv[1:]
@@ -146,25 +254,86 @@ def prepare_supervision(directory, *, executable='/usr/bin/python3'):
 
 
 class _ControlPipe:
-    def __init__(self, descriptor=0):
+    def __init__(self, descriptor=0, *, nonce, initial, clock=None):
         self.fd = descriptor
-        self.last_heartbeat = None
+        self.clock = _control_clock if clock is None else clock
+        self.last_now = _control_time(self.clock)
+        _validate_control_window(initial, nonce=nonce, now=self.last_now, allow_expired=True)
+        self.nonce, self.initial = nonce, decode(canonical(initial))
+        self.last_window, self.buffer = None, b''
         self.ended = False
         os.set_blocking(self.fd, False)
+
+    def _now(self):
+        now = _control_time(self.clock)
+        if now < self.last_now:
+            raise DevelopmentError('supervisor_clock_changed')
+        self.last_now = now
+        return now
 
     def authorized(self):
         if self.ended:
             return False
-        while True:
-            try:
-                data = os.read(self.fd, 4096)
-            except BlockingIOError:
-                break
-            if not data or any(value != ord('G') for value in data):
+        total, frames = 0, 0
+        try:
+            now = self._now()
+            if self.last_window is None and now >= self.initial['deadline']:
                 self.ended = True
                 return False
-            self.last_heartbeat = time.monotonic()
-        return self.last_heartbeat is not None and time.monotonic() - self.last_heartbeat <= 1.5
+            while True:
+                try:
+                    data = os.read(self.fd, min(4096, MAX_CONTROL_BYTES + 1 - total))
+                except BlockingIOError:
+                    break
+                if not data:
+                    self.ended = True
+                    return False
+                total += len(data)
+                if total > MAX_CONTROL_BYTES:
+                    raise DevelopmentError('supervisor_control_invalid')
+                self.buffer += data
+                while b'\n' in self.buffer:
+                    line, self.buffer = self.buffer.split(b'\n', 1)
+                    frames += 1
+                    if len(line) + 1 > MAX_CONTROL_FRAME or frames > MAX_CONTROL_FRAMES:
+                        raise DevelopmentError('supervisor_control_invalid')
+                    value = decode(line)
+                    if canonical(value) != line:
+                        raise DevelopmentError('supervisor_control_invalid')
+                    _validate_control_window(value, nonce=self.nonce, now=self._now(),
+                        previous=self.last_window, allow_expired=True)
+                    if self.last_window is None and canonical(value) != canonical(self.initial):
+                        raise DevelopmentError('supervisor_control_invalid')
+                    self.last_window = value
+                if len(self.buffer) >= MAX_CONTROL_FRAME:
+                    raise DevelopmentError('supervisor_control_invalid')
+            now = self._now()
+            if self.last_window is not None and now < self.last_window['deadline']:
+                return True
+            if now >= (self.initial if self.last_window is None else self.last_window)['deadline']:
+                self.ended = True
+            return False
+        except (OSError, DevelopmentError, TypeError, ValueError):
+            self.ended = True
+            return False
+
+    def wait_initial(self):
+        """Inert wait: no canary or source before this exact initial lease."""
+        while not self.ended:
+            if self.authorized():
+                return True
+            if self.ended:
+                return False
+            try:
+                remaining = self.initial['deadline'] - self._now()
+                if remaining <= 0:
+                    self.ended = True
+                    return False
+                select.select([self.fd], [], [], min(remaining, 0.05))
+            except (OSError, DevelopmentError, TypeError, ValueError):
+                self.ended = True
+                return False
+        return False
 
 
 class _SignalCanary:
@@ -334,6 +503,8 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
 
     def _launch(self, packet_name):
         self._supervision_pins()
+        packet = decode(self.private.read(packet_name, MAX_DOCUMENT))
+        _validate_control_window(packet['control'], nonce=packet['nonce'], now=_control_time(_control_clock))
         package_root = str(Path(__file__).parent.parent)
         env = {key: os.environ[key] for key in ('HOME', 'CODEX_HOME', 'TMPDIR') if key in os.environ}
         env.update({'LANG': 'C', 'PATH': '/usr/bin:/bin'})
@@ -357,15 +528,21 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
             'request': None if qualify else vars(request), 'qualify': qualify,
             'supervision_hash': digest(canonical(self.supervision)), 'request_hash': request_hash,
             'state_name': state_name, 'packet_name': packet_name}
+        first = _fresh_control_window(self._authorize, nonce=nonce, sequence=1)
+        packet['control'] = first
         self.private.create(packet_name, canonical(packet))
         self.private.create(state_name, canonical({'schema': 1, 'nonce': nonce, 'request_hash': request_hash,
             'phase': 'prepared', 'supervisor_identity': None, 'result': None, 'reason': None, 'checks': {}}))
-        self._authorize()
         child = self._launch(packet_name)
         os.set_blocking(child.stdin.fileno(), False)
         deadline = time.monotonic() + (50 if qualify else request.timeout_seconds + 50)
         revoked = False
+        previous = first
         try:
+            try:
+                _send_control_window(child.stdin.fileno(), first)
+            except (DevelopmentError, OSError):
+                revoked = True
             while True:
                 state = self._read_job(state_name, nonce, request_hash)
                 if state['phase'] == 'complete':
@@ -379,8 +556,10 @@ class SupervisedNativeNamedPythonBackend(NativeNamedPythonBackend):
                     revoked = True
                 if not revoked:
                     try:
-                        self._authorize()
-                        os.write(child.stdin.fileno(), b'G')
+                        fresh = _fresh_control_window(self._authorize, nonce=nonce,
+                            sequence=previous['sequence'] + 1, previous=previous)
+                        _send_control_window(child.stdin.fileno(), fresh, previous=previous)
+                        previous = fresh
                     except (DevelopmentError, OSError):
                         revoked = True
                 if revoked and not child.stdin.closed:
@@ -410,7 +589,7 @@ def supervise_packet(packet_path):
     try:
         packet = decode(private.read(path.name, MAX_DOCUMENT))
         if (type(packet) is not dict or set(packet) != {'schema', 'nonce', 'backend_dir', 'manifest',
-                'request', 'qualify', 'supervision_hash', 'request_hash', 'state_name', 'packet_name'}
+                'request', 'qualify', 'supervision_hash', 'request_hash', 'state_name', 'packet_name', 'control'}
                 or type(packet['schema']) is not int or packet['schema'] != 1
                 or type(packet['qualify']) is not bool or packet['packet_name'] != path.name
                 or packet['backend_dir'] != str(private.path)
@@ -418,7 +597,7 @@ def supervise_packet(packet_path):
                 or not re.fullmatch('[0-9a-f]{32}', packet['nonce'])
                 or digest(canonical({'qualify': packet['qualify'], 'request': packet['request']})) != packet['request_hash']):
             return 78
-        control = _ControlPipe()
+        control = _ControlPipe(nonce=packet['nonce'], initial=packet['control'])
         scope = packet['manifest']['scope']
         resource = packet['manifest']['resource']
         def authorize(given, action, requested):
@@ -447,6 +626,8 @@ def supervise_packet(packet_path):
         private.replace(packet['state_name'], canonical(state))
         result, checks, reason = _receipt(), {}, 'supervisor_execution_uncertain'
         try:
+            if not control.wait_initial():
+                raise DevelopmentError('permission_revoked')
             backend._authorize()
             backend._pins()
             canary = _SignalCanary(backend.supervision['executable'], private.path)

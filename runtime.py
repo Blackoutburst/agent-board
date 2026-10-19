@@ -5,6 +5,7 @@ capacity: only an authenticated exact execution's cleanup confirmation does.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -21,6 +22,85 @@ REASONS = frozenset({'', 'completed', 'cancelled', 'quota_or_rate_limit',
 _OPAQUE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$')
 _MODEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$')
 _SHA256 = re.compile(r'^[0-9a-f]{64}$')
+_REVIEW_PREREQUISITE_LIMIT = 100  # Matches _set_dependencies.
+_REVIEW_STATUS_READS = 64
+_REVIEW_AUDIT_BYTES = 128 * 1024
+_REVIEW_HISTORY_BYTES = 1024 * 1024
+_REVIEW_STATUS_EVENTS = (
+    'ticket_updated', 'review_requested', 'human_input_requested', 'ticket_unblocked',
+    'ticket_delegated', 'delegated_result_accepted', 'ticket_released',
+)
+_TICKET_EDIT_FIELDS = frozenset({
+    'title', 'description', 'acceptance_criteria', 'outcome', 'evidence', 'priority',
+    'assignee_owner_id', 'status', 'release_claim', 'depends_on', 'labels', 'required_skills',
+    'resource', 'progress', 'assignee_agent_id', 'attachment_ids', 'blocked_reason',
+    'recheck_after_seconds', 'unblock_owner',
+})
+
+
+def _review_status_event(raw, event, ticket_id):
+    """Classify only an unambiguous existing server audit, never caller input."""
+    def invalid(*_):
+        raise ValueError('invalid audit')
+
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                invalid()
+            value[key] = item
+        return value
+
+    def text(value, maximum=200, minimum=1):
+        if type(value) is not str or not minimum <= len(value) <= maximum:
+            return False
+        value.encode('utf-8')
+        return True
+
+    try:
+        detail = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=invalid)
+        if type(detail) is not dict or detail.get('ticket_id') != ticket_id:
+            invalid()
+        if event == 'ticket_updated':
+            fields = detail.get('fields')
+            if (set(detail) != {'ticket_id', 'version', 'fields'}
+                    or type(detail['version']) is not int or not 0 < detail['version'] <= 2**63-1
+                    or type(fields) is not list or not 0 < len(fields) <= len(_TICKET_EDIT_FIELDS)
+                    or any(type(field) is not str or field not in _TICKET_EDIT_FIELDS for field in fields)
+                    or len(set(fields)) != len(fields)):
+                invalid()
+            return 'status' in fields
+        if event == 'ticket_released':
+            if (set(detail) != {'ticket_id', 'version', 'reason', 'status', 'unassign_self'}
+                    or type(detail['version']) is not int or not 0 < detail['version'] <= 2**63-1
+                    or not text(detail['reason'], 20000)
+                    or type(detail['status']) is not str or detail['status'] not in ('', 'todo', 'blocked', 'review')
+                    or type(detail['unassign_self']) is not bool):
+                invalid()
+            return detail['status'] in ('todo', 'blocked')
+        shapes = {
+            'review_requested': set(),
+            'human_input_requested': {'request_id', 'owner_id', 'message_id'},
+            'ticket_unblocked': {'trigger', 'previous_reason'},
+            'ticket_delegated': {'child_ticket_id', 'required_skills'},
+            'delegated_result_accepted': {'family_id', 'result_sha256'},
+        }
+        if event not in shapes or set(detail) != shapes[event] | {'ticket_id'}:
+            invalid()
+        for key in shapes[event] - {'required_skills'}:
+            maximum = _REVIEW_AUDIT_BYTES if key == 'trigger' else 500 if key == 'previous_reason' else 200
+            if not text(detail[key], maximum, 0 if key in ('trigger', 'previous_reason') else 1):
+                invalid()
+        if event == 'ticket_delegated':
+            skills = detail['required_skills']
+            if (type(skills) is not list or len(skills) > 50
+                    or any(not text(skill) for skill in skills)):
+                invalid()
+        if event == 'delegated_result_accepted' and not _SHA256.fullmatch(detail['result_sha256']):
+            invalid()
+        return True
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        _fail('review_prerequisites_history_unavailable', 409)
 
 
 def _identifier(value, name, *, model=False):
@@ -114,6 +194,48 @@ def migrate_message_runtime(db):
 
 
 class RuntimeMixin:
+    def _runtime_review_prerequisites(self, db, ticket_id):
+        """Bounded proof of each current prerequisite's latest status audit.
+
+        Inspect metadata first; no oversized or over-budget detail is fetched.
+        Read newest-first only until a status event is proven. Older history is
+        irrelevant to that epoch; too many later candidates refuses the proof.
+        """
+        prerequisites = db.execute("""SELECT t.id,t.status FROM ticket_dependencies d
+            JOIN tickets t ON t.id=d.depends_on_id WHERE d.ticket_id=? ORDER BY t.id LIMIT ?""",
+            (ticket_id, _REVIEW_PREREQUISITE_LIMIT + 1)).fetchall()
+        if len(prerequisites) > _REVIEW_PREREQUISITE_LIMIT:
+            _fail('review_prerequisites_history_unavailable', 409)
+        remaining = _REVIEW_HISTORY_BYTES
+        result = []
+        placeholders = ','.join('?' for _ in _REVIEW_STATUS_EVENTS)
+        for prerequisite in prerequisites:
+            epoch = None
+            history = db.execute(f"""SELECT id,event,typeof(detail) AS kind,
+                length(CAST(detail AS BLOB)) AS size FROM ticket_events
+                WHERE ticket_id=? AND event IN ({placeholders}) ORDER BY id DESC LIMIT ?""",
+                (prerequisite['id'], *_REVIEW_STATUS_EVENTS, _REVIEW_STATUS_READS))
+            for item in history:
+                if (type(item['id']) is not int or item['id'] <= 0 or item['kind'] != 'text'
+                        or type(item['size']) is not int or not 0 < item['size'] <= min(_REVIEW_AUDIT_BYTES, remaining)):
+                    _fail('review_prerequisites_history_unavailable', 409)
+                # Recheck metadata when fetching the bounded bytes. The read
+                # sequence is not an atomic snapshot against external writers.
+                value = db.execute("""SELECT substr(CAST(detail AS BLOB),1,?) FROM ticket_events
+                    WHERE id=? AND ticket_id=? AND event=? AND typeof(detail)='text'
+                    AND length(CAST(detail AS BLOB))=?""", (item['size'], item['id'], prerequisite['id'],
+                    item['event'], item['size'])).fetchone()
+                if value is None or type(value[0]) is not bytes or len(value[0]) != item['size']:
+                    _fail('review_prerequisites_history_unavailable', 409)
+                remaining -= item['size']
+                if _review_status_event(value[0], item['event'], prerequisite['id']):
+                    epoch = item['id']
+                    break
+            if epoch is None:
+                _fail('review_prerequisites_history_unavailable', 409)
+            result.append([prerequisite['id'], prerequisite['status'], epoch])
+        return result
+
     def _runtime_identity(self, db, actor):
         """Identity-only channel for this executor's cleanup, never new work.
 
@@ -147,7 +269,7 @@ class RuntimeMixin:
         return {key: row[key] for key in ('owner_id', 'max_concurrent', 'version')} | {'paused': bool(row['paused'])} if row else {
             'owner_id': owner_id, 'max_concurrent': 1, 'paused': False, 'version': 1}
 
-    def _runtime_authorize(self, db, actor, project_id, ticket_id, profile_version=None):
+    def _runtime_ticket_claim(self, db, actor, project_id, ticket_id, profile_version, *, status):
         actor = self._actor(db, actor, 'allow_requests')
         self._actor(db, actor, 'allow_read')
         if actor['kind'] != 'agent':
@@ -162,10 +284,111 @@ class RuntimeMixin:
         if ticket['project_id'] != project_id:
             _fail('ticket_project_mismatch', 409)
         claimant = json.loads(ticket['claimant']) if ticket['claimant'] else None
-        if (not _same_claim(claimant, actor) or ticket['status'] != 'in_progress'
+        if (not _same_claim(claimant, actor) or ticket['status'] != status
                 or (ticket['lease_expires_at'] or 0) <= time.time()):
             _fail('active_ticket_claim_required', 409)
+        return actor, profile, ticket
+
+    def _runtime_authorize(self, db, actor, project_id, ticket_id, profile_version=None):
+        # Family admission/parent checks retain their strict in_progress scope.
+        actor, profile, _ = self._runtime_ticket_claim(db, actor, project_id, ticket_id,
+                                                     profile_version, status='in_progress')
         return actor, profile
+
+    def _runtime_review_policy(self, db, actor, profile, expected=None):
+        """Bounded audit proof of applicable grants, not an authority cache."""
+        policy = json.loads(profile['policy'])
+        def projection(owner):
+            if (type(owner) is not dict or any(type(owner.get(key)) is not bool
+                    for key in ('enabled','allow_read','allow_reply','allow_requests'))
+                    or any(type(owner.get(key)) is not list or any(type(item) is not str for item in owner[key])
+                           for key in ('actions','resources'))):
+                _fail('review_policy_history_unavailable',409)
+            result = {'enabled':owner['enabled'] and profile['status']=='active', 'autonomy':policy['autonomy']}
+            for key,other in [('allow_read','allow_read'),('allow_reply','allow_messages'),('allow_requests','allow_requests')]:
+                result[key] = owner[key] and policy[other]
+            result['allow_requests'] = result['allow_requests'] and policy['autonomy']!='responses'
+            for key in ('actions','resources'):
+                result[key] = sorted(owner[key] if profile['legacy'] and policy[key]==['*']
+                                     else [item for item in owner[key] if item in policy[key]])
+            if 'allow_create_projects' in policy:
+                result['allow_create_projects'] = (result['enabled'] and result['allow_requests']
+                                                   and self._profile_can_create_projects(profile))
+            return result
+        def hashed(value):return hashlib.sha256(_json(value).encode('utf-8')).hexdigest()
+        observed = self._effective_profile_policy(db,actor,profile)
+        current = {key:value for key,value in observed.items() if key not in ('granted_by','granted_at')}
+        for key in ('actions','resources'):current[key]=sorted(current[key])
+        digest = hashed(current)
+        latest = db.execute("SELECT id,detail FROM audit WHERE event='policy_changed' "
+            "AND json_extract(actor,'$.owner_id')=? ORDER BY id DESC LIMIT 1", (actor['owner_id'],)).fetchone()
+        try:
+            if latest is None or hashed(projection(json.loads(latest['detail']))) != digest:
+                _fail('review_policy_history_unavailable',409)
+            if expected is None:return latest['id'],digest
+            initial = expected.get('owner_policy_event_id')
+            if type(initial) is not int or initial<=0:_fail('review_policy_history_unavailable',409)
+            baseline = db.execute("SELECT detail FROM audit WHERE id=? AND event='policy_changed' "
+                "AND json_extract(actor,'$.owner_id')=?",(initial,actor['owner_id'])).fetchone()
+            history = db.execute("SELECT detail FROM audit WHERE id>? AND event='policy_changed' "
+                "AND json_extract(actor,'$.owner_id')=? ORDER BY id LIMIT 65",(initial,actor['owner_id'])).fetchall()
+            if (baseline is None or len(history)>64 or expected.get('grants_sha256')!=digest
+                    or any(hashed(projection(json.loads(item['detail'])))!=digest for item in [baseline,*history])):
+                _fail('review_policy_history_unavailable',409)
+            return initial,digest
+        except (ValueError,TypeError,KeyError):
+            _fail('review_policy_history_unavailable',409)
+
+    def _runtime_review_authorize(self, db, actor, project_id, ticket_id, profile_version=None, *, expected_scope=None):
+        actor, profile, ticket = self._runtime_ticket_claim(db, actor, project_id, ticket_id,
+                                                          profile_version, status='review')
+        if self._delegation_ticket_family(db, ticket_id) is not None:
+            _fail('ordinary_review_required', 409)
+        event = db.execute("SELECT id,actor FROM ticket_events WHERE ticket_id=? AND event='review_requested' "
+                           "ORDER BY id DESC LIMIT 1", (ticket_id,)).fetchone()
+        claimant = json.loads(ticket['claimant'])
+        try:
+            origin = json.loads(event['actor']) if event is not None else None
+        except (ValueError,TypeError):
+            origin = None
+        if (type(origin) is not dict or origin.get('kind') not in ('human','agent')
+                or (origin['kind']=='agent' and not isinstance(origin.get('agent_id'),str))
+                or origin.get('agent_id') == profile['id']
+                or claimant.get('agent_id') != profile['id']
+                or type(claimant.get('profile_version')) is not int
+                or claimant['profile_version'] != profile['version']
+                or type(ticket['claim_started_version']) is not int or ticket['claim_started_version'] <= 0):
+            _fail('distinct_live_review_claim_required', 409)
+        skills = json.loads(db.execute('SELECT skills FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()[0])
+        if not set(json.loads(ticket['required_skills'])).issubset(skills):
+            _fail('review_skills_changed', 409)
+        source = {key: ticket[key] for key in ('title','description','acceptance_criteria','outcome','evidence',
+            'required_skills','resource','assignee_owner_id','assignee_agent_id')}
+        source['attachments'] = [list(row) for row in db.execute(
+            'SELECT attachment_id,position FROM ticket_attachments WHERE ticket_id=? ORDER BY position', (ticket_id,))]
+        # Prerequisites guard eligibility only; their delivered text is not an
+        # implicit input to this review. Pin existing status audits as well as
+        # current state so a status round-trip cannot revive an old Runtime.
+        prerequisites = self._runtime_review_prerequisites(db, ticket_id)
+        if (any(status not in ('done','review') for _,status,_ in prerequisites)
+                or db.execute("SELECT 1 FROM human_requests WHERE ticket_id=? AND status='open'", (ticket_id,)).fetchone()):
+            _fail('review_prerequisites_changed', 409)
+        if expected_scope is not None and type(expected_scope) is not dict:
+            _fail('review_scope_changed',409)
+        policy_event, grants_hash = self._runtime_review_policy(db,actor,profile,expected_scope)
+        fields = sorted(source.keys() - {'attachments'}) + ['attachment_ids','depends_on']
+        placeholders = ','.join('?' for _ in fields)
+        delivery = db.execute(f"SELECT MAX(id) FROM ticket_events WHERE ticket_id=? AND event='ticket_updated' "
+            f"AND EXISTS (SELECT 1 FROM json_each(ticket_events.detail,'$.fields') WHERE value IN ({placeholders}))",
+            (ticket_id,*fields)).fetchone()[0] or 0
+        pin = {'review_event_id': event['id'], 'claim_started_version': ticket['claim_started_version'],
+               'delivery_event_id':max(event['id'],delivery), 'owner_policy_event_id':policy_event,
+               'source_sha256': hashlib.sha256(_json(source).encode('utf-8')).hexdigest(),
+               'grants_sha256': grants_hash,
+               'prerequisites_sha256':hashlib.sha256(_json(prerequisites).encode('utf-8')).hexdigest()}
+        if expected_scope is not None and _json(expected_scope)!=_json(pin):
+            _fail('review_scope_changed',409)
+        return actor, profile, pin
 
     def _runtime_message_authorize(self, db, actor, thread_id, message_id, source_sha256,
                                    profile_version=None):
@@ -199,6 +422,20 @@ class RuntimeMixin:
                 row['message_id'],row['source_sha256'],row['profile_version'])
             if any(row[key] != linked[key] for key in ('project_id','ticket_id')):
                 _fail('message_context_changed',409)
+            return actor, profile
+        # Only a server-created reservation carries this marker. Old ticket
+        # Runtime rows never acquire review authority from a later status change.
+        try:
+            payload = json.loads(row['payload'])
+        except (ValueError,TypeError):
+            _fail('execution_scope_invalid',409)
+        if type(payload) is not dict:
+            _fail('execution_scope_invalid',409)
+        if 'review_scope' in payload:
+            actor, profile, pin = self._runtime_review_authorize(db,actor,row['project_id'],
+                row['ticket_id'],row['profile_version'],expected_scope=payload['review_scope'])
+            if type(payload['review_scope']) is not dict or _json(payload['review_scope']) != _json(pin):
+                _fail('review_scope_changed',409)
             return actor, profile
         return self._runtime_authorize(db,actor,row['project_id'],row['ticket_id'],row['profile_version'])
 
@@ -241,12 +478,29 @@ class RuntimeMixin:
             for key, value in locals().copy().items() if key in {
                 'idempotency_key', 'project_id', 'ticket_id', 'work_id', 'turn_id', 'provider', 'model'}}
         with self._tx() as db:
-            actor, profile = self._runtime_authorize(db, actor, project_id, ticket_id)
-            payload = _json(values | {'agent_id': profile['id'], 'profile_version': profile['version']})
+            selected = db.execute('SELECT status FROM tickets WHERE id=?', (ticket_id,)).fetchone()
+            review = None
+            if selected is not None and selected['status'] == 'review':
+                actor, profile, review = self._runtime_review_authorize(db, actor, project_id, ticket_id)
+            else:
+                actor, profile = self._runtime_authorize(db, actor, project_id, ticket_id)
+            payload = _json(values | {'agent_id': profile['id'], 'profile_version': profile['version']}
+                            | ({'review_scope': review} if review is not None else {}))
             existing = db.execute('''SELECT * FROM runtime_executions
                 WHERE owner_id=? AND device_id=? AND session_id=? AND idempotency_key=?''',
                 (actor['owner_id'], actor['device_id'], actor['session_id'], idempotency_key)).fetchone()
             if existing:
+                if review is not None:
+                    try:
+                        previous = json.loads(existing['payload'])
+                    except (ValueError,TypeError):
+                        _fail('execution_scope_invalid',409)
+                    if type(previous) is not dict or 'review_scope' not in previous:
+                        _fail('execution_key_conflict',409)
+                    actor,profile,review = self._runtime_review_authorize(db,actor,project_id,ticket_id,
+                        profile['version'],expected_scope=previous['review_scope'])
+                    payload = _json(values | {'agent_id':profile['id'],'profile_version':profile['version'],
+                                             'review_scope':review})
                 if existing['payload'] != payload:
                     _fail('execution_key_conflict', 409)
                 return {'reserved': True, 'execution': self._execution_view(db, existing), 'retried': True}
