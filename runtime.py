@@ -245,16 +245,28 @@ class RuntimeMixin:
             'required_skills','resource','assignee_owner_id','assignee_agent_id')}
         source['attachments'] = [list(row) for row in db.execute(
             'SELECT attachment_id,position FROM ticket_attachments WHERE ticket_id=? ORDER BY position', (ticket_id,))]
-        source['dependencies'] = [list(row) for row in db.execute(
-            'SELECT t.id,t.status FROM ticket_dependencies d JOIN tickets t ON t.id=d.depends_on_id '
-            'WHERE d.ticket_id=? ORDER BY t.id', (ticket_id,))]
-        if (any(status not in ('done','review') for _,status in source['dependencies'])
+        # Prerequisites guard eligibility only; their delivered text is not an
+        # implicit input to this review. Pin existing status audits as well as
+        # current state so a status round-trip cannot revive an old Runtime.
+        prerequisites = [list(row) for row in db.execute("""
+            SELECT t.id,t.status,COALESCE((SELECT MAX(e.id) FROM ticket_events e WHERE e.ticket_id=t.id AND (
+                (e.event='ticket_updated' AND EXISTS (
+                    SELECT 1 FROM json_each(e.detail,'$.fields') WHERE value='status'))
+                OR e.event IN ('review_requested','human_input_requested','ticket_unblocked',
+                              'ticket_delegated','delegated_result_accepted')
+                OR (e.event='ticket_released' AND json_extract(e.detail,'$.status') IN ('todo','blocked'))
+            )),0) AS status_event_id
+            FROM ticket_dependencies d JOIN tickets t ON t.id=d.depends_on_id
+            WHERE d.ticket_id=? ORDER BY t.id""", (ticket_id,))]
+        if any(type(epoch) is not int or epoch<=0 for _,_,epoch in prerequisites):
+            _fail('review_prerequisites_history_unavailable',409)
+        if (any(status not in ('done','review') for _,status,_ in prerequisites)
                 or db.execute("SELECT 1 FROM human_requests WHERE ticket_id=? AND status='open'", (ticket_id,)).fetchone()):
             _fail('review_prerequisites_changed', 409)
         if expected_scope is not None and type(expected_scope) is not dict:
             _fail('review_scope_changed',409)
         policy_event, grants_hash = self._runtime_review_policy(db,actor,profile,expected_scope)
-        fields = sorted(source.keys() - {'attachments','dependencies'}) + ['attachment_ids','depends_on']
+        fields = sorted(source.keys() - {'attachments'}) + ['attachment_ids','depends_on']
         placeholders = ','.join('?' for _ in fields)
         delivery = db.execute(f"SELECT MAX(id) FROM ticket_events WHERE ticket_id=? AND event='ticket_updated' "
             f"AND EXISTS (SELECT 1 FROM json_each(ticket_events.detail,'$.fields') WHERE value IN ({placeholders}))",
@@ -262,7 +274,8 @@ class RuntimeMixin:
         pin = {'review_event_id': event['id'], 'claim_started_version': ticket['claim_started_version'],
                'delivery_event_id':max(event['id'],delivery), 'owner_policy_event_id':policy_event,
                'source_sha256': hashlib.sha256(_json(source).encode('utf-8')).hexdigest(),
-               'grants_sha256': grants_hash}
+               'grants_sha256': grants_hash,
+               'prerequisites_sha256':hashlib.sha256(_json(prerequisites).encode('utf-8')).hexdigest()}
         if expected_scope is not None and _json(expected_scope)!=_json(pin):
             _fail('review_scope_changed',409)
         return actor, profile, pin

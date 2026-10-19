@@ -32,7 +32,7 @@ def test_review_runtime_roundtrip_keeps_exact_scope_through_renew_and_progress(r
     assert not row['should_stop'] and task['status'] == 'review'
     with board._connection() as db:
         payload = json.loads(db.execute('SELECT payload FROM runtime_executions WHERE id=?',(row['id'],)).fetchone()[0])
-        assert set(payload['review_scope']) == {'review_event_id','claim_started_version','delivery_event_id','owner_policy_event_id','source_sha256','grants_sha256'}
+        assert set(payload['review_scope']) == {'review_event_id','claim_started_version','delivery_event_id','owner_policy_event_id','source_sha256','grants_sha256','prerequisites_sha256'}
         # The family-only path still refuses review, even though ordinary Runtime admits it.
         with pytest.raises(BoardError, match='active_ticket_claim_required'):
             board._runtime_authorize(db, actor, task['project_id'], task['id'])
