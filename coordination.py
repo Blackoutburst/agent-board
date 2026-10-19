@@ -240,14 +240,28 @@ class CoordinationMixin(ProjectsMixin):
             if not row or row['status'] != 'blocked' or self._block_reasons(row, self._ticket(row, db)):
                 continue
             now = time.time()
+            # An expired explicit block goes back to the agent that owns its
+            # recheck, so it re-verifies the wait before anyone else starts.
+            recheck_agent = None
+            if row['blocked_reason'] and row['recheck_at'] and row['unblock_owner']:
+                try:
+                    recheck_agent = self._project_agent(db, row['project_id'], row['unblock_owner'])
+                except Exception:
+                    recheck_agent = None
             db.execute("""UPDATE tickets SET status='todo',waiting_for_dependencies=0,blocked_reason='',
-                unblock_owner=NULL,recheck_at=NULL,version=version+1,updated_at=? WHERE id=? AND status='blocked'""",
-                (now, ticket_id))
+                unblock_owner=NULL,recheck_at=NULL,assignee_agent_id=COALESCE(?,assignee_agent_id),
+                version=version+1,updated_at=? WHERE id=? AND status='blocked'""",
+                (recheck_agent, now, ticket_id))
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             previous = row['blocked_reason'] or ('expired explicit block' if row['recheck_at'] else 'no recorded reason')
             self._audit(db, actor, 'ticket_unblocked', {'ticket_id': ticket_id, 'trigger': trigger,
                                                         'previous_reason': previous[:500]})
-            if announce:
+            if announce and recheck_agent:
+                self._discussion_event(db, actor, row['thread_id'],
+                    f'Board recheck: the block "{row["blocked_reason"][:300]}" reached its recheck time. The task returns '
+                    'to the agent that set it, which must verify the wait is over (or block it again with a reason) '
+                    'before work starts. Expiry alone is not evidence that the wait is over.', [])
+            elif announce:
                 self._discussion_event(db, actor, row['thread_id'],
                     'Board reevaluation: no open human request, unfinished dependency or active block reason '
                     f'remains ({trigger}). This task is ready again for its assigned agent or any eligible worker.', [])

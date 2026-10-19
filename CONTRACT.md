@@ -1,6 +1,6 @@
-# Board interface contract — 2.12.0
+# Board interface contract — 2.12.1
 
-The browser REST API and MCP act on one database. Application version is `2.12.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.12.1`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -71,6 +71,8 @@ A stored `blocked` status must be explained by an open human request, an unfinis
 `blocked_reason`, `unblock_owner`, `recheck_at` and the derived `block_reasons` (`human_request`, `dependency`, `explicit`) are returned with each task. A dependency in `review` has delivered its result: it no longer appears in `blocked_by`, is listed in `delivered_dependencies`, and only prevents the dependent from reaching `done`.
 
 The board reevaluates a blocked task whenever a dependency moves to `review` or `done`, a human request is answered, its dependencies are edited, and on every `get_work` call for the caller's projects. A task with no remaining reason returns to `todo`, clearing its block fields, with a `ticket_unblocked` audit event and a thread message; answering a human request stays silent beyond the answer itself. Reasonless blocks left by older releases are therefore released by the first poll after deployment.
+
+When an explicit block expires and its `unblock_owner` is an active agent profile of the project, the task returns to `todo` assigned to that agent with a recheck message: expiry is not evidence that the wait is over, and that agent must verify it or block again with a reason before work starts (2.12.1).
 
 ## Review queue, reminders and block escalation (2.12)
 
