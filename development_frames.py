@@ -55,6 +55,22 @@ def _bounded(value):
     return value
 
 
+# Same source fields as the context protocol, without importing its controller.
+# Presence, unread counts, avatars, URLs and attachments are not source identity.
+_THREAD_SOURCE = {'id': None, 'title': None, 'participants': None,
+                  'ticket': {'id': None, 'project_id': None, 'number': None, 'title': None}}
+_MESSAGE_SOURCE = {key: None for key in ('id', 'thread_id', 'body', 'created_at', 'reply_to', 'mentions')}
+_MESSAGE_SOURCE['author'] = {key: None for key in
+    ('kind', 'owner_id', 'agent_id', 'display_name', 'agent_name', 'agent_kind')}
+
+
+def _source(value, fields):
+    if type(value) is not dict:
+        _fail('invalid_pagination')
+    return {key: _source(value[key], rule) if rule is not None else value[key]
+            for key, rule in fields.items() if key in value}
+
+
 def _selection(board, fresh_actor, args):
     actor = fresh_actor(args['session_id'])
     with board._connection() as db:
@@ -116,18 +132,20 @@ def _history(read, role, frame, session_id):
                 or selected['owner_id'] not in current['participants']
                 or type(page) is not list or len(page) > limit):
             _fail('invalid_pagination')
-        if thread is not None and encoded(thread) != encoded(current):
+        current_source = _source(current, _THREAD_SOURCE)
+        if thread is not None and encoded(thread) != encoded(current_source):
             _fail('invalid_pagination')
-        thread, older = current, 0
+        thread, older = current_source, 0
         for message in page:
             key = _identifier(message['id'])
             if message.get('thread_id') != thread_id:
                 _fail('invalid_pagination')
+            source = _source(message, _MESSAGE_SOURCE)
             if key in by_id:
-                if encoded(by_id[key]) != encoded(message) or before is not None and key != before:
+                if encoded(by_id[key]) != encoded(source) or before is not None and key != before:
                     _fail('invalid_pagination')
             else:
-                by_id[key] = message
+                by_id[key] = source
                 older += 1
         if cursor is not None:
             _identifier(cursor)

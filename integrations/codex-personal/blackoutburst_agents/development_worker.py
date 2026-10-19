@@ -72,6 +72,21 @@ class DevelopmentBoardWorker:
                 return True
         return False
 
+    def _local_cancelled(self, operation_id=None, *, inspection=False):
+        """Local registration bracket inside a fresh concrete family frame.
+
+        Full controller guards at other boundaries remain in
+        _controller_cancelled; Runtime cancellation remains in the planner.
+        """
+        try:
+            if operation_id is not None:
+                return self._local_control(operation_id,inspection=inspection) is not True
+            if self.controller_scope is not None:
+                return self.controller_local_guard(inspection=inspection) is not True
+            return False
+        except Exception:
+            return True
+
     def _pin_controller(self, op):
         if (self.controller_scope is not None and op['id']!=self._controller_operation_id()):
             raise DevelopmentError('development_controller_required')
@@ -195,6 +210,7 @@ class DevelopmentBoardWorker:
                 authorization=DevelopmentAuthorization(self.client,scope=scope,manifest=manifest.manifest,
                                                         registration=registration,clock=self.clock,
                     stop_requested=lambda:self._controller_cancelled(prior['id'] if prior else None),
+                    local_stop_requested=lambda:self._local_cancelled(prior['id'] if prior else None),
                     delegation_guard=self.delegation_guard)
                 initial=authorization.snapshot()
             def preflight(given,action,resource):
@@ -410,6 +426,7 @@ class DevelopmentBoardWorker:
                     authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
                         registration=op['payload']['registration'],clock=self.clock,
                         stop_requested=lambda:self._controller_cancelled(op['id'],inspection=reconcile),
+                        local_stop_requested=lambda:self._local_cancelled(op['id'],inspection=reconcile),
                         delegation_guard=self.delegation_guard)
                 if 'context' in op['payload']:
                     authorization.expected_context=deepcopy(op['payload']['context'])
@@ -581,7 +598,8 @@ class DevelopmentBoardWorker:
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
                         authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
                             registration=op['payload']['registration'],clock=self.clock,
-                            stop_requested=lambda:self._controller_cancelled(op['id']),delegation_guard=self.delegation_guard)
+                            stop_requested=lambda:self._controller_cancelled(op['id']),
+                            local_stop_requested=lambda:self._local_cancelled(op['id']),delegation_guard=self.delegation_guard)
                     authorization.expected_context=deepcopy(op['payload']['context'])
                     authorization.claim_version=op['payload']['claim_version']
                     authorization.claim_id=op['payload']['claim_id']
@@ -605,7 +623,8 @@ class DevelopmentBoardWorker:
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
                         authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
                             registration=op['payload']['registration'],clock=self.clock,
-                            stop_requested=lambda:self._controller_cancelled(op['id']),delegation_guard=self.delegation_guard)
+                            stop_requested=lambda:self._controller_cancelled(op['id']),
+                            local_stop_requested=lambda:self._local_cancelled(op['id']),delegation_guard=self.delegation_guard)
                     authorization.expected_context=deepcopy(op['payload']['context'])
                     authorization.claim_version=op['payload']['claim_version'];authorization.claim_id=op['payload']['claim_id']
                     authorization()

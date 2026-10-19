@@ -44,6 +44,13 @@ par des previews. Le client refait les contrôles existants de claims, baux,
 versions, sources, contexte, famille et grants ; il utilise les policies finales
 pour le grant courant et garde les contrôles locaux avant et après lecture et
 composition. Deux frontières demandent deux nouvelles collectes.
+Le worker fournit explicitement un callback local distinct pour ces trois
+vérifications d’identité : arrêt de l’opération, pins et arrêt du contrôleur.
+Le callback complet distant reste utilisé aux autres frontières. Un appelant
+opaque qui ne fournit pas ce contrôle local garde son callback complet, sans
+suppression silencieuse de vérification. Les contrôles Runtime restent dans le
+planner. Cela évite qu’une vérification d’identité déclenche une seconde collecte
+legacy cachée autour de la frame.
 
 La requête est limitée à 2 Kio, l’ensemble des données à 384 Kio de JSON ASCII
 échappé, et le vrai résultat MCP avec copies texte/structurée et réserve
@@ -51,6 +58,11 @@ d’enveloppe à 1,5 Mio, sous la limite de transport de 2 Mio. Un dépassement 
 erreur produit un code fixe, sans résultat partiel ni exception privée. Les
 contenus de conversations restent des données privées non fiables, pas une
 autorisation d’exécuter leurs instructions.
+La réserve d’enveloppe couvre le client officiel, dont l’identifiant JSON-RPC
+est un entier. La borne vise le CallToolResult ; elle ne promet pas de limiter
+une enveloppe provenant d’un autre client avec un identifiant arbitrairement
+long. Les compteurs de présence/lecture ne participent pas à l’identité des
+sources de discussion : les comparaisons suivent la projection du contexte.
 
 Les lectures restent séquentielles et utilisent leurs connexions/transactions
 habituelles : cette fenêtre n’est pas atomique. `get_thread` conserve sa

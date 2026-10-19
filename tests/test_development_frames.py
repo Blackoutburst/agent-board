@@ -248,6 +248,35 @@ def test_complete_read_has_no_new_presence_claim_runtime_or_message_effect(frame
     assert state()==before
 
 
+@pytest.mark.parametrize('change',['mark_read','title','duplicate_body'])
+def test_pagination_compares_source_projection_and_keeps_raw_observations(frame_fixture,change):
+    browser,_,args=frame_fixture;board,human=browser[1],browser[2]
+    thread=board.get_ticket(human,args['ticket_id'])['ticket']['thread_id']
+    for i in range(25):board.post_message(human,thread,'Source '+str(i),idempotency_key='projection-'+str(i))
+    original=board.get_thread;pages=[]
+    def history(actor,**arguments):
+        result=original(actor,**arguments)
+        if arguments['thread_id']==thread:
+            if not pages:
+                if change=='mark_read':board.mark_read(human,thread)
+                elif change=='title':
+                    with board._tx() as db:db.execute('UPDATE threads SET title=? WHERE id=?',('Changed source title',thread))
+            elif change=='duplicate_body':
+                duplicate=deepcopy(pages[0]['messages'][0]);duplicate['body']='Changed duplicate body'
+                result['messages'].append(duplicate)
+            pages.append(deepcopy(result))
+        return result
+    with patch.object(board,'get_thread',side_effect=history):
+        if change=='mark_read':
+            frame=local_frame(frame_fixture)
+            observed=frame['selected']['pages']
+            assert [p['response']['thread']['unread_count'] for p in observed]==[25,0]
+            assert len({m['id'] for p in observed for m in p['response']['messages']})==25
+        else:
+            with pytest.raises(BoardError,match='development_frame_invalid_pagination'):
+                local_frame(frame_fixture)
+
+
 @pytest.mark.parametrize('value',['😀' * 40000, '\\\"\n'*80000, '\ud800'],ids=['nonbmp','escapes','surrogate'])
 def test_aggregate_overflow_or_invalid_unicode_has_no_partial_response(frame_fixture,value):
     board=frame_fixture[0][1];original=board.get_work

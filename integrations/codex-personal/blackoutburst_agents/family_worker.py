@@ -59,11 +59,13 @@ class FamilyAuthorizationGuard:
         # All local pins/stop/deadline checks bracket the complete remote read
         # window, including slow reads and the pure context composition below.
         family._local_live(state, terminal=self.terminal)
-        authority._registration()
+        protocol=read_protocol(config.get('read_protocol',LEGACY))
+        if protocol==FRAME:authority._local_registration()
+        else:authority._registration()
         parent = DevelopmentAuthorization(family.client, scope=config['scope'],
             manifest=config['parent_manifest'], registration=config['registrations']['parent'],
             clock=family.clock)
-        if read_protocol(config.get('read_protocol',LEGACY)) == FRAME:
+        if protocol == FRAME:
             return self._frame_snapshot(authority,parent,require_claim=require_claim,remaining=remaining)
         policy = authority._policy()
         parent_policy = parent._policy()
@@ -116,7 +118,7 @@ class FamilyAuthorizationGuard:
             family_id=state['payload']['family_id'],terminal=self.terminal)
         # A stop/deadline/pin change while the network was blocked is checked
         # before any observation is composed, as well as after composition.
-        authority._registration();parent._registration()
+        authority._local_registration();parent._registration()
         family._local_live(state,terminal=self.terminal)
         frame=parse_frame(observed,scope=authority.scope,manifest=authority.manifest,
             parent_scope=config['scope'],parent_manifest=config['parent_manifest'],
@@ -147,7 +149,7 @@ class FamilyAuthorizationGuard:
         validate_root_reads(parent,root_first,root_last,root_context,parent_policy,
             config['scope'],config['parent_manifest'],children=children,baseline=config['root_frame'])
         result=authority._snapshot_result(policy,first,last,context,require_claim=require_claim,remaining=remaining)
-        authority._registration();parent._registration()
+        authority._local_registration();parent._registration()
         family._local_live(state,terminal=self.terminal)
         return result
 

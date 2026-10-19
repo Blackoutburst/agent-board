@@ -1,5 +1,6 @@
 """Temporary Board and fixed in-process frame transport; no live MCP/model/native."""
 from copy import deepcopy
+from collections import Counter
 import json
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -156,6 +157,52 @@ class DevelopmentFrameClientTests(TestCase):
         self.assertEqual(before,{slot:worker.client.register_count for slot,worker in self.workflows.items()})
         self.no_effects()
 
+    def real_worker_authority(self,*,local=True):
+        worker=self.worker._worker(self.state,'child_0')
+        operation=worker._controller_operation_id()
+        options={'local_stop_requested':lambda:worker._local_cancelled(operation,inspection=False)} if local else {}
+        # Exactly the callbacks constructed by DevelopmentBoardWorker.run.
+        authority=DevelopmentAuthorization(self.client,scope=self.child_scope,manifest=self.authority.manifest,
+            registration=self.registrations['child_0'],clock=lambda:self.now,
+            stop_requested=lambda:worker._controller_cancelled(operation,inspection=False),
+            delegation_guard=worker.delegation_guard,**options)
+        for item in self.workflows.values():item.client.calls.clear()
+        return worker,operation,authority
+
+    def test_actual_worker_stop_callback_has_no_hidden_legacy_reads_inside_frame(self):
+        worker,_,authority=self.real_worker_authority()
+        with patch.object(worker,'controller_guard',wraps=worker.controller_guard) as remote:
+            authority.snapshot(require_claim=True)
+            self.assertEqual(remote.call_count,0)
+            self.assertFalse(any(item.client.calls for item in self.workflows.values()))
+            self.assertEqual(self.client.get_development_frame.call_count,1)
+            # The full callback remains live at all non-frame boundaries.
+            authority._registration()
+            self.assertEqual(remote.call_count,1)
+            counts=Counter(name for item in self.workflows.values() for name,_ in item.client.calls)
+            self.assertEqual(counts,{'get_work':1,'get_ticket':4,'get_thread':1,'get_delegation_family':1})
+        self.no_effects()
+
+    def test_missing_local_callback_preserves_complete_opaque_stop_checks(self):
+        worker,_,authority=self.real_worker_authority(local=False)
+        with patch.object(worker,'controller_guard',wraps=worker.controller_guard) as remote:
+            authority.snapshot(require_claim=True)
+            self.assertEqual(remote.call_count,3)
+        counts=Counter(name for item in self.workflows.values() for name,_ in item.client.calls)
+        self.assertEqual(counts,{'get_work':3,'get_ticket':12,'get_thread':3,'get_delegation_family':3})
+        self.no_effects()
+
+    def test_actual_operation_stop_during_frame_is_still_checked_locally(self):
+        worker,operation,authority=self.real_worker_authority()
+        marker=worker.journal.directory/('development-stop-'+operation+'.json')
+        def stop(_):
+            marker.write_bytes(canonical({'schema':1,'operation_id':operation,'stop':True}))
+            marker.chmod(0o600)
+        with self.intercept(stop),self.assertRaises(DevelopmentError):authority.snapshot(require_claim=True)
+        self.assertFalse(any(item.client.calls for item in self.workflows.values()))
+        marker.unlink()
+        self.no_effects()
+
     def test_reopened_configuration_cannot_switch_protocol(self):
         request=deepcopy(self.request);request['read_protocol']=LEGACY
         with self.assertRaises(DevelopmentError):self.worker.prepare(request)
@@ -171,11 +218,28 @@ class DevelopmentFrameClientTests(TestCase):
         self.no_effects()
 
     def test_complete_family_uses_frame_mode_with_only_simulated_model_and_backend(self):
-        result=self.worker.run()
+        original=DevelopmentAuthorization;observations=[]
+        def create(*args,**kwargs):
+            authority=original(*args,**kwargs)
+            if kwargs.get('delegation_guard') is not None:
+                self.assertTrue(callable(kwargs.get('stop_requested')))
+                self.assertTrue(callable(kwargs.get('local_stop_requested')))
+                snapshot=authority.snapshot
+                def observed(**options):
+                    before=sum(len(w.client.calls) for w in self.workflows.values())
+                    value=snapshot(**options)
+                    observations.append(sum(len(w.client.calls) for w in self.workflows.values())-before)
+                    return value
+                authority.snapshot=observed
+            return authority
+        with patch('blackoutburst_agents.development_worker.DevelopmentAuthorization',side_effect=create):
+            result=self.worker.run()
         self.assertEqual(result['status'],'review_ready',result)
         self.assertEqual(result['children_accepted'],2)
         self.assertTrue(all(worker.client.get_development_frame.called for worker in self.workflows.values()))
         self.assertEqual([slot for slot,_ in self.inferences],['child_0']*3+['child_1']*3+['parent']*4)
+        self.assertTrue(observations)
+        self.assertEqual(set(observations),{0})
         before=len(self.inferences)
         self.assertEqual(self.worker.run(),result)
         self.assertEqual(len(self.inferences),before)

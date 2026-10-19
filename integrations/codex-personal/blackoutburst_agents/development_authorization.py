@@ -8,10 +8,14 @@ from .dev_manifest import DevelopmentError, canonical, digest
 
 
 class DevelopmentAuthorization:
-    def __init__(self, client, *, scope, manifest, registration, clock=time.time, stop_requested=None, delegation_guard=None):
+    def __init__(self, client, *, scope, manifest, registration, clock=time.time, stop_requested=None,
+                 local_stop_requested=None, delegation_guard=None):
         self.client, self.scope, self.manifest = client, dict(scope), deepcopy(manifest)
         self.registration, self.clock = deepcopy(registration), clock
         self.stop_requested = stop_requested or (lambda: False)
+        if local_stop_requested is not None and not callable(local_stop_requested):
+            raise DevelopmentError('invalid_development_controller')
+        self.local_stop_requested = local_stop_requested
         if delegation_guard is not None and not callable(delegation_guard):
             raise DevelopmentError('invalid_development_controller')
         self.delegation_guard = delegation_guard
@@ -23,6 +27,22 @@ class DevelopmentAuthorization:
     def _registration(self):
         if self.stop_requested():
             raise DevelopmentError('development_stop_requested')
+        self._registration_identity()
+
+    def _local_registration(self):
+        """Frame-only local bracket; opaque callers keep their complete callback.
+
+        The concrete family frame supplies all fresh remote observations. This
+        explicit worker callback still checks its operation and local controller
+        pins/stops; omitting it never skips the original stop callback.
+        """
+        if self.local_stop_requested is None:
+            return self._registration()
+        if self.local_stop_requested():
+            raise DevelopmentError('development_stop_requested')
+        self._registration_identity()
+
+    def _registration_identity(self):
         value, scope = self.registration, self.scope
         try:
             profile, session, identity = value['profile'], value['session'], value['identity']
