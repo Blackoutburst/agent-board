@@ -1,0 +1,571 @@
+{
+  "replay_and_negative_observations": {
+    "normal_replay": {
+      "receipt_sha256": "99261b5defbdd3e3ee1c0f2c70a8b5cbbdd5b1c051f78ba9023424b27c9674ec",
+      "new_namespace_launches": 0
+    },
+    "metadata_corruptions": {
+      "backend_execution_qualified": false,
+      "baseline_receipt_sha256": "99261b5defbdd3e3ee1c0f2c70a8b5cbbdd5b1c051f78ba9023424b27c9674ec",
+      "case": "metadata_corruptions",
+      "checks": {
+        "missing_admission": true,
+        "open_helper_started": true,
+        "open_launch_intent": true,
+        "open_source_release_intent": true,
+        "wrong_foundation_sha256": true,
+        "wrong_job_uuid": true,
+        "wrong_nonce": true,
+        "wrong_plan_sha256": true,
+        "wrong_protocol": true,
+        "wrong_request_sha256": true,
+        "wrong_runtime_sha256": true,
+        "wrong_source_sha256": true
+      },
+      "new_namespace_launches": 0,
+      "result": "linux_unqualified"
+    },
+    "controller_sigkill": {
+      "observed_ssh_exit": 255,
+      "stdout_bytes": 0
+    },
+    "lost_response": {
+      "response_deliberately_lost": true,
+      "result": "linux_unqualified"
+    }
+  },
+  "schema": 1,
+  "date": "2026-10-19",
+  "result": "linux_unqualified",
+  "backend_execution_qualified": false,
+  "scope": "synthetic_recovery_prototype_only",
+  "models": 0,
+  "account_operations": 0,
+  "production_changes": false,
+  "source_sha256": "73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2",
+  "component_sha256": {
+    "inner": "3ebbb51d0d68f3ed2bdd8d0c50960be6ac20bf6a38514e3ed9bdcdbc1e2baf5c",
+    "Control": "791873ccb657dd82c7fd1ac2cbb6fc13ed0802f0aee56b73a1ffb3f76b4fbd6d",
+    "cleanup": "bec87211dc1931bc1fc95f6b310dd5d246f5507e9b43ad935194aa6fc7fea00c",
+    "publish": "d73d69a20ec7e8a839e11329c63e5884bb028cd7499d19896eab28bd5e62fcf9",
+    "supervisor": "936c40b0997475b86c7e0266c15f93de3d3b81332257fb5827187072820458ac",
+    "validate_receipt": "c94b23c178a62a25c31fa6926ff86e348255e115e518407996eed6993c56a104",
+    "controller": "1c130f05fc4e8ff473ec10e8727ee6affd73445ebba4ffa1d9aa5c0cc3cd1397"
+  },
+  "foundation_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+  "runtime_sha256": "9f04b8346a89a839b46a261237e38aeca7f2e4bd334a101d2949683378ed4e9e",
+  "runtime_file_count": 143,
+  "limits": {
+    "address_space_each": 268435456,
+    "cleanup_seconds": 2,
+    "cpu_launcher_test": 1,
+    "cpu_supervisor": 5,
+    "max_processes_outside_controller": 3,
+    "output_bytes": 16384,
+    "startup_seconds": 5,
+    "test_seconds": 3,
+    "total_seconds": 10,
+    "work_bytes": 4194304,
+    "work_inodes": 128
+  },
+  "private_metadata_sha256": "b387aae881dd25a78d240ebeecd0ed140656bb40de527572cbc7c6d5dd2e8790",
+  "private_metadata_bytes": 150229,
+  "cases": {
+    "controller_sigkill": {
+      "receipt": {
+        "result": {
+          "foundation_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+          "job_uuid": "451fc0ce-9221-4065-9290-720ffc4decff",
+          "namespace_launches": 1,
+          "nonce": "1ae916f525db524d3556e76c46310767",
+          "observation": {
+            "admission_sha256": "6e2e42e64de36cfd70114d923b793fcf340c44cb57c5bcdff1bba4f8cbb88271",
+            "cleanup": {
+              "cleanup_confirmed": true,
+              "init_terminal_after_term": null,
+              "kernel_init_identity_received": true,
+              "launcher_reaped": true,
+              "namespace_init_exited": true,
+              "namespace_pid_numbers_used_for_signals": false,
+              "term_sent_to_init_pidfd": false
+            },
+            "elapsed_seconds": 0.414083,
+            "namespace_identity": {
+              "acquired_by": "SCM_RIGHTS_from_trusted_init",
+              "host_pid_namespace_identity": [
+                4,
+                4026531836
+              ],
+              "init_is_exact_launcher_child": true,
+              "init_pid_namespace_identity": [
+                4,
+                4026532589
+              ],
+              "kernel_fdinfo_nspid": [
+                93037,
+                1
+              ],
+              "namespace_numbers_used_for_host_signals": false
+            },
+            "outcome": "cancelled",
+            "output_bytes": 1550,
+            "outside_canary_after": {
+              "identity": [
+                64768,
+                10909856
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_before": {
+              "identity": [
+                64768,
+                10909856
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_unchanged": true,
+            "reason": "controller_eof",
+            "source_ack_written": true,
+            "source_begin_sha256": "034529746ecb6c27f366c3ef177977bb84b53b81eb329c17aed0033065671d15",
+            "source_checks": {
+              "bounding_caps_zero_before_filter": true,
+              "caps_zero_after_filter": true,
+              "clone3": true,
+              "exec": true,
+              "fork": true,
+              "hard_limits": true,
+              "home_proc_private_state_absent": true,
+              "inside_read": true,
+              "inside_write": true,
+              "namespace_change_denied": true,
+              "network_loopback": true,
+              "network_unix_abstract": true,
+              "network_unix_path": true,
+              "no_new_privs_before_filter": true,
+              "nproc_raise_denied": true,
+              "old_root_absent": true,
+              "outside_process_hidden_before_filter": true,
+              "outside_read": true,
+              "outside_signal_denied": true,
+              "outside_write": true,
+              "pid_namespace_init": true,
+              "process_group": true,
+              "readonly_file_write": true,
+              "runtime_write": true,
+              "session": true,
+              "work_volume_bound": true,
+              "x32_abi_denied": true
+            },
+            "source_frame_sha256": null
+          },
+          "phase": "terminal",
+          "plan_sha256": "f18fd391a342aef3e15ac0575217435f495eb3c7855ed2fa6bd188c3a478949d",
+          "protocol": "synthetic-linux-recovery-v1",
+          "request_sha256": "4a41402ee24b92104f09f6e0d7631e27a8c4f44bb69fcacd285b1fb5354f3deb",
+          "runtime_sha256": "9f04b8346a89a839b46a261237e38aeca7f2e4bd334a101d2949683378ed4e9e",
+          "source_sha256": "73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2"
+        },
+        "result_sha256": "c78ce4ab51e9de5f7e4ea3be8e67ee5d64cd7736ded3fe53039783c1fdfdd3b9"
+      },
+      "receipt_sha256": "d4f875e7d1bc75df9f959094c28d376009632dc69a65da96f130732f7f496ab8",
+      "admission_sha256": "6e2e42e64de36cfd70114d923b793fcf340c44cb57c5bcdff1bba4f8cbb88271"
+    },
+    "lost_response": {
+      "receipt": {
+        "result": {
+          "foundation_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+          "job_uuid": "ae58ae11-ef36-43bf-9e5d-245b0d204e54",
+          "namespace_launches": 1,
+          "nonce": "8dab78a5f6a9e7db4e3a36fa00dca782",
+          "observation": {
+            "admission_sha256": "018af666c79bf6ce62a4511fb7380dc6e0baa76c042e164b66ed77d3f1f5f0c2",
+            "cleanup": {
+              "cleanup_confirmed": true,
+              "init_terminal_after_term": null,
+              "kernel_init_identity_received": true,
+              "launcher_reaped": true,
+              "namespace_init_exited": true,
+              "namespace_pid_numbers_used_for_signals": false,
+              "term_sent_to_init_pidfd": false
+            },
+            "elapsed_seconds": 0.363387,
+            "namespace_identity": {
+              "acquired_by": "SCM_RIGHTS_from_trusted_init",
+              "host_pid_namespace_identity": [
+                4,
+                4026531836
+              ],
+              "init_is_exact_launcher_child": true,
+              "init_pid_namespace_identity": [
+                4,
+                4026532589
+              ],
+              "kernel_fdinfo_nspid": [
+                92930,
+                1
+              ],
+              "namespace_numbers_used_for_host_signals": false
+            },
+            "outcome": "completed",
+            "output_bytes": 3092,
+            "outside_canary_after": {
+              "identity": [
+                64768,
+                10909841
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_before": {
+              "identity": [
+                64768,
+                10909841
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_unchanged": true,
+            "reason": "completed",
+            "source_ack_written": true,
+            "source_begin_sha256": "4fb0d660138cce0eb2b79658f78580ad0dd8d4ebabda17c8af8d43f1605be14f",
+            "source_checks": {
+              "bounding_caps_zero_before_filter": true,
+              "caps_zero_after_filter": true,
+              "clone3": true,
+              "exec": true,
+              "fork": true,
+              "hard_limits": true,
+              "home_proc_private_state_absent": true,
+              "inside_read": true,
+              "inside_write": true,
+              "namespace_change_denied": true,
+              "network_loopback": true,
+              "network_unix_abstract": true,
+              "network_unix_path": true,
+              "no_new_privs_before_filter": true,
+              "nproc_raise_denied": true,
+              "old_root_absent": true,
+              "outside_process_hidden_before_filter": true,
+              "outside_read": true,
+              "outside_signal_denied": true,
+              "outside_write": true,
+              "pid_namespace_init": true,
+              "process_group": true,
+              "readonly_file_write": true,
+              "runtime_write": true,
+              "session": true,
+              "work_volume_bound": true,
+              "x32_abi_denied": true
+            },
+            "source_frame_sha256": "016eda94e9c31b7de3fc6eed67f06cf81df8e17f3dd787d9fa3dcf03cf163b15"
+          },
+          "phase": "terminal",
+          "plan_sha256": "f18fd391a342aef3e15ac0575217435f495eb3c7855ed2fa6bd188c3a478949d",
+          "protocol": "synthetic-linux-recovery-v1",
+          "request_sha256": "a9a7eb44dd542aa4580ec9954281747399f628e79827a57c136e36595b5f18f5",
+          "runtime_sha256": "9f04b8346a89a839b46a261237e38aeca7f2e4bd334a101d2949683378ed4e9e",
+          "source_sha256": "73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2"
+        },
+        "result_sha256": "37139ca4ba26cf52554a27c523ab28d7086ec2ecc581335aaf9d6bbefe44755a"
+      },
+      "receipt_sha256": "ffc981858d0ac34eebd1fec6c2fa890946af79223b9d65f8e65686e4c46f7590",
+      "admission_sha256": "018af666c79bf6ce62a4511fb7380dc6e0baa76c042e164b66ed77d3f1f5f0c2"
+    },
+    "normal": {
+      "receipt": {
+        "result": {
+          "foundation_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+          "job_uuid": "5c5c6451-66ee-4875-bb68-e9b3908e2bc0",
+          "namespace_launches": 1,
+          "nonce": "43c45496d600f71d1f9a10929e5cc296",
+          "observation": {
+            "admission_sha256": "ce8f383299fffdb427febb3b1fcdd3833cc36fb4e7711c4c659f93ed1bb953ba",
+            "cleanup": {
+              "cleanup_confirmed": true,
+              "init_terminal_after_term": null,
+              "kernel_init_identity_received": true,
+              "launcher_reaped": true,
+              "namespace_init_exited": true,
+              "namespace_pid_numbers_used_for_signals": false,
+              "term_sent_to_init_pidfd": false
+            },
+            "elapsed_seconds": 0.318539,
+            "namespace_identity": {
+              "acquired_by": "SCM_RIGHTS_from_trusted_init",
+              "host_pid_namespace_identity": [
+                4,
+                4026531836
+              ],
+              "init_is_exact_launcher_child": true,
+              "init_pid_namespace_identity": [
+                4,
+                4026532589
+              ],
+              "kernel_fdinfo_nspid": [
+                92550,
+                1
+              ],
+              "namespace_numbers_used_for_host_signals": false
+            },
+            "outcome": "completed",
+            "output_bytes": 3092,
+            "outside_canary_after": {
+              "identity": [
+                64768,
+                10909815
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_before": {
+              "identity": [
+                64768,
+                10909815
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_unchanged": true,
+            "reason": "completed",
+            "source_ack_written": true,
+            "source_begin_sha256": "81cb9121a0124c97d15dd7d194b3983e31eef87156859547a1bd5b063f8b37ce",
+            "source_checks": {
+              "bounding_caps_zero_before_filter": true,
+              "caps_zero_after_filter": true,
+              "clone3": true,
+              "exec": true,
+              "fork": true,
+              "hard_limits": true,
+              "home_proc_private_state_absent": true,
+              "inside_read": true,
+              "inside_write": true,
+              "namespace_change_denied": true,
+              "network_loopback": true,
+              "network_unix_abstract": true,
+              "network_unix_path": true,
+              "no_new_privs_before_filter": true,
+              "nproc_raise_denied": true,
+              "old_root_absent": true,
+              "outside_process_hidden_before_filter": true,
+              "outside_read": true,
+              "outside_signal_denied": true,
+              "outside_write": true,
+              "pid_namespace_init": true,
+              "process_group": true,
+              "readonly_file_write": true,
+              "runtime_write": true,
+              "session": true,
+              "work_volume_bound": true,
+              "x32_abi_denied": true
+            },
+            "source_frame_sha256": "8740e221fe9ec4592a09ea1ad617bf445f47e4ff6927794ed25f6a0484d8eed4"
+          },
+          "phase": "terminal",
+          "plan_sha256": "f18fd391a342aef3e15ac0575217435f495eb3c7855ed2fa6bd188c3a478949d",
+          "protocol": "synthetic-linux-recovery-v1",
+          "request_sha256": "ce4dc9862896c9603d43789de00a6dbaf8d12e1c7281bda1d6a4ac28aa15c996",
+          "runtime_sha256": "9f04b8346a89a839b46a261237e38aeca7f2e4bd334a101d2949683378ed4e9e",
+          "source_sha256": "73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2"
+        },
+        "result_sha256": "046be6c315c87e6895f855b0bf82f1a6abc7abecff3327edde4ac704e4890dfe"
+      },
+      "receipt_sha256": "99261b5defbdd3e3ee1c0f2c70a8b5cbbdd5b1c051f78ba9023424b27c9674ec",
+      "admission_sha256": "ce8f383299fffdb427febb3b1fcdd3833cc36fb4e7711c4c659f93ed1bb953ba"
+    },
+    "refuse_before_source": {
+      "receipt": {
+        "result": {
+          "foundation_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+          "job_uuid": "f1c9a411-5119-45fd-bddd-351cc135b6e9",
+          "namespace_launches": 1,
+          "nonce": "874b0dadb3dc275702d448c990f16a7a",
+          "observation": {
+            "admission_sha256": null,
+            "cleanup": {
+              "cleanup_confirmed": true,
+              "init_terminal_after_term": null,
+              "kernel_init_identity_received": true,
+              "launcher_reaped": true,
+              "namespace_init_exited": true,
+              "namespace_pid_numbers_used_for_signals": false,
+              "term_sent_to_init_pidfd": false
+            },
+            "elapsed_seconds": 0.251907,
+            "namespace_identity": {
+              "acquired_by": "SCM_RIGHTS_from_trusted_init",
+              "host_pid_namespace_identity": [
+                4,
+                4026531836
+              ],
+              "init_is_exact_launcher_child": true,
+              "init_pid_namespace_identity": [
+                4,
+                4026532589
+              ],
+              "kernel_fdinfo_nspid": [
+                92947,
+                1
+              ],
+              "namespace_numbers_used_for_host_signals": false
+            },
+            "outcome": "not_started",
+            "output_bytes": 0,
+            "outside_canary_after": {
+              "identity": [
+                64768,
+                10909849
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_before": {
+              "identity": [
+                64768,
+                10909849
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_unchanged": true,
+            "reason": "explicit_synthetic_stop",
+            "source_ack_written": false,
+            "source_begin_sha256": null,
+            "source_checks": null,
+            "source_frame_sha256": null
+          },
+          "phase": "terminal",
+          "plan_sha256": "f18fd391a342aef3e15ac0575217435f495eb3c7855ed2fa6bd188c3a478949d",
+          "protocol": "synthetic-linux-recovery-v1",
+          "request_sha256": "d8655f48bbe1eb2013cc3c8c7af958711f1f27aa65033cceb7cf9c5ee87bd472",
+          "runtime_sha256": "9f04b8346a89a839b46a261237e38aeca7f2e4bd334a101d2949683378ed4e9e",
+          "source_sha256": "73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2"
+        },
+        "result_sha256": "2ecf78ba5619751a7f10c15a53829a4b1f31fb3fca0397b8d70e7ccfe9539430"
+      },
+      "receipt_sha256": "0a711086029ef290756263682dfb20828b52642696abff60ce43babbedd4651a",
+      "admission_sha256": null
+    },
+    "timeout_ignore_term": {
+      "receipt": {
+        "result": {
+          "foundation_sha256": "b3cf52bf76d6cfd80651e562b761db394a3431c025f764522935cf5fe90af3cc",
+          "job_uuid": "5952033d-3f74-4fe1-b3a9-7993a8dcd7ef",
+          "namespace_launches": 1,
+          "nonce": "f22ed76f886a21833118dda60a6f83de",
+          "observation": {
+            "admission_sha256": "f3a8c1ed3b3c10b0a7031a83da6baf21ea41fea58e45482ef0e86a2b110ecf4b",
+            "cleanup": {
+              "cleanup_confirmed": true,
+              "init_terminal_after_term": false,
+              "kernel_init_identity_received": true,
+              "launcher_reaped": true,
+              "namespace_init_exited": true,
+              "namespace_pid_numbers_used_for_signals": false,
+              "term_sent_to_init_pidfd": true
+            },
+            "elapsed_seconds": 3.455497,
+            "namespace_identity": {
+              "acquired_by": "SCM_RIGHTS_from_trusted_init",
+              "host_pid_namespace_identity": [
+                4,
+                4026531836
+              ],
+              "init_is_exact_launcher_child": true,
+              "init_pid_namespace_identity": [
+                4,
+                4026532589
+              ],
+              "kernel_fdinfo_nspid": [
+                92898,
+                1
+              ],
+              "namespace_numbers_used_for_host_signals": false
+            },
+            "outcome": "cancelled",
+            "output_bytes": 1550,
+            "outside_canary_after": {
+              "identity": [
+                64768,
+                10909833
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_before": {
+              "identity": [
+                64768,
+                10909833
+              ],
+              "sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+              "size": 9
+            },
+            "outside_canary_unchanged": true,
+            "reason": "source_wall_deadline_exhausted",
+            "source_ack_written": true,
+            "source_begin_sha256": "6901cace2f0d8753d5a960d5a4bce22eb7ad90218c6897a6ce06c6328df18c8b",
+            "source_checks": {
+              "bounding_caps_zero_before_filter": true,
+              "caps_zero_after_filter": true,
+              "clone3": true,
+              "exec": true,
+              "fork": true,
+              "hard_limits": true,
+              "home_proc_private_state_absent": true,
+              "inside_read": true,
+              "inside_write": true,
+              "namespace_change_denied": true,
+              "network_loopback": true,
+              "network_unix_abstract": true,
+              "network_unix_path": true,
+              "no_new_privs_before_filter": true,
+              "nproc_raise_denied": true,
+              "old_root_absent": true,
+              "outside_process_hidden_before_filter": true,
+              "outside_read": true,
+              "outside_signal_denied": true,
+              "outside_write": true,
+              "pid_namespace_init": true,
+              "process_group": true,
+              "readonly_file_write": true,
+              "runtime_write": true,
+              "session": true,
+              "work_volume_bound": true,
+              "x32_abi_denied": true
+            },
+            "source_frame_sha256": null
+          },
+          "phase": "terminal",
+          "plan_sha256": "f18fd391a342aef3e15ac0575217435f495eb3c7855ed2fa6bd188c3a478949d",
+          "protocol": "synthetic-linux-recovery-v1",
+          "request_sha256": "449c661f96d3cbb0af425de04d1a93e2512d0a0897ffa826e62c7cd09eb871ec",
+          "runtime_sha256": "9f04b8346a89a839b46a261237e38aeca7f2e4bd334a101d2949683378ed4e9e",
+          "source_sha256": "73389402b3b2141e966794a7b1a394644c7ab62af747b52ab82e2ba7cbadd8c2"
+        },
+        "result_sha256": "5122fb822dae3b2a882ee26ee7077a3a86eed55ddbe4af22900548410d306515"
+      },
+      "receipt_sha256": "80504e98bc62dd9b0eb86248a5337598731da5d429f8d924996eb786789ac7b3",
+      "admission_sha256": "f3a8c1ed3b3c10b0a7031a83da6baf21ea41fea58e45482ef0e86a2b110ecf4b"
+    }
+  },
+  "pure_tests": {
+    "count": 31,
+    "files": [
+      "test_linux_recovery.py",
+      "test_linux_foundation.py",
+      "test_linux_feasibility.py"
+    ],
+    "native": false
+  },
+  "earlier_failed_native_attempts": [],
+  "temporary_remote_directory_removed": true,
+  "limits_not_qualified": [
+    "No product backend, real checkout, arbitrary test or model was qualified.",
+    "Supervisor SIGKILL, every startup crash window, storage corruption/power loss and every ABI/kernel were not natively qualified.",
+    "SSH reported exit255 for the self-SIGKILL controller; no kernel wait status was captured by the Mac.",
+    "No reliable init pidfd or exact final receipt means needs_review; launcher exit alone is insufficient.",
+    "Private journals and source are exclusive to a trusted operator; no protection against an administrator deleting or rewriting them is claimed.",
+    "Cancelled jobs have no final source result; their final hash binds a supervisor observation, never an invented source output."
+  ]
+}
