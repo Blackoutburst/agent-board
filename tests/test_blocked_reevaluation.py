@@ -4,6 +4,8 @@ import time
 
 import pytest
 
+from board import Board
+
 from test_coordination import new, reject, space  # noqa: F401  (fixture)
 
 
@@ -178,3 +180,42 @@ def test_expired_agent_block_returns_to_the_agent_that_must_recheck_it(space):
     released = board.get_ticket(human, task['id'])['ticket']
     assert released['status'] == 'todo' and released['assignee_agent_id'] == owner
     assert board.get_thread(human, task['thread_id'])['messages'][-1]['body'].startswith('Board recheck:')
+
+
+def schema12(board):
+    """Store the database as releases before schema 13 left it: no block columns."""
+    with sqlite3.connect(board.db_path) as db:
+        for column in ('blocked_reason', 'unblock_owner', 'recheck_at'):
+            db.execute(f'ALTER TABLE tickets DROP COLUMN {column}')
+        db.execute('PRAGMA user_version=12')
+
+
+def test_upgrade_keeps_a_human_manual_block_from_before_schema_13(space):
+    board, human, _, project, first, *_ = space
+    manual, agent_set, reopened = new(space, 'Manual'), new(space, 'Agent'), new(space, 'Reopened')
+    board.update_ticket(human, manual['id'], manual['version'], status='blocked')
+    claimed = board.claim_ticket(first, agent_set['id'], agent_set['version'])
+    board.update_ticket(first, agent_set['id'], claimed['version'], status='blocked', blocked_reason='Vendor')
+    blocked = board.update_ticket(human, reopened['id'], reopened['version'], status='blocked')
+    reopened = board.update_ticket(human, reopened['id'], blocked['version'], status='todo')
+    claimed = board.claim_ticket(first, reopened['id'], reopened['version'])
+    board.release_ticket(first, reopened['id'], claimed['version'], 'release-blocked', 'Worker failed', status='blocked')
+    board.update_ticket(human, manual['id'], board.get_ticket(human, manual['id'])['ticket']['version'],
+                        description='Edited after blocking')
+    schema12(board)
+    upgraded = Board(board.db_path.parent, base_url='https://board.test')
+    with sqlite3.connect(upgraded.db_path) as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
+    ready = [item['id'] for item in upgraded.get_work(first, project['id'])['ready']]
+    kept = upgraded.get_ticket(human, manual['id'])['ticket']
+    assert kept['status'] == 'blocked' and manual['id'] not in ready
+    assert kept['blocked_reason'] == 'Blocked manually by Blackoutburst' and kept['recheck_at'] is None
+    assert kept['unblock_owner'] == 'blackoutburst' and kept['block_reasons'] == ['explicit']
+    events = [e['event'] for e in upgraded.list_activity(human, ticket_id=manual['id'])]
+    assert 'legacy_block_classified' in events and 'ticket_unblocked' not in events
+    # Reasonless blocks without a human decision behind them are still released.
+    assert blocked_state(upgraded, agent_set['id'])[0] == blocked_state(upgraded, reopened['id'])[0] == 'todo'
+    # Idempotent: a second poll changes nothing.
+    upgraded.get_work(first, project['id'])
+    assert upgraded.get_ticket(human, manual['id'])['ticket']['version'] == kept['version']
+    assert upgraded.update_ticket(human, manual['id'], kept['version'], status='todo')['status'] == 'todo'

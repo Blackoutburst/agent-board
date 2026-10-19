@@ -232,11 +232,52 @@ class CoordinationMixin(ProjectsMixin):
             reasons.append('explicit')
         return reasons
 
+    # Ticket events that never change a ticket's status.
+    _STATUS_NEUTRAL_EVENTS = frozenset({
+        'ticket_message_posted', 'ticket_progress', 'review_reminder', 'review_requested',
+        'agent_block_recorded', 'block_escalated', 'execution_reserved', 'execution_started',
+        'execution_finished', 'execution_stop_requested', 'message_execution_reserved',
+        'runtime_provider_block_observed', 'runtime_limits_changed', 'ticket_profile_refreshed',
+        'ticket_profile_claim_reconciled', 'legacy_block_classified'})
+
+    def _legacy_human_block(self, db, ticket_id):
+        """Author of a reasonless pre-schema-13 block when the audit shows a human set it."""
+        for event in db.execute('SELECT actor,event,detail FROM ticket_events WHERE ticket_id=? ORDER BY id DESC',
+                                (ticket_id,)):
+            if event['event'] in self._STATUS_NEUTRAL_EVENTS:
+                continue
+            detail = json.loads(event['detail'] or '{}')
+            if event['event'] == 'ticket_updated' and 'status' not in detail.get('fields', []):
+                continue
+            author = json.loads(event['actor'] or '{}')
+            return author if event['event'] == 'ticket_updated' and author.get('kind') == 'human' else None
+        return None
+
+    def _classify_legacy_block(self, db, actor, row):
+        """Give a reasonless block set by a human before schema 13 its manual reason.
+
+        Older releases stored no block reason, so the audit is the only
+        provenance; a human manual block stays until a human changes it.
+        """
+        if row['blocked_reason'] or row['recheck_at'] is not None:
+            return row
+        author = self._legacy_human_block(db, row['id'])
+        if not author:
+            return row
+        reason = 'Blocked manually by ' + (author.get('display_name') or author.get('owner_id') or 'a human')
+        db.execute("""UPDATE tickets SET blocked_reason=?,unblock_owner=?,version=version+1,updated_at=?
+            WHERE id=? AND status='blocked' AND blocked_reason=''""",
+            (reason, author.get('owner_id'), time.time(), row['id']))
+        self._audit(db, actor, 'legacy_block_classified', {'ticket_id': row['id'], 'blocked_reason': reason})
+        return db.execute('SELECT * FROM tickets WHERE id=?', (row['id'],)).fetchone()
+
     def _reevaluate_blocked(self, db, actor, ticket_ids, trigger, announce=True):
         """Return blocked tickets whose every reason has cleared to todo."""
         released = []
         for ticket_id in dict.fromkeys(ticket_ids):
             row = db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone()
+            if row and row['status'] == 'blocked':
+                row = self._classify_legacy_block(db, actor, row)
             if not row or row['status'] != 'blocked' or self._block_reasons(row, self._ticket(row, db)):
                 continue
             now = time.time()
