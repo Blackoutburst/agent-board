@@ -325,8 +325,18 @@ against arbitrary in-process mutations between observations. Exact-identity
 lookup/control/finish remain available to attest cleanup after authorization is
 lost. Current prerequisite IDs, eligible statuses and their latest retained
 status-change audits form a separate eligibility pin: a dependency status
-round-trip does not revive a review reservation. Missing status history refuses
-that path. Dependency claims that keep review status, progress, comments and
+round-trip does not revive a review reservation. The proof reads at most 100
+current prerequisites and, newest first, 64 candidate audits per prerequisite
+until its latest status audit is established. Details are fetched individually
+only after their text type and byte length are checked: at most 128 KiB each and
+1 MiB in total per control. Explicit JSON/event shapes reject duplicate keys,
+non-finite values, ambiguous field lists and invalid Unicode; no SQL JSON
+function parses these unvalidated prerequisite details. Missing, malformed,
+ambiguous or over-bound history refuses that path with the same bounded stop
+instruction, without audit text. These limits bound fetched/parsed records and
+bytes; they do not impose a wall-clock limit on SQLite's metadata search. The
+read sequence remains an observation, not an atomic snapshot against external
+writers. Dependency claims that keep review status, progress, comments and
 content edits outside this guard do not invalidate it. Their delivered text is
 not silently added to the review's direct model source. Automatic task selection
 is unchanged.

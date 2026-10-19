@@ -22,6 +22,85 @@ REASONS = frozenset({'', 'completed', 'cancelled', 'quota_or_rate_limit',
 _OPAQUE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$')
 _MODEL = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$')
 _SHA256 = re.compile(r'^[0-9a-f]{64}$')
+_REVIEW_PREREQUISITE_LIMIT = 100  # Matches _set_dependencies.
+_REVIEW_STATUS_READS = 64
+_REVIEW_AUDIT_BYTES = 128 * 1024
+_REVIEW_HISTORY_BYTES = 1024 * 1024
+_REVIEW_STATUS_EVENTS = (
+    'ticket_updated', 'review_requested', 'human_input_requested', 'ticket_unblocked',
+    'ticket_delegated', 'delegated_result_accepted', 'ticket_released',
+)
+_TICKET_EDIT_FIELDS = frozenset({
+    'title', 'description', 'acceptance_criteria', 'outcome', 'evidence', 'priority',
+    'assignee_owner_id', 'status', 'release_claim', 'depends_on', 'labels', 'required_skills',
+    'resource', 'progress', 'assignee_agent_id', 'attachment_ids', 'blocked_reason',
+    'recheck_after_seconds', 'unblock_owner',
+})
+
+
+def _review_status_event(raw, event, ticket_id):
+    """Classify only an unambiguous existing server audit, never caller input."""
+    def invalid(*_):
+        raise ValueError('invalid audit')
+
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                invalid()
+            value[key] = item
+        return value
+
+    def text(value, maximum=200, minimum=1):
+        if type(value) is not str or not minimum <= len(value) <= maximum:
+            return False
+        value.encode('utf-8')
+        return True
+
+    try:
+        detail = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=invalid)
+        if type(detail) is not dict or detail.get('ticket_id') != ticket_id:
+            invalid()
+        if event == 'ticket_updated':
+            fields = detail.get('fields')
+            if (set(detail) != {'ticket_id', 'version', 'fields'}
+                    or type(detail['version']) is not int or not 0 < detail['version'] <= 2**63-1
+                    or type(fields) is not list or not 0 < len(fields) <= len(_TICKET_EDIT_FIELDS)
+                    or any(type(field) is not str or field not in _TICKET_EDIT_FIELDS for field in fields)
+                    or len(set(fields)) != len(fields)):
+                invalid()
+            return 'status' in fields
+        if event == 'ticket_released':
+            if (set(detail) != {'ticket_id', 'version', 'reason', 'status', 'unassign_self'}
+                    or type(detail['version']) is not int or not 0 < detail['version'] <= 2**63-1
+                    or not text(detail['reason'], 20000)
+                    or type(detail['status']) is not str or detail['status'] not in ('', 'todo', 'blocked', 'review')
+                    or type(detail['unassign_self']) is not bool):
+                invalid()
+            return detail['status'] in ('todo', 'blocked')
+        shapes = {
+            'review_requested': set(),
+            'human_input_requested': {'request_id', 'owner_id', 'message_id'},
+            'ticket_unblocked': {'trigger', 'previous_reason'},
+            'ticket_delegated': {'child_ticket_id', 'required_skills'},
+            'delegated_result_accepted': {'family_id', 'result_sha256'},
+        }
+        if event not in shapes or set(detail) != shapes[event] | {'ticket_id'}:
+            invalid()
+        for key in shapes[event] - {'required_skills'}:
+            maximum = _REVIEW_AUDIT_BYTES if key == 'trigger' else 500 if key == 'previous_reason' else 200
+            if not text(detail[key], maximum, 0 if key in ('trigger', 'previous_reason') else 1):
+                invalid()
+        if event == 'ticket_delegated':
+            skills = detail['required_skills']
+            if (type(skills) is not list or len(skills) > 50
+                    or any(not text(skill) for skill in skills)):
+                invalid()
+        if event == 'delegated_result_accepted' and not _SHA256.fullmatch(detail['result_sha256']):
+            invalid()
+        return True
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        _fail('review_prerequisites_history_unavailable', 409)
 
 
 def _identifier(value, name, *, model=False):
@@ -115,6 +194,48 @@ def migrate_message_runtime(db):
 
 
 class RuntimeMixin:
+    def _runtime_review_prerequisites(self, db, ticket_id):
+        """Bounded proof of each current prerequisite's latest status audit.
+
+        Inspect metadata first; no oversized or over-budget detail is fetched.
+        Read newest-first only until a status event is proven. Older history is
+        irrelevant to that epoch; too many later candidates refuses the proof.
+        """
+        prerequisites = db.execute("""SELECT t.id,t.status FROM ticket_dependencies d
+            JOIN tickets t ON t.id=d.depends_on_id WHERE d.ticket_id=? ORDER BY t.id LIMIT ?""",
+            (ticket_id, _REVIEW_PREREQUISITE_LIMIT + 1)).fetchall()
+        if len(prerequisites) > _REVIEW_PREREQUISITE_LIMIT:
+            _fail('review_prerequisites_history_unavailable', 409)
+        remaining = _REVIEW_HISTORY_BYTES
+        result = []
+        placeholders = ','.join('?' for _ in _REVIEW_STATUS_EVENTS)
+        for prerequisite in prerequisites:
+            epoch = None
+            history = db.execute(f"""SELECT id,event,typeof(detail) AS kind,
+                length(CAST(detail AS BLOB)) AS size FROM ticket_events
+                WHERE ticket_id=? AND event IN ({placeholders}) ORDER BY id DESC LIMIT ?""",
+                (prerequisite['id'], *_REVIEW_STATUS_EVENTS, _REVIEW_STATUS_READS))
+            for item in history:
+                if (type(item['id']) is not int or item['id'] <= 0 or item['kind'] != 'text'
+                        or type(item['size']) is not int or not 0 < item['size'] <= min(_REVIEW_AUDIT_BYTES, remaining)):
+                    _fail('review_prerequisites_history_unavailable', 409)
+                # Recheck metadata when fetching the bounded bytes. The read
+                # sequence is not an atomic snapshot against external writers.
+                value = db.execute("""SELECT substr(CAST(detail AS BLOB),1,?) FROM ticket_events
+                    WHERE id=? AND ticket_id=? AND event=? AND typeof(detail)='text'
+                    AND length(CAST(detail AS BLOB))=?""", (item['size'], item['id'], prerequisite['id'],
+                    item['event'], item['size'])).fetchone()
+                if value is None or type(value[0]) is not bytes or len(value[0]) != item['size']:
+                    _fail('review_prerequisites_history_unavailable', 409)
+                remaining -= item['size']
+                if _review_status_event(value[0], item['event'], prerequisite['id']):
+                    epoch = item['id']
+                    break
+            if epoch is None:
+                _fail('review_prerequisites_history_unavailable', 409)
+            result.append([prerequisite['id'], prerequisite['status'], epoch])
+        return result
+
     def _runtime_identity(self, db, actor):
         """Identity-only channel for this executor's cleanup, never new work.
 
@@ -248,18 +369,7 @@ class RuntimeMixin:
         # Prerequisites guard eligibility only; their delivered text is not an
         # implicit input to this review. Pin existing status audits as well as
         # current state so a status round-trip cannot revive an old Runtime.
-        prerequisites = [list(row) for row in db.execute("""
-            SELECT t.id,t.status,COALESCE((SELECT MAX(e.id) FROM ticket_events e WHERE e.ticket_id=t.id AND (
-                (e.event='ticket_updated' AND EXISTS (
-                    SELECT 1 FROM json_each(e.detail,'$.fields') WHERE value='status'))
-                OR e.event IN ('review_requested','human_input_requested','ticket_unblocked',
-                              'ticket_delegated','delegated_result_accepted')
-                OR (e.event='ticket_released' AND json_extract(e.detail,'$.status') IN ('todo','blocked'))
-            )),0) AS status_event_id
-            FROM ticket_dependencies d JOIN tickets t ON t.id=d.depends_on_id
-            WHERE d.ticket_id=? ORDER BY t.id""", (ticket_id,))]
-        if any(type(epoch) is not int or epoch<=0 for _,_,epoch in prerequisites):
-            _fail('review_prerequisites_history_unavailable',409)
+        prerequisites = self._runtime_review_prerequisites(db, ticket_id)
         if (any(status not in ('done','review') for _,status,_ in prerequisites)
                 or db.execute("SELECT 1 FROM human_requests WHERE ticket_id=? AND status='open'", (ticket_id,)).fetchone()):
             _fail('review_prerequisites_changed', 409)
