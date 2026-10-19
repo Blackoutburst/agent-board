@@ -213,8 +213,24 @@ class CoordinationMixin(ProjectsMixin):
         result['assignee_presence'] = self._agent_presence(db, row['assignee_agent_id']) if identity else None
         result['assignment_stale'] = self._stale_agent_assignment(db, row)
         result['ready'] = result['work_state'] == 'ready'
-        result['block_reasons'] = self._block_reasons(row, result) if row['status'] == 'blocked' else []
+        result['block_reasons'] = (self._block_reasons(row, result)
+            + self._execution_block_reasons(db, row)) if row['status'] == 'blocked' else []
         return result
+
+    def _execution_block_reasons(self, db, row):
+        """Expose only generic reasons, never another executor's identity."""
+        family = self._delegation_ticket_family(db, row['id'])
+        tickets = [row['id']] if family is None else [family['parent_ticket_id']] + [
+            member[0] for member in db.execute(
+                'SELECT ticket_id FROM delegation_members WHERE family_id=?', (family['id'],))]
+        placeholders = ','.join('?' for _ in tickets)
+        reasons = []
+        if db.execute(f"SELECT 1 FROM runtime_executions WHERE ticket_id IN ({placeholders}) "
+                      "AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1", tickets).fetchone():
+            reasons.append('runtime_cleanup')
+        if family is not None and self._delegation_stop_reason(db, family):
+            reasons.append('delegation')
+        return reasons
 
     @staticmethod
     def _block_reasons(row, ticket, now=None):
@@ -233,7 +249,11 @@ class CoordinationMixin(ProjectsMixin):
         released = []
         for ticket_id in dict.fromkeys(ticket_ids):
             row = db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone()
-            if not row or row['status'] != 'blocked' or self._block_reasons(row, self._ticket(row, db)):
+            if (not row or row['status'] != 'blocked'
+                    or not self._profile_project_allowed(db, actor, row['project_id'])
+                    or not db.execute('SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?',
+                                      (row['project_id'], actor['owner_id'])).fetchone()
+                    or self._ticket(row, db)['block_reasons']):
                 continue
             now = time.time()
             db.execute("""UPDATE tickets SET status='todo',waiting_for_dependencies=0,blocked_reason='',
@@ -259,10 +279,13 @@ class CoordinationMixin(ProjectsMixin):
         """Release ghost and expired blocks in the actor's projects."""
         with self._tx() as db:
             actor = self._actor(db, actor, 'allow_read')
-            ids = [row[0] for row in db.execute("""SELECT t.id FROM tickets t
+            if project_id:
+                self._project_member(db, actor, project_id)
+            ids = [row['id'] for row in db.execute("""SELECT t.id,t.project_id FROM tickets t
                 JOIN project_members m ON m.project_id=t.project_id JOIN projects p ON p.id=t.project_id
                 WHERE m.owner_id=? AND p.archived=0 AND t.status='blocked' AND (?='' OR t.project_id=?)
-                ORDER BY t.updated_at""", (actor['owner_id'], project_id, project_id))]
+                ORDER BY t.updated_at""", (actor['owner_id'], project_id, project_id))
+                if self._profile_project_allowed(db, actor, row['project_id'])]
             return self._reevaluate_blocked(db, actor, ids, 'periodic reevaluation')
 
     def _block_values(self, actor, values, now=None):
