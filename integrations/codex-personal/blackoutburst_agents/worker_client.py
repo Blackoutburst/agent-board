@@ -73,7 +73,15 @@ def _arguments(name, args):
     if name == 'update_ticket':
         changes = values['changes']
         if (not isinstance(changes, dict) or not changes
-                or set(changes) - {'status', 'outcome', 'evidence', 'release_claim'}):
+                or set(changes) - {'status', 'outcome', 'evidence', 'release_claim',
+                                   'blocked_reason', 'recheck_after_seconds'}):
+            raise BoardReadError('invalid_arguments')
+        if ('blocked_reason' in changes or 'recheck_after_seconds' in changes) and changes.get('status') != 'blocked':
+            raise BoardReadError('invalid_arguments')
+        if 'blocked_reason' in changes:
+            _prose(changes['blocked_reason'])
+        if 'recheck_after_seconds' in changes and (type(changes['recheck_after_seconds']) is not int
+                                                   or not 300 <= changes['recheck_after_seconds'] <= 1209600):
             raise BoardReadError('invalid_arguments')
         if 'status' in changes and changes['status'] not in ('review', 'blocked'):
             raise BoardReadError('invalid_arguments')

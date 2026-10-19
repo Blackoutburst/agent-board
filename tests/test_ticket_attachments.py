@@ -59,7 +59,7 @@ def test_schema_seven_upgrade_preserves_history_and_does_not_promote_orphan_file
     assert current['claimant'] == claimed['claimant'] and current['version'] == claimed['version']
     assert upgraded.read_inbox(agent, cursor=cursor)['cursor']
     with upgraded._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
 
 
@@ -71,7 +71,7 @@ def test_backup_restore_keeps_task_files_and_bytes(space, tmp_path):
     file = board.add_attachment(human, task['thread_id'], 'file.txt', 'text/plain', b'task-file')
     saved = board.update_ticket(human, task['id'], task['version'], attachment_ids=[file['id']])
     archive = tmp_path / 'backup.zip'
-    assert create_backup(board.data_dir, archive)['schema']['user_version'] == 12
+    assert create_backup(board.data_dir, archive)['schema']['user_version'] == 13
     restore_backup(archive, tmp_path / 'restored')
     restored = Board(tmp_path / 'restored', base_url=board.base_url)
     assert restored.get_ticket(human, task['id'])['ticket']['attachments'] == saved['attachments']

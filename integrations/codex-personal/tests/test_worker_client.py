@@ -36,13 +36,16 @@ class WorkerClientTests(unittest.TestCase):
             ('renew_ticket', {'ticket_id': 'chosen', 'expected_version': 2, 'progress': 'Text turn'}),
             ('update_ticket', {'ticket_id': 'chosen', 'expected_version': 3,
                 'changes': {'status': 'review', 'outcome': 'Review text', 'evidence': 'Text-only', 'release_claim': True}}),
+            ('update_ticket', {'ticket_id': 'chosen', 'expected_version': 4,
+                'changes': {'status': 'blocked', 'outcome': 'Failed', 'evidence': 'Text-only', 'release_claim': True,
+                            'blocked_reason': 'Turn failed; retry later.', 'recheck_after_seconds': 3600}}),
         ]
         for name, args in calls:
             before = json.dumps(args, sort_keys=True)
             self.assertEqual(self.client.call(name, args), {'read': name})
             self.assertEqual(json.dumps(args, sort_keys=True), before)
         requests = [json.loads(request.data) for request, _ in self.client._opener.requests]
-        self.assertEqual(len(requests), 7)
+        self.assertEqual(len(requests), 8)
         registration = requests[1]['params']['arguments']
         self.assertFalse(registration['autonomous'])
         self.assertEqual(registration['skills'], [])
@@ -98,6 +101,12 @@ class WorkerClientTests(unittest.TestCase):
             ('update_ticket', {'ticket_id': 't', 'expected_version': 1, 'changes': {'outcome': 'x' * 20001}}),
             ('update_ticket', {'ticket_id': 't', 'expected_version': 1, 'changes': {'evidence': '\ud800'}}),
             ('update_ticket', {'ticket_id': 't', 'expected_version': 1, 'changes': {'outcome': '🙂' * 20000}}),
+            ('update_ticket', {'ticket_id': 't', 'expected_version': 1, 'changes': {'status': 'review', 'blocked_reason': 'x'}}),
+            ('update_ticket', {'ticket_id': 't', 'expected_version': 1,
+                'changes': {'status': 'blocked', 'blocked_reason': 'x', 'recheck_after_seconds': 299}}),
+            ('update_ticket', {'ticket_id': 't', 'expected_version': 1,
+                'changes': {'status': 'blocked', 'blocked_reason': 'x', 'recheck_after_seconds': True}}),
+            ('update_ticket', {'ticket_id': 't', 'expected_version': 1, 'changes': {'status': 'blocked', 'blocked_reason': '\x00'}}),
         ]
         for revision in (None, True, 0, -1, 2 ** 63, 1.5, float('nan')):
             invalid.append(('claim_ticket', {'ticket_id': 't', 'expected_version': revision}))

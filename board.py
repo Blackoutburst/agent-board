@@ -64,7 +64,7 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 12:
+            if version > 13:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -162,6 +162,15 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
                 db.execute("ALTER TABLE message_feeds ADD COLUMN pending_view TEXT NOT NULL DEFAULT 'full'")
                 db.execute("ALTER TABLE message_feeds ADD COLUMN pending_compact_json TEXT")
                 db.execute("PRAGMA user_version=12")
+            if version < 13:
+                # A stored block must name a verifiable reason. Existing
+                # reasonless blocks are released by the first reevaluation.
+                columns = {row[1] for row in db.execute("PRAGMA table_info(tickets)")}
+                for name, kind in (("blocked_reason", "TEXT NOT NULL DEFAULT ''"), ("unblock_owner", "TEXT"),
+                                   ("recheck_at", "REAL")):
+                    if name not in columns:
+                        db.execute(f"ALTER TABLE tickets ADD COLUMN {name} {kind}")
+                db.execute("PRAGMA user_version=13")
 
     @contextmanager
     def _connection(self):
@@ -872,7 +881,7 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
                     task = self._task(db, row)
                     task["authorized"] = self._task_authorized(db, actor, row)
                     tasks.append(task)
-            result.update(tasks=tasks, work=self.get_work(actor, limit=limit))
+            result.update(tasks=tasks, work=self.get_work(actor, limit=limit, _sweep=False))
             return result
 
     def _attachment(self, row):

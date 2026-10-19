@@ -59,7 +59,7 @@ def test_family_tools_schema_and_open_get_lookup_roundtrip(family_api):
         'idempotency_key':args['idempotency_key']})=={'found':True,'family':value}
     assert client.get('/api/delegation-families/'+value['id']).json()==value
     health=client.get('/health').json()
-    assert health['version']=='2.10.0' and health['schema_version']==12
+    assert health['version']=='2.11.0' and health['schema_version']==13
     assert 'delegation_families' in health['features']
     assert board.get_runtime(human)['active_count']==0
     with board._connection() as db:

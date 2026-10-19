@@ -44,7 +44,7 @@ def test_legacy_positive_key_keeps_selected_ticket_and_returns_live_state(space)
     with sqlite3.connect(board.db_path) as db:
         record = db.execute("SELECT record_id FROM idempotency WHERE operation='claim_next_ticket' AND key='old-key'").fetchone()[0]
         assert record == task['id']  # Historical storage remains readable.
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
     board.update_ticket(human, task['id'], selected['version'], title='Updated task', release_claim=True)
     new(space, 'Later urgent work', priority='urgent')
     before = snapshot(board)

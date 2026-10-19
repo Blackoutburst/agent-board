@@ -22,6 +22,9 @@ from .model_policy import (PolicyError, routing_configuration, check_routing_con
     connection_identifier, select_model, decision_from_dict, validate_pinned)
 
 
+# Backoff before the board makes a failed text turn ready again.
+_FAILED_TURN_RECHECK_SECONDS = 3600
+
 MAX_HUMAN_QUESTION_BYTES = 6000
 MAX_HUMAN_ANSWER_BYTES = 12000
 MAX_RECONCILIATION_ANSWER_BYTES = 80000  # Server's 20,000 Unicode characters; never a model input.
@@ -644,8 +647,14 @@ class BoardWorker:
                 + op['payload']['context']['fingerprint'])
             if len(outcome) > 20000 or len(evidence) > 20000:
                 raise _Stop('publication_too_large')
-            op = self._save(op, 'publishing', publication={'expected_version': ticket['version'], 'changes': {
-                'status': 'review' if success else 'blocked', 'outcome': outcome, 'evidence': evidence, 'release_claim': True}})
+            changes = {'status': 'review' if success else 'blocked', 'outcome': outcome, 'evidence': evidence,
+                       'release_claim': True}
+            if not success:
+                # A failed turn must stay recoverable: the board retries it
+                # after this backoff instead of leaving a reasonless block.
+                changes.update(blocked_reason='Codex text turn could not complete; the board retries after backoff.',
+                               recheck_after_seconds=_FAILED_TURN_RECHECK_SECONDS)
+            op = self._save(op, 'publishing', publication={'expected_version': ticket['version'], 'changes': changes})
         if op['stage'] == 'publishing':
             registration = self._registration(scope)
             ticket = self._ticket(scope)
