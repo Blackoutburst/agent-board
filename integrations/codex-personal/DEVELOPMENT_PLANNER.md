@@ -161,6 +161,19 @@ explicit `run()` call. Missing intent/receipt, an unapplied patch or stale final
 inspection remains review. Stops/deadlines do not prevent receipt-only cleanup
 confirmation, and reconciliation cannot clear a durable stop.
 
+From adapter 0.24, each named test has a durable admission before Runtime
+reservation and source preparation. The admission binds its operation, manifest,
+request, backend and root identity. Its `dispatched` transition is saved before
+calling the test backend. A known refusal while the creating controller still
+owns the pending admission can record an exact `not_started` receipt. That
+receipt proves only non-dispatch: receipt-only cleanup may finish its Runtime as
+`blocked`, while the planner remains in review and no test pass is recorded.
+Recovery does not qualify a backend, inspect a new diff or rerun a test to
+consume this receipt. A reopened pending admission without a final refusal
+receipt, a dispatched attempt without a backend receipt, and older journals
+without this admission proof remain in review. None is retroactively converted
+to a non-dispatch receipt.
+
 `review_ready` is a dated audit receipt for the last authorized inspection, with
 `evidence_kind=inspected_snapshot`, `inspected_at`, base SHA and snapshot hash. It
 requires an actual diff and hashes for all allowlisted files at that inspection,

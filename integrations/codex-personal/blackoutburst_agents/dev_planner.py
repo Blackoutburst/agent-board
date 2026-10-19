@@ -103,6 +103,7 @@ class DevelopmentPlanner:
         self.authorization, self.claim_id, self.clock = authorization, opaque(claim_id), _clock
         self.enabled, self.active_guard, self.journal, self.fence = enabled, None, None, None
         self.local_guard, self._last_local_time = local_guard, None
+        self._broker_refusal_reason = None
         self._base_authorize = broker.authorize_scope
         if ((fence_intent is not None and (not callable(fence_intent) or not callable(fence_verify) or parent_operation is None))
                 or (fence_intent is None and fence_verify is not None)):
@@ -304,8 +305,13 @@ class DevelopmentPlanner:
             self._fresh(self._state, action, inspection=getattr(self, '_inspecting', False))
             if self._base_authorize(scope, action, resource) is not True:
                 return False
-            return not (self.active_guard and self.active_guard.should_cancel())
-        except Exception:
+            if self.active_guard and self.active_guard.should_cancel():
+                self._broker_refusal_reason = 'planner_runtime_stopped'
+                return False
+            return True
+        except Exception as error:
+            if isinstance(error, DevelopmentError):
+                self._broker_refusal_reason = error.code
             return False
 
     def _prompt(self, state):
@@ -392,7 +398,9 @@ class DevelopmentPlanner:
             before = self._snapshot(self.broker.diff(), manifest)
             step['source_snapshot'] = before
             self.journal.save(state)  # Hash proof is durable before test execution.
-            receipt = self.broker.run_test(key, action['name'])
+            receipt = self.broker.run_test(key, action['name'],
+                _before_dispatch=lambda: self._local_fresh(state),
+                _refusal_reason=lambda: self._broker_refusal_reason)
             after = self._snapshot(self.broker.diff(), manifest)
             clean = receipt.get('cleanup_confirmed') is True and receipt['status'] == 'complete'
             if clean and receipt['result'] == 'passed' and before == after:
@@ -435,17 +443,20 @@ class DevelopmentPlanner:
         work = {**self.work, 'model': label}
         state['phase'] = 'tool_intent'
         self.journal.save(state)  # UUID, exact action and intent precede admission/effect.
-        self.active_guard = guard
         original = self.broker.authorize_scope
         backend = self.broker.test_backend
         original_backend = getattr(backend, 'authorize_scope', None)
+        self._broker_refusal_reason = None
         try:
+            self.broker.authorize_scope = self._broker_authorize
+            if action['kind'] == 'test':
+                self.broker.admit_test(step['action_key'], action['name'])
+            self.active_guard = guard
             guard.before(work, step['id'])
             self._runtime_scope(guard)
             self._fresh(state, ACTION_NAMES[action['kind']])
             if guard.should_cancel():
                 raise DevelopmentError('planner_runtime_stopped')
-            self.broker.authorize_scope = self._broker_authorize
             if original_backend is not None:
                 backend.authorize_scope = lambda scope, action, resource: (
                     original_backend(scope, action, resource) is True and
@@ -461,10 +472,17 @@ class DevelopmentPlanner:
                 raise DevelopmentError('planner_tool_finish_unconfirmed')
             step['tool_finished'] = True
             self.journal.save(state)
-        except Exception:
+        except Exception as error:
+            reason = getattr(error, 'code', 'test_admission_failed')
+            if reason == 'permission_revoked' and self._broker_refusal_reason is not None:
+                reason = self._broker_refusal_reason
+            if action['kind'] == 'test':
+                self.broker.reject_test_before_dispatch(step['action_key'], reason)
             # Any launch/receipt ambiguity keeps capacity and the canonical
             # fence for explicit reconciliation; never invent cleanup proof.
             guard.review()
+            if reason != getattr(error, 'code', 'test_admission_failed'):
+                raise DevelopmentError(reason) from None
             raise
         finally:
             self.broker.authorize_scope = original
@@ -541,14 +559,18 @@ class DevelopmentPlanner:
                             receipt = raw
                             state['tests'] = {}
                         else:
-                            after = self._snapshot(self.broker.diff(), self.broker.manifest)
-                            unchanged = step['source_snapshot'] == after
-                            receipt = {'receipt': raw, 'source_unchanged': unchanged,
-                                       'snapshot_sha256': after['sha256']}
-                            if raw['result'] == 'passed' and unchanged:
-                                state['tests'][action['name']] = {'snapshot_sha256': after['sha256'],
-                                    'operation_id': raw['operation_id'], 'key': step['action_key'],
-                                    'receipt_sha256': digest(canonical(raw))}
+                            if raw['result'] == 'not_started':
+                                receipt = {'receipt': raw}
+                                state['tests'].pop(action['name'], None)
+                            else:
+                                after = self._snapshot(self.broker.diff(), self.broker.manifest)
+                                unchanged = step['source_snapshot'] == after
+                                receipt = {'receipt': raw, 'source_unchanged': unchanged,
+                                           'snapshot_sha256': after['sha256']}
+                                if raw['result'] == 'passed' and unchanged:
+                                    state['tests'][action['name']] = {'snapshot_sha256': after['sha256'],
+                                        'operation_id': raw['operation_id'], 'key': step['action_key'],
+                                        'receipt_sha256': digest(canonical(raw))}
                     finally:
                         self.broker.authorize_scope = original
                     step['receipt'] = receipt
@@ -560,9 +582,12 @@ class DevelopmentPlanner:
                     cleanup = raw['status'] == 'complete' and raw.get('cleanup_confirmed') is True
                 elif action['kind'] == 'patch':
                     cleanup = receipt['status'] == 'complete'
-                guard.finish_action(work, step['id'], status='completed' if cleanup else 'blocked',
+                not_started = action['kind'] == 'test' and raw['result'] == 'not_started'
+                guard.finish_action(work, step['id'], status='completed' if cleanup and not not_started else 'blocked',
                                     cleanup_confirmed=cleanup)
                 step['tool_finished'] = True
+                if not_started:
+                    raise DevelopmentError(raw['reason'])
                 # Reconciliation never accepts a final result for the caller.
                 # A final diff can age while stopped; require fresh inspection.
                 if action['kind'] == 'final' or (action['kind'] == 'patch' and receipt['result'] == 'not_applied'):

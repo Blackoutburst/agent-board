@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import re
 import stat
 
 from .dev_journal import DevelopmentJournal, PrivateDirectory
@@ -36,6 +37,7 @@ class DevelopmentBroker:
         self.authorize_scope = authorize_scope
         self.test_backend = test_backend
         self.journal = DevelopmentJournal(directory)
+        self._test_admissions = set()
 
     @property
     def manifest(self):
@@ -198,11 +200,15 @@ class DevelopmentBroker:
                 # Keep an unapplied stage for explicit reconciliation. There
                 # is no retry loop that might silently overwrite newer work.
 
-    def _qualified_test(self, name):
+    def _test_suite(self, name):
         opaque(name, 'invalid_test_name', 64)
         suite = next((item for item in self.manifest['tests'] if item['name'] == name), None)
         if suite is None:
             raise DevelopmentError('test_not_allowed')
+        return suite
+
+    def _qualified_test(self, name):
+        suite = self._test_suite(name)
         backend = self.test_backend
         try:
             qualified = (backend is not None and backend.backend_id == suite['backend_id']
@@ -229,23 +235,118 @@ class DevelopmentBroker:
         sha256(result['output_sha256'])
         return dict(result)
 
-    def run_test(self, key, name):
+    def admit_test(self, key, name):
+        """Pin one exact attempt before preparations, without backend admission."""
         self._authorize('repo.run_test')
-        suite = self._qualified_test(name)
+        suite = self._test_suite(name)
+        request = {'kind': 'test', **suite}
+        operation_id = self._operation_id(key)
+        request_hash = digest(canonical(request))
+        with self.journal.lock() as state:
+            operation = state['operations'].get(operation_id)
+            if operation is not None:
+                if operation['request_hash'] != request_hash:
+                    raise DevelopmentError('idempotency_conflict')
+                if operation['phase'] == 'complete':
+                    if operation['receipt']['result'] == 'not_started':
+                        raise DevelopmentError(operation['receipt']['reason'])
+                    return dict(operation['receipt'])
+                if (operation['phase'] != 'intent'
+                        or operation.get('admission', {}).get('dispatch') != 'pending'
+                        or operation_id not in self._test_admissions):
+                    raise DevelopmentError('reconciliation_required')
+                return None
+            self.journal.require_settled(state)
+            self.journal.charge(state)
+            admission = {'schema': 1, 'operation_id': operation_id,
+                'manifest_hash': self.journal.manifest_hash, 'request_hash': request_hash,
+                'backend_id': suite['backend_id'], 'root_identity': self.manifest['root_identity'],
+                'dispatch': 'pending'}
+            state['operations'][operation_id] = {'id': operation_id, 'kind': 'test',
+                'phase': 'intent', 'request_hash': request_hash, 'detail': dict(suite),
+                'receipt': None, 'admission': admission}
+            self.journal.save(state)
+            self._test_admissions.add(operation_id)
+        return None
+
+    def reject_test_before_dispatch(self, key, reason):
+        """Record local non-dispatch proof; never infer it from an old intent."""
+        if type(reason) is not str or re.fullmatch('[a-z][a-z0-9_]{0,99}', reason) is None:
+            reason = 'test_admission_failed'
+        with self.journal.lock() as state:
+            operation = state['operations'].get(self._operation_id(key))
+            if operation is None or operation['kind'] != 'test':
+                return None
+            if operation['phase'] == 'complete':
+                return (dict(operation['receipt'])
+                        if operation['receipt']['result'] == 'not_started' else None)
+            admission = operation.get('admission')
+            if (operation['phase'] != 'intent' or admission is None or admission['dispatch'] != 'pending'
+                    or operation['id'] not in self._test_admissions):
+                return None
+            receipt = self._finish(state, operation, 'not_started', name=operation['detail']['name'],
+                cleanup_confirmed=True, started=False, reason=reason,
+                manifest_hash=self.journal.manifest_hash, request_hash=operation['request_hash'],
+                admission_sha256=digest(canonical(admission)))
+            self._test_admissions.discard(operation['id'])
+            return receipt
+
+    def run_test(self, key, name, *, _before_dispatch=None, _refusal_reason=None):
+        if any(callback is not None and not callable(callback)
+               for callback in (_before_dispatch, _refusal_reason)):
+            raise DevelopmentError('invalid_test_admission')
+        previous = self.admit_test(key, name)
+        if previous is not None:
+            return previous
+        suite = self._test_suite(name)
         request = {'kind': 'test', **suite}
         with self.journal.lock() as state:
-            previous = self._existing(state, key, request)
-            if previous is not None:
-                return previous
-            files = self._files()
+            operation = state['operations'][self._operation_id(key)]
+            if operation['request_hash'] != digest(canonical(request)):
+                raise DevelopmentError('idempotency_conflict')
+            if operation['phase'] == 'complete':
+                if operation['receipt']['result'] == 'not_started':
+                    raise DevelopmentError(operation['receipt']['reason'])
+                return dict(operation['receipt'])
+            if (operation['phase'] != 'intent'
+                    or operation.get('admission', {}).get('dispatch') != 'pending'
+                    or operation['id'] not in self._test_admissions):
+                raise DevelopmentError('reconciliation_required')
+            files = None
             try:
-                self.journal.charge(state, tests=1)
-                operation = self._intent(state, key, 'test', request, dict(suite))
-                self._authorize('repo.run_test')
-                files.verify()
-                test_request = self._test_request(operation)
-                self._authorize('repo.run_test')
-                files.verify()
+                try:
+                    self._qualified_test(name)
+                    files = self._files()
+                    self._authorize('repo.run_test')
+                    files.verify()
+                    test_request = self._test_request(operation)
+                    if _before_dispatch is not None:
+                        _before_dispatch()  # Preserve exact local deadline/stop failures.
+                    self._authorize('repo.run_test')
+                    files.verify()
+                    self.journal.charge(state, operations=0, tests=1)
+                    operation['admission']['dispatch'] = 'dispatched'
+                    self.journal.save(state)  # Durable ambiguity boundary before backend.run.
+                    self._test_admissions.discard(operation['id'])
+                except Exception as error:
+                    if operation['admission']['dispatch'] == 'pending':
+                        reason = getattr(error, 'code', 'test_admission_failed')
+                        if reason in ('permission_revoked', 'test_backend_unqualified') and _refusal_reason is not None:
+                            # Read the controller's already observed cause. Do
+                            # not repeat authorization, qualification or dispatch.
+                            known = _refusal_reason()
+                            if known is not None:
+                                reason = known
+                        if type(reason) is not str or re.fullmatch('[a-z][a-z0-9_]{0,99}', reason) is None:
+                            reason = 'test_admission_failed'
+                        self._finish(state, operation, 'not_started', name=name,
+                            cleanup_confirmed=True, started=False, reason=reason,
+                            manifest_hash=self.journal.manifest_hash, request_hash=operation['request_hash'],
+                            admission_sha256=digest(canonical(operation['admission'])))
+                        self._test_admissions.discard(operation['id'])
+                        if reason != getattr(error, 'code', 'test_admission_failed'):
+                            raise DevelopmentError(reason) from None
+                    raise
                 try:
                     raw = self.test_backend.run(test_request)
                 except Exception:
@@ -255,7 +356,8 @@ class DevelopmentBroker:
                 return self._finish(state, operation, outcome, name=name, **{
                     key: value for key, value in result.items() if key != 'status'})
             finally:
-                files.close()
+                if files is not None:
+                    files.close()
 
     def reconcile(self, key):
         """Read exact recorded effects; never apply a patch or rerun a test."""
@@ -270,6 +372,10 @@ class DevelopmentBroker:
             files = self._files()
             try:
                 if operation['kind'] == 'test':
+                    if operation.get('admission', {}).get('dispatch') == 'pending':
+                        # A crash before a final refusal receipt is deliberately
+                        # not promoted into cleanup proof during recovery.
+                        raise DevelopmentError('test_admission_requires_review')
                     request = self._test_request(operation)
                     self._authorize('repo.run_test')
                     files.verify()

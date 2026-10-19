@@ -5,7 +5,7 @@
   "ticket": "Board overhaul #42",
   "board_version": "2.11.0",
   "database_schema": 13,
-  "adapter_version": "0.24.0",
+  "adapter_version": "0.25.0",
   "upstream_base_revision": "fae6d393e027d34e706e41cd7acf9d4406975a78",
   "trigger": {
     "observed": "25 open tickets: 12 blocked with no open human request (7 also without an open dependency), 5 todo cascading from them, 5 in review without reviewer; delegated parents held by children in review",

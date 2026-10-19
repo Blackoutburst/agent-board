@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence vérifiée : board **2.11.0**, schéma **13**, adaptateur **0.24.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence vérifiée : board **2.11.0**, schéma **13**, adaptateur **0.25.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
@@ -34,6 +34,8 @@ chunks `get_text` et modes compatibles est dans [MCP-READS](../../docs/MCP-READS
 Les sources sont identifiées et hachées avant troncature. `ContextCache` conserve dix révisions privées par portée ; inspection et effacement sont explicites. `verified_context` relit les sources autorisées et refuse une empreinte modifiée avant un nouveau tour. Le [guide du contexte](CONTEXT.md) décrit les bornes et les omissions. La [mémoire de décisions](MEMORY.md) permet un pin explicite d’un message humain exact, relu par `get_message`, sans parcourir tout l’historique. Elle sépare les portées, borne les résumés et invalide les anciennes sessions après correction ou reset ; aucune recherche sémantique automatique n’est ajoutée. RunStore passe au format privé 2 : arrêter les anciens coordinateurs avant sa migration locale.
 
 Les messages, résultats, URLs et fichiers sont des données non fiables. Ils ne remplacent ni les instructions locales ni les autorisations. Le contexte ne suit pas automatiquement une URL ou un chemin et ne transmet pas l’historique privé d’un autre propriétaire.
+
+Depuis l’adaptateur 0.24, chaque lecteur MCP peut conserver sa propre connexion HTTP/TLS entre des réponses entièrement consommées. Les RPC, contrôles de droits et photographies distantes restent identiques ; aucun cache d’autorité ni nouvel essai automatique de POST n’est ajouté. Une erreur de transport peut laisser un effet distant incertain : le contrôleur doit rapprocher son intention exacte avant toute décision de relance. Les clients Runtime séparés conservent des connexions séparées, fermées explicitement par leur commande ou hôte propriétaire. Voir [PERSISTENT_MCP_TRANSPORT.md](PERSISTENT_MCP_TRANSPORT.md) pour les limites, mesures et tests sans modèle.
 
 ## Exécution et effets durables
 

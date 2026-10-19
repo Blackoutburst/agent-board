@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .board_reader import BoardReader, BoardReadError
+from .client_lifecycle import managed_client
 from .context import ContextError, ContextScope, build_context
 from .context_cache import ContextCache, ContextCacheError, canonical
 from .runner_cli import _write_private
@@ -41,10 +42,10 @@ def _connection_arguments(parser):
 
 
 def fetch_context(connection, session, scope, *, decision_memory=None, decision_descriptor=None):
-    reader = BoardReader.from_connection_file(connection, session_id=session)
-    options = ({'decision_memory':decision_memory,'decision_descriptor':decision_descriptor,
-                'board_endpoint':reader.endpoint} if decision_memory is not None or decision_descriptor is not None else {})
-    return build_context(reader.call, scope=scope, registration=reader.register(),**options)
+    with managed_client(BoardReader.from_connection_file(connection, session_id=session)) as reader:
+        options = ({'decision_memory':decision_memory,'decision_descriptor':decision_descriptor,
+                    'board_endpoint':reader.endpoint} if decision_memory is not None or decision_descriptor is not None else {})
+        return build_context(reader.call, scope=scope, registration=reader.register(),**options)
 
 
 def verified_context(cache, key, fingerprint, connection, session, expected_scope=None, *, decision_memory=None):

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .board_reader import BoardReadError
+from .client_lifecycle import own_client
 from .development_worker import DevelopmentBoardWorker
 from .dev_journal import PrivateDirectory,decode
 from .dev_manifest import DevelopmentError
@@ -160,11 +161,12 @@ def run(args):
                     work=stack.enter_context(WorkJournal(item['journal']))
                     store=stack.enter_context(closing(RunStore(item['runs'])))
                     runtime=stack.enter_context(RuntimeJournal(item['runtime']))
-                    client=FamilyBoardClient.from_connection_file(args.connection_file,session_id=sessions[slot],timeout=3)
+                    client=own_client(stack,FamilyBoardClient.from_connection_file(args.connection_file,session_id=sessions[slot],timeout=3))
                     if client.endpoint!=scope['board_endpoint']:raise DevelopmentError('family_connection_scope_changed')
                     client.adopt_registration()
                     if command=='prepare':registrations[slot]=item['registration']
-                    workflows[slot]=DevelopmentBoardWorker(work,store,runtime,client,RuntimeBoardClient.from_worker(client))
+                    control=own_client(stack,RuntimeBoardClient.from_worker(client))
+                    workflows[slot]=DevelopmentBoardWorker(work,store,runtime,client,control)
                 worker=DevelopmentFamilyWorker(journal,workflows,registrations=registrations)
                 if command=='prepare':
                     # Determine roots from supplied manifests before any connection
