@@ -265,7 +265,7 @@
     "integrations/codex-personal/tests/test_runtime_integration.py": "13b9fb887d150dd7129cbc3c331116458fed325245f00916e715075c0ea6181a",
     "integrations/codex-personal/tests/test_runtime_journal.py": "f74f3522fc603c8e6cf69740a1f2d1362bc123be270ef7f5d99128a7c90be666",
     "integrations/codex-personal/tests/test_runtime_reconcile_dispatch.py": "1306a283f071c399d12e9e762186dd9568c309eb07ce32ef87177aec8d5611cf",
-    "integrations/codex-personal/tests/test_script_pins_review.py": "15b6eff1a97b5b8896ce2d49743e5f082d57fefb0cbfa15fff3cf79190139338",
+    "integrations/codex-personal/tests/test_script_pins_review.py": "1abebd911511f0560d7f67d2c8ca5372c4f8d8aeebe9e534a5747c44d7e4423d",
     "integrations/codex-personal/tests/test_small_owner_client_lifecycle.py": "5cdb5b4fc9387f4f7fcecd5212fb78c6dca7ff723a6294b7df5ebc213242da47",
     "integrations/codex-personal/tests/test_subscription_probe.py": "83ab39e143b139150087b43fdb1ea802588880a2c461cbd44b5ef07664f180cd",
     "integrations/codex-personal/tests/test_test_admission.py": "3ae80bb5ae25edc8e9a657699c98cc01d4545a804b5c8cffea0b672d68546940",

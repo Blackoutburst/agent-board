@@ -69,7 +69,17 @@ class ScriptPinsReviewTests(unittest.TestCase):
             with self.assertRaises(DevelopmentError):
                 self.backend.run(self.request)
             execute.assert_not_called()
-        self.assertFalse((self.directory / (self.request.operation_id + '.json')).exists())
+        # Refusal still launches nothing, but now owns a durable terminal
+        # admission so an already reserved Runtime need not become uncertain.
+        proof = self.backend.lookup_not_started(self.request)
+        self.assertIsNotNone(proof)
+        self.assertIs(proof['started'], False)
+        self.assertIs(proof['cleanup_confirmed'], True)
+        self.assertEqual(proof['operation_id'], self.request.operation_id)
+        receipt = json.loads((self.directory / (self.request.operation_id + '.json')).read_text())
+        self.assertEqual(receipt['phase'], 'complete')
+        self.assertEqual(receipt['admission']['launch'], 'not_started')
+        self.assertEqual(receipt['result']['status'], 'cancelled')
 
     def test_changed_script_refuses_before_launch(self):
         self.qualify()
