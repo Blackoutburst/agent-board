@@ -456,6 +456,11 @@ class ProjectsMixin:
                 notice_row=db.execute('SELECT * FROM tickets WHERE id=?',(ticket_id,)).fetchone()
                 self._assignment_notice(db,actor,notice_row,row['assignee_agent_id'],'unassigned',expected_version+1)
                 self._assignment_notice(db,actor,notice_row,values['assignee_agent_id'],'assigned',expected_version+1)
+            if status == "review" and row["status"] != "review":
+                self._record_review_request(db, actor, ticket_id)
+            if status == "blocked" and actor["kind"] == "agent" and values.get("blocked_reason"):
+                self._audit(db, actor, "agent_block_recorded", {"ticket_id": ticket_id})
+                self._escalate_repeated_blocks(db, actor, db.execute("SELECT * FROM tickets WHERE id=?", (ticket_id,)).fetchone())
             if status in ("done", "review") and status != row["status"]:
                 self._reevaluate_dependents(db, actor, ticket_id, f"#{row['number']} moved to {status}")
             if status == "blocked" and "depends_on" in changes:

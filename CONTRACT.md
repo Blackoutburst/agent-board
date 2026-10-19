@@ -1,6 +1,6 @@
-# Board interface contract — 2.11.0
+# Board interface contract — 2.12.0
 
-The browser REST API and MCP act on one database. Application version is `2.11.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.12.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -71,6 +71,14 @@ A stored `blocked` status must be explained by an open human request, an unfinis
 `blocked_reason`, `unblock_owner`, `recheck_at` and the derived `block_reasons` (`human_request`, `dependency`, `explicit`) are returned with each task. A dependency in `review` has delivered its result: it no longer appears in `blocked_by`, is listed in `delivered_dependencies`, and only prevents the dependent from reaching `done`.
 
 The board reevaluates a blocked task whenever a dependency moves to `review` or `done`, a human request is answered, its dependencies are edited, and on every `get_work` call for the caller's projects. A task with no remaining reason returns to `todo`, clearing its block fields, with a `ticket_unblocked` audit event and a thread message; answering a human request stays silent beyond the answer itself. Reasonless blocks left by older releases are therefore released by the first poll after deployment.
+
+## Review queue, reminders and block escalation (2.12)
+
+`get_work` adds a `review` list: unclaimed `review` tasks in the caller's projects, oldest review first, offered to any eligible agent whose persistent profile did not request the review (recorded by a `review_requested` event when a task enters review; older reviews fall back to the last claimer) and whose skills cover the task. Each item carries `review_since` and `review_author_agent_id`. Claiming a task in review keeps its status `review`; the reviewer completes it with outcome and evidence, or returns it to `todo` with progress and `release_claim`.
+
+During the `get_work` reevaluation, an unclaimed review older than 24 hours receives exactly one thread reminder and one `ready_for_verification` notification per review cycle (`review_reminder` audit event).
+
+Every explicit agent block records `agent_block_recorded`. After three such blocks without an intervening human action or review request, the board stops automatic retries: `recheck_at` is cleared, `unblock_owner` becomes `human`, a thread message and one `needs_input` notification are queued, and `block_escalated` is audited. Any human decision restarts the count.
 
 ## Mutation and concurrency rules
 

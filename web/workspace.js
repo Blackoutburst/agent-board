@@ -122,6 +122,9 @@ const Workspace = (() => {
       if (token === "is:done") return task.status === "done";
       if (token === "is:ready") return task.ready;
       if (token === "is:blocked") return ["blocked", "waiting_on_human", "recovery"].includes(task.work_state);
+      // Stuck: blocked work or a review that has waited more than a day.
+      if (token === "is:stuck") return ["blocked", "waiting_on_human", "recovery"].includes(task.work_state)
+        || (task.status === "review" && !task.claimant && Date.now() / 1000 - task.updated_at > 86400);
       if (token === "assignee:me") return task.assignee_owner_id === state.actor.owner_id || task.claimant?.owner_id === state.actor.owner_id;
       if (token.startsWith("label:")) return task.labels.some(v => v.toLowerCase() === token.slice(6));
       return text.includes(token);
@@ -131,7 +134,7 @@ const Workspace = (() => {
     const filter = getTicketFilters(p.id);
     const count = el("span", { class: "muted small", "aria-live": "polite" });
     const list = el("div", { class: "issue-list" });
-    const query = field("Search tasks", "query", { type: "search", value: filter.query, placeholder: "Search tasks…  is:ready  assignee:me  label:backend" });
+    const query = field("Search tasks", "query", { type: "search", value: filter.query, placeholder: "Search tasks…  is:ready  is:stuck  assignee:me  label:backend" });
     const controls = el("form", { class: "task-filters" }, query, select("Status", "status", [["", "All statuses"], ...Object.entries(ticketStatuses)], filter.status), select("Priority", "priority", [["", "All priorities"], ...Object.entries(ticketPriorities)], filter.priority), el("button", { type: "submit" }, "Filter"));
     const update = () => {
       const visible = tasks.filter(t => matches(t, filter));
@@ -149,11 +152,17 @@ const Workspace = (() => {
       el("div", { class: "segmented", "aria-label": "Task layout" }, btn("List", () => { listMode = "list"; renderTasks(container, p, tasks); }, listMode === "list" ? "selected" : ""), btn("Board", () => { listMode = "board"; renderTasks(container, p, tasks); }, listMode === "board" ? "selected" : ""))), list);
     update();
   }
+  // Explicit block reason with its automatic recheck or human owner.
+  function blockLabel(t) {
+    if (t.status !== "blocked" || !t.blocked_reason) return null;
+    const when = t.recheck_at ? `rechecked ${date(t.recheck_at)}` : "needs a human decision";
+    return el("span", { class: "blocked-label", title: t.blocked_reason }, `${t.blocked_reason.slice(0, 80)} · ${when}`);
+  }
   function taskRow(t) {
     const assignee = t.claimant?.agent_name || t.assignee_agent_name || (t.assignee_owner_id ? ownerName(t.assignee_owner_id) : "Anyone");
     return el("article", { class: "issue-row" }, el("span", { class: `issue-icon ${t.status === "done" ? "done" : ""}`, "aria-label": ticketStatuses[t.status] }, t.status === "done" ? "✓" : "◉"),
       el("div", { class: "issue-content" }, el("div", { class: "issue-title" }, workLink(t.title, { ticket: t.id }), t.labels.map(label => badge(label, "label-badge"))),
-        el("div", { class: "issue-meta" }, t.project_name ? workLink(t.project_name, { project: t.project_id }) : null, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
+        el("div", { class: "issue-meta" }, t.project_name ? workLink(t.project_name, { project: t.project_id }) : null, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, blockLabel(t), t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
       el("div", { class: "issue-trailing" }, status(t), t.priority !== "normal" ? badge(ticketPriorities[t.priority], `priority-${t.priority}`) : null, el("span", { class: "assigned-label", title: assignee }, assignee)));
   }
 
@@ -265,6 +274,8 @@ const Workspace = (() => {
     const discussion = panel("Discussion", el("div", { id: "older-messages" }), el("div", { id: "messages", class: "messages" }), composer());
     const main = el("div", {}, panel("Description", el("div", { class: "panel-body" }, Markdown.block(t.description || "No description provided."), el("div", { class: "attachments task-attachments", "aria-label": "Task attachments" }, (t.attachments || []).map(Conversations.attachment)))),
       t.acceptance_criteria ? panel("Acceptance criteria", Markdown.block(t.acceptance_criteria, "panel-body")) : null,
+      t.status === "blocked" && t.blocked_reason ? el("div", { class: "callout" }, el("strong", {}, "Block reason"), Markdown.block(t.blocked_reason),
+        el("p", { class: "small muted" }, t.recheck_at ? `The board rechecks this block ${date(t.recheck_at)}.` : "Automatic retries stopped; a human decides.")) : null,
       t.progress ? el("div", { class: "callout" }, el("strong", {}, "Latest progress"), Markdown.block(t.progress)) : null,
       t.human_requests.filter(r => r.status === "open").map(r => requestCard(r, t)),
       t.outcome || t.evidence ? panel("Outcome & verification", el("div", { class: "panel-body" }, Markdown.block(t.outcome), Markdown.block(t.evidence, "muted"))) : null,
@@ -428,7 +439,7 @@ const Workspace = (() => {
     await refreshRequestCount();
   }
   function activityList(events) {
-    const descriptions = { ticket_created: "created this task", ticket_claimed: "started work", ticket_recovered: "recovered an expired claim", ticket_updated: "updated this task", ticket_progress: "reported progress", ticket_delegated: "delegated a subtask", ticket_unblocked: "unblocked this task", human_input_requested: "requested human input", human_input_resolved: "answered a human request" };
+    const descriptions = { ticket_created: "created this task", ticket_claimed: "started work", ticket_recovered: "recovered an expired claim", ticket_updated: "updated this task", ticket_progress: "reported progress", ticket_delegated: "delegated a subtask", ticket_unblocked: "unblocked this task", review_requested: "requested a review", review_reminder: "sent a review reminder", agent_block_recorded: "recorded a block", block_escalated: "escalated repeated blocks to a human", human_input_requested: "requested human input", human_input_resolved: "answered a human request" };
     if (!events.length) return box("No activity yet", "Claims, progress, handoffs, and completed work will appear here.");
     const rows = events.map(event => {
       const detail = el("div", {},
