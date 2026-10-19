@@ -399,7 +399,8 @@ class DevelopmentPlanner:
             step['source_snapshot'] = before
             self.journal.save(state)  # Hash proof is durable before test execution.
             receipt = self.broker.run_test(key, action['name'],
-                _before_dispatch=lambda: self._local_fresh(state))
+                _before_dispatch=lambda: self._local_fresh(state),
+                _refusal_reason=lambda: self._broker_refusal_reason)
             after = self._snapshot(self.broker.diff(), manifest)
             clean = receipt.get('cleanup_confirmed') is True and receipt['status'] == 'complete'
             if clean and receipt['result'] == 'passed' and before == after:

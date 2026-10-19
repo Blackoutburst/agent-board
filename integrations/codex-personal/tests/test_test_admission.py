@@ -12,6 +12,7 @@ from blackoutburst_agents.dev_broker import DevelopmentBroker
 from blackoutburst_agents.dev_fence import DevelopmentFence
 from blackoutburst_agents.dev_manifest import Budgets, DevelopmentError, NamedTest, canonical, digest, prepare_manifest
 from blackoutburst_agents.dev_planner_journal import PlannerBudgets
+from blackoutburst_agents.dev_test_backend import NativeNamedPythonBackend
 import test_development_broker as broker_fixture
 import test_dev_planner as planner_fixture
 
@@ -319,6 +320,37 @@ class TestAdmissionPlannerTests(unittest.TestCase):
         receipt = self.broker.status(step['action_key'])['receipt']
         self.assertEqual((receipt['result'], receipt['reason']), ('not_started', 'planner_wall_budget_exhausted'))
         self.assertEqual(self.backend.calls, [])
+
+    def test_native_authorization_refusal_preserves_deadline_before_receipt_write(self):
+        self.actions = [self.action('test', name='unit')]
+        self.backend.authorize_scope = lambda *_: True
+        planner = self.create(budgets=PlannerBudgets(max_wall_seconds=5))
+
+        def qualify(manifest_hash, suite):
+            self.clock += 6
+            # Exercise the native qualification's actual authorization/error
+            # handling without constructing a backend, process or sandbox.
+            native = object.__new__(NativeNamedPythonBackend)
+            native.manifest = self.broker.manifest
+            native.authorize_scope = self.backend.authorize_scope
+            with patch.object(native, '_pins', side_effect=AssertionError('no qualification after refusal')):
+                return native.qualified_for(manifest_hash, suite)
+
+        with patch.object(self.backend, 'qualified_for', side_effect=qualify) as qualification, \
+                patch.object(self.broker, '_finish', wraps=self.broker._finish) as finish:
+            result = planner.run()
+        self.assertEqual((result['status'], result['reason']),
+                         ('needs_review', 'planner_wall_budget_exhausted'))
+        step = planner.journal.read()['step']
+        receipt = self.broker.status(step['action_key'])['receipt']
+        self.assertEqual((receipt['result'], receipt['reason']),
+                         ('not_started', 'planner_wall_budget_exhausted'))
+        self.assertEqual(finish.call_count, 1)
+        self.assertEqual(finish.call_args.args[2], 'not_started')
+        self.assertEqual(finish.call_args.kwargs['reason'], 'planner_wall_budget_exhausted')
+        self.assertEqual(qualification.call_count, 1)
+        self.assertEqual(self.backend.calls, [])
+        self.assertEqual(self.backend.lookups, [])
 
     def test_identity_cleanup_consumes_only_exact_not_started_without_any_admission(self):
         operation_id = str(uuid.uuid4())

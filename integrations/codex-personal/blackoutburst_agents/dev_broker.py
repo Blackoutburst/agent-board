@@ -291,8 +291,9 @@ class DevelopmentBroker:
             self._test_admissions.discard(operation['id'])
             return receipt
 
-    def run_test(self, key, name, *, _before_dispatch=None):
-        if _before_dispatch is not None and not callable(_before_dispatch):
+    def run_test(self, key, name, *, _before_dispatch=None, _refusal_reason=None):
+        if any(callback is not None and not callable(callback)
+               for callback in (_before_dispatch, _refusal_reason)):
             raise DevelopmentError('invalid_test_admission')
         previous = self.admit_test(key, name)
         if previous is not None:
@@ -330,6 +331,12 @@ class DevelopmentBroker:
                 except Exception as error:
                     if operation['admission']['dispatch'] == 'pending':
                         reason = getattr(error, 'code', 'test_admission_failed')
+                        if reason in ('permission_revoked', 'test_backend_unqualified') and _refusal_reason is not None:
+                            # Read the controller's already observed cause. Do
+                            # not repeat authorization, qualification or dispatch.
+                            known = _refusal_reason()
+                            if known is not None:
+                                reason = known
                         if type(reason) is not str or re.fullmatch('[a-z][a-z0-9_]{0,99}', reason) is None:
                             reason = 'test_admission_failed'
                         self._finish(state, operation, 'not_started', name=name,
@@ -337,6 +344,8 @@ class DevelopmentBroker:
                             manifest_hash=self.journal.manifest_hash, request_hash=operation['request_hash'],
                             admission_sha256=digest(canonical(operation['admission'])))
                         self._test_admissions.discard(operation['id'])
+                        if reason != getattr(error, 'code', 'test_admission_failed'):
+                            raise DevelopmentError(reason) from None
                     raise
                 try:
                     raw = self.test_backend.run(test_request)
