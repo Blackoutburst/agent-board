@@ -15,6 +15,7 @@ from .family_client import _arguments
 from .family_journal import SLOTS
 from .work_journal import _scope,_encode
 from .family_sources import controller_sources
+from .development_frame import LEGACY, FRAME, read_protocol
 
 _INPUTS={'broker_directory','backend_directory','planner_policy_directory','model','instruction','budgets'}
 _CHILD={'session_id','role','title','description','acceptance_criteria','files','root'}
@@ -68,18 +69,22 @@ def validate_root_reads(authority, first, last, context, policy, scope, manifest
 
 
 def build_configuration(request,workflows,registrations,*,clock):
-    if (type(request) is not dict or set(request)!={'scope','parent','children','limits'}
+    if (type(request) is not dict or set(request) not in ({'scope','parent','children','limits'},
+                {'scope','parent','children','limits','read_protocol'})
             or type(request['children']) is not list or len(request['children'])!=2
             or set(workflows)!=set(SLOTS) or type(registrations) is not dict or set(registrations)!=set(SLOTS)):
         raise DevelopmentError('invalid_family_plan')
     _encode(registrations,256*1024,'invalid_family_registrations')
     request=deepcopy(request);scope=request['scope'];_scope(scope)
+    protocol=read_protocol(request.get('read_protocol',LEGACY))
     parent=request['parent']
     if type(parent) is not dict or set(parent)!=_INPUTS:
         raise DevelopmentError('invalid_family_plan')
     manifest,manifest_hash=manifest_document(parent['broker_directory'])
     root=workflows['parent']
     root.client.adopt_registration()
+    if protocol==FRAME:
+        root.client.require_development_frame()
     initial=root_sources(root.client,scope,manifest,registrations['parent'],clock=clock)
     now=clock();limits=request['limits']
     if (type(limits) is not dict or set(limits)!={'max_model_turns','max_tool_actions','max_concurrent','deadline'}
@@ -153,7 +158,7 @@ def build_configuration(request,workflows,registrations,*,clock):
         snapshot=inspect_files(template,authorize=allowed)
         if snapshot['files']!={path:entry['sha256'] for path,entry in template['files'].items()}:
             raise DevelopmentError('family_initial_files_changed')
-    return {'schema':1,'scope':scope,'request':request,'inputs':inputs,'roots':roots,'child_stores':stores,
+    return {'schema':1,'read_protocol':protocol,'scope':scope,'request':request,'inputs':inputs,'roots':roots,'child_stores':stores,
         'pins':pins,'registrations':deepcopy(registrations),'provisional_scopes':scopes,
         'parent_manifest':manifest,'parent_manifest_sha256':manifest_hash,'root_frame':initial['frame'],
         'opening':opening,'server_plan':server_plan,'server_plan_sha256':digest(canonical(server_plan)),

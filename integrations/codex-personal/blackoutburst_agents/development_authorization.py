@@ -45,6 +45,13 @@ class DevelopmentAuthorization:
     def _policy(self):
         try:
             value = self.client.call('get_work', {'project_id': self.scope['project_id'], 'limit': 1})
+            return self._policy_response(value)
+        except Exception:
+            raise DevelopmentError('development_grants_unavailable') from None
+
+    def _policy_response(self, value):
+        """Validate one actual observation, with no cached permission decision."""
+        try:
             policy = value['policy']
             if (any(policy[key] is not True for key in ('enabled','allow_read','allow_requests'))
                     or type(policy['actions']) is not list or type(policy['resources']) is not list
