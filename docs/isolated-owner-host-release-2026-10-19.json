@@ -1,0 +1,68 @@
+{
+  "adapter_version": "0.24.0",
+  "board_version": "2.10.0",
+  "effects": {
+    "accounts_created": 0,
+    "logins": 0,
+    "model_calls": 0,
+    "production_changed": false,
+    "services_installed": 0,
+    "services_started": 0
+  },
+  "limits": [
+    "Synthetic package and entry checks only; no real service startup or owner login performed.",
+    "Initial installation refuses existing accounts, homes and units; interrupted installs require explicit operator review.",
+    "Personal official CLI logins and separate Board device pairings remain human steps.",
+    "Linux development/family execution remains unqualified and disabled."
+  ],
+  "linux": {
+    "archive_sha256": "c1659457a0c1f0139c0fe4466f9645aca7044c2d666088d6e67d969027e1cd4f",
+    "host": {
+      "machine": "x86_64",
+      "release": "5.15.0-198-generic",
+      "system": "Linux"
+    },
+    "input_archive_removed": true,
+    "server_tests": {
+      "exit_code": 0,
+      "launcher_reaped": true,
+      "log_bytes": 4500,
+      "log_sha256": "5005819962f3faf86e492cf19297b23331440c5efce97f076976613ca93a2102",
+      "reason": null,
+      "summary": {
+        "passed": 916,
+        "seconds": 248.78,
+        "warnings": 341
+      }
+    },
+    "temporary_source_removed": true,
+    "verified_source_files": 442
+  },
+  "mac_focused": {
+    "evidence": "Observed exact terminal result from focused pytest run after rebase, on a clean checkout.",
+    "exit_code": 0,
+    "passed": 29,
+    "seconds": 3.28
+  },
+  "package_and_test_source_hashes": {
+    "deploy/isolated_host/README.md": "234fd421ecf43ec6910b2b692ec0eb2971e3eb95811d3835e9c9efe829f5a992",
+    "deploy/isolated_host/__init__.py": "5c30f1ec9e5792b3e98afcc5d4e58f5954fe5d857ce9bc692b7d7744ba56266d",
+    "deploy/isolated_host/manage.py": "8be3f6d53e6a59066cc4ddd045a62e843affded62fa6ab45bc75e82636012ce4",
+    "deploy/isolated_host/owner_entry.py": "48ad3fbe3d8fa5113b27a5e88dfbed529553167ee9bdd8887d5d541896d575e7",
+    "deploy/isolated_host/package.py": "9906383e61c5042d7cc7c79cd7b896db04ba60299085dcadf0c50152393ef8fb",
+    "deploy/isolated_host/unit.service.in": "5a2af330567acf3db72458aef1d79e61d9ad19f490e6f3c637fd71178858dec0",
+    "tests/test_isolated_host_entry.py": "4f7cf81b38e89295a5ecd425fbe84fe36fdf000e44bfbf32915cf23ff070e9ee",
+    "tests/test_isolated_host_package.py": "0ef99b72ce0c5c7e40a301b6c5131b949746f40d79433452a58db3bc38e27671"
+  },
+  "result": "passed_synthetic_isolated_host_package",
+  "schema": 1,
+  "tested_revision": "65b253080617abdc5f5059d1a170940be8cd6005",
+  "tested_source_manifest_sha256": "a8d396b31cb7ac2cf93fb41f48604389d39049f296b4bee8fc255ea04fe6da18",
+  "unit_syntax": {
+    "exit_code": 0,
+    "systemd_version": "249",
+    "template_sha256": "5a2af330567acf3db72458aef1d79e61d9ad19f490e6f3c637fd71178858dec0",
+    "temporary_units_removed": true,
+    "units": 2
+  }
+}
