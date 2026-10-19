@@ -1,6 +1,6 @@
-# Board interface contract — 2.13.0
+# Board interface contract — 2.13.1
 
-The browser REST API and MCP act on one database. Application version is `2.13.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.13.1`; schema version is `14`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -102,6 +102,8 @@ The board reevaluates a blocked task whenever a dependency moves to `review` or 
 Unfinished executions or unconfirmed cleanup on the ticket or its family retain a generic `runtime_cleanup` block; a family stop retains `delegation`. These reasons disclose no other executor identity. A clean ordinary execution can become eligible for reevaluation, while a cancelled family is never reopened by this maintenance. Reasonless legacy blocks are released only after all current reasons are absent. The fixed `get_development_frame` endpoint skips the sweep on all four internal policy reads; it adds no ticket or discussion mutation. Existing `get_thread` legacy expiration maintenance remains.
 
 Before reevaluating a legacy block without a recorded reason or expiry, the board checks its status-changing audit history. A last human `ticket_updated` status edit preserves the block as `Blocked manually by <name>`, with that human as `unblock_owner`, no recheck and one `legacy_block_classified` event. A claim release with no explicit status preserves the prior status and is skipped when reconstructing this provenance. The classification runs only after the caller's current project scope and membership checks. It covers already-migrated schema13 data; it never re-blocks tickets that were previously released or reconstructs unaudited writes.
+
+An open, unclaimed ticket (`todo`, or `in_progress` with an expired claim) whose delegation family is cancelled, finished (`review_ready`) or past its deadline, or whose Runtime cleanup is unconfirmed, is projected with `work_state=blocked`, `ready=false` and the derived `block_reasons` (`delegation`, `runtime_cleanup`); `get_work` lists it neither in `ready` nor in `recovery`. Its stored status is unchanged and a human status edit does not resume the family. Family stops that a policy or grant change could undo are not projected on such tickets; the claim and Runtime guards still refuse them (2.13.1).
 
 When an explicit block expires and its `unblock_owner` is an active agent profile of the project, the task returns to `todo` assigned to that agent with a recheck message: expiry is not evidence that the wait is over, and that agent must verify it or block again with a reason before work starts (2.12.1).
 
