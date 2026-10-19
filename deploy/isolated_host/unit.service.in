@@ -1,0 +1,36 @@
+[Unit]
+Description=Blackoutburst text host for @USER@ (explicit finite activation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@HOME@
+ExecStart=@PYTHON@ -I -B @RELEASE@/owner_entry.py --release @RELEASE@ --owner @USER@ run
+Restart=no
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=330
+SendSIGKILL=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@HOME@
+InaccessiblePaths=-/home/ubuntu -/root @OTHER_HOME@
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+TasksMax=64
+MemoryMax=2G
+CPUQuota=100%
+UnsetEnvironment=OPENAI_API_KEY OPENAI_BASE_URL AZURE_OPENAI_API_KEY ANTHROPIC_API_KEY SSH_AUTH_SOCK PYTHONPATH PYTHONHOME
+
+[Install]
+WantedBy=multi-user.target
