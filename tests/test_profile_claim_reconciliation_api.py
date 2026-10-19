@@ -18,7 +18,7 @@ def recovery(browser):
     old = board.actor_session(board.authenticate(token), 'runtime-api')
     claimed = board.get_ticket(human, ticket['id'])['ticket']
     blocked = board.update_ticket(old, ticket['id'], claimed['version'], status='blocked',
-        progress='Implementation retained', outcome='Existing result', evidence='Existing verification')
+        blocked_reason='Waiting for the revised profile instructions', progress='Implementation retained', outcome='Existing result', evidence='Existing verification')
     profile = board.get_agent_profile(human, profile_id)
     board.update_agent_profile(human, profile_id, profile['version'], instructions='Revised instructions')
     with sqlite3.connect(board.db_path) as db:

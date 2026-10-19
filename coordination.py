@@ -20,6 +20,8 @@ from projects import ProjectsMixin, _fail, _json, _same_claim, _text, _version
 # every historical positive key intact.
 _QUEUE_EMPTY_PREFIX = '!queue-result-v1:'
 _QUEUE_EMPTY_REASONS = frozenset({'no_ready_ticket', 'unfinished_work', 'waiting_on_human'})
+# Default lifetime of an agent's explicit block before the board rechecks it.
+_DEFAULT_RECHECK_SECONDS = 24 * 3600
 
 
 def strings(value, name, limit=50):
@@ -175,7 +177,12 @@ class CoordinationMixin(ProjectsMixin):
             WHERE d.ticket_id=? ORDER BY t.number""", (row['id'],))]
         result['depends_on'] = [item['id'] for item in dependencies]
         result['dependencies'] = dependencies
-        result['blocked_by'] = [item for item in dependencies if item['status'] != 'done']
+        # A dependency in review has delivered its result: it no longer stops
+        # dependents from claiming and integrating, only from completing.
+        result['blocked_by'] = [item for item in dependencies if item['status'] not in ('done', 'review')]
+        result['delivered_dependencies'] = [item for item in dependencies if item['status'] == 'review']
+        for key in ('blocked_reason', 'unblock_owner', 'recheck_at'):
+            result[key] = row[key]
         result['blocks'] = [dict(item) for item in db.execute("""SELECT t.id,t.number,t.title,t.status
             FROM ticket_dependencies d JOIN tickets t ON t.id=d.ticket_id
             WHERE d.depends_on_id=? ORDER BY t.number""", (row['id'],))]
@@ -206,7 +213,70 @@ class CoordinationMixin(ProjectsMixin):
         result['assignee_presence'] = self._agent_presence(db, row['assignee_agent_id']) if identity else None
         result['assignment_stale'] = self._stale_agent_assignment(db, row)
         result['ready'] = result['work_state'] == 'ready'
+        result['block_reasons'] = self._block_reasons(row, result) if row['status'] == 'blocked' else []
         return result
+
+    @staticmethod
+    def _block_reasons(row, ticket, now=None):
+        """Verifiable reasons keeping a stored block; empty means a ghost."""
+        reasons = []
+        if ticket['waiting_on_human']:
+            reasons.append('human_request')
+        if ticket['blocked_by']:
+            reasons.append('dependency')
+        if row['blocked_reason'] and (row['recheck_at'] is None or row['recheck_at'] > (now or time.time())):
+            reasons.append('explicit')
+        return reasons
+
+    def _reevaluate_blocked(self, db, actor, ticket_ids, trigger, announce=True):
+        """Return blocked tickets whose every reason has cleared to todo."""
+        released = []
+        for ticket_id in dict.fromkeys(ticket_ids):
+            row = db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone()
+            if not row or row['status'] != 'blocked' or self._block_reasons(row, self._ticket(row, db)):
+                continue
+            now = time.time()
+            db.execute("""UPDATE tickets SET status='todo',waiting_for_dependencies=0,blocked_reason='',
+                unblock_owner=NULL,recheck_at=NULL,version=version+1,updated_at=? WHERE id=? AND status='blocked'""",
+                (now, ticket_id))
+            db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
+            previous = row['blocked_reason'] or ('expired explicit block' if row['recheck_at'] else 'no recorded reason')
+            self._audit(db, actor, 'ticket_unblocked', {'ticket_id': ticket_id, 'trigger': trigger,
+                                                        'previous_reason': previous[:500]})
+            if announce:
+                self._discussion_event(db, actor, row['thread_id'],
+                    'Board reevaluation: no open human request, unfinished dependency or active block reason '
+                    f'remains ({trigger}). This task is ready again for its assigned agent or any eligible worker.', [])
+            released.append(ticket_id)
+        return released
+
+    def _reevaluate_dependents(self, db, actor, ticket_id, trigger):
+        dependents = [row[0] for row in db.execute(
+            'SELECT ticket_id FROM ticket_dependencies WHERE depends_on_id=?', (ticket_id,))]
+        return self._reevaluate_blocked(db, actor, dependents, trigger)
+
+    def sweep_blocked(self, actor, project_id=''):
+        """Release ghost and expired blocks in the actor's projects."""
+        with self._tx() as db:
+            actor = self._actor(db, actor, 'allow_read')
+            ids = [row[0] for row in db.execute("""SELECT t.id FROM tickets t
+                JOIN project_members m ON m.project_id=t.project_id JOIN projects p ON p.id=t.project_id
+                WHERE m.owner_id=? AND p.archived=0 AND t.status='blocked' AND (?='' OR t.project_id=?)
+                ORDER BY t.updated_at""", (actor['owner_id'], project_id, project_id))]
+            return self._reevaluate_blocked(db, actor, ids, 'periodic reevaluation')
+
+    def _block_values(self, actor, values, now=None):
+        """Normalize optional explicit block metadata from an edit."""
+        reason = values.get('blocked_reason')
+        seconds = values.get('recheck_after_seconds')
+        owner = values.get('unblock_owner')
+        if reason is not None:
+            reason = _text(reason, 'blocked_reason', 0, 2000).strip()
+        if seconds is not None and (type(seconds) is not int or not 300 <= seconds <= 1209600):
+            _fail('recheck_after_seconds must be an integer between 300 and 1209600')
+        if owner is not None:
+            owner = _text(owner, 'unblock_owner', 1, 200).strip()
+        return reason, seconds, owner
 
     def _claim_checks(self, db, actor, row, recovery_evidence=''):
         self._delegation_claim_check(db,actor,row)
@@ -323,14 +393,22 @@ class CoordinationMixin(ProjectsMixin):
             if next_status == 'review' and (ticket['blocked_by'] or ticket['waiting_on_human']):
                 _fail('Resolve prerequisite tasks and human requests before review', 409)
             now = time.time()
+            explicit = next_status == 'blocked' and status == 'blocked'
             db.execute('''UPDATE tickets SET status=?,claimant=NULL,claim_started_version=NULL,
-                lease_expires_at=NULL,assignee_agent_id=?,waiting_for_dependencies=?,version=version+1,
+                lease_expires_at=NULL,assignee_agent_id=?,waiting_for_dependencies=?,
+                blocked_reason=?,unblock_owner=?,recheck_at=?,version=version+1,
                 updated_at=? WHERE id=? AND version=?''',
                 (next_status, None if unassign_self else identity,
-                 0 if status else row['waiting_for_dependencies'], now, ticket_id, expected_version))
+                 0 if status else row['waiting_for_dependencies'],
+                 reason[:2000] if explicit else (row['blocked_reason'] if next_status == 'blocked' else ''),
+                 identity if explicit else (row['unblock_owner'] if next_status == 'blocked' else None),
+                 now + _DEFAULT_RECHECK_SECONDS if explicit else (row['recheck_at'] if next_status == 'blocked' else None),
+                 now, ticket_id, expected_version))
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             self._remember(db, actor, 'release_ticket', idempotency_key, payload, ticket_id)
             self._audit(db, actor, 'ticket_released', dict(payload, version=expected_version+1))
+            if next_status in ('review', 'done'):
+                self._reevaluate_dependents(db, actor, ticket_id, f'#{row["number"]} moved to {next_status}')
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)
 
     def reconcile_profile_claim(self, actor, ticket_id, expected_version, idempotency_key, recovery_evidence):
@@ -533,8 +611,13 @@ class CoordinationMixin(ProjectsMixin):
             ticket['project_name'] = row['project_name']
             yield ticket
 
-    def get_work(self, actor, project_id='', limit=20, *, _mcp_all=False):
+    def get_work(self, actor, project_id='', limit=20, *, _mcp_all=False, _sweep=True):
         limit = self._limit(limit)
+        # Agents poll get_work every few minutes, so ghost and expired blocks
+        # are released without a human edit or a separate scheduler. Callers
+        # already inside a transaction skip this write.
+        if _sweep:
+            self.sweep_blocked(actor, project_id)
         with self._connection() as db:
             actor = self._actor(db, actor, 'allow_read')
             ready = []
@@ -750,8 +833,11 @@ class CoordinationMixin(ProjectsMixin):
             db.execute("UPDATE human_requests SET status='resolved',answer=?,resolved_at=? WHERE id=?", (answer, now, request_id))
             self._discussion_event(db, actor, row['thread_id'], 'Human response: '+answer, [])
             other = db.execute("SELECT 1 FROM human_requests WHERE ticket_id=? AND status='open'", (row['id'],)).fetchone()
-            if not other:
+            if not other and row['status'] != 'blocked':
                 db.execute("UPDATE tickets SET status='todo',version=version+1,updated_at=? WHERE id=?", (now, row['id']))
+            elif not other:
+                # Other verifiable reasons (dependencies, explicit block) keep it blocked.
+                self._reevaluate_blocked(db, actor, [row['id']], 'human request answered', announce=False)
             self._audit(db, actor, 'human_input_resolved', {'ticket_id': row['id'], 'request_id': request_id})
             return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone())
 
@@ -834,16 +920,8 @@ class CoordinationMixin(ProjectsMixin):
                     'parent':self._ticket(self._ticket_member(db,actor,parent_ticket_id),db),'retried':False}
 
     def _unblock_dependents(self, db, actor, completed_id):
-        rows=list(db.execute("""SELECT t.* FROM tickets t JOIN ticket_dependencies d ON d.ticket_id=t.id
-            WHERE d.depends_on_id=? AND t.waiting_for_dependencies=1""",(completed_id,)))
-        for row in rows:
-            detail=self._ticket(row,db)
-            if detail['blocked_by'] or detail['waiting_on_human']:
-                continue
-            db.execute("""UPDATE tickets SET status='todo',waiting_for_dependencies=0,
-                version=version+1,updated_at=? WHERE id=?""",(time.time(),row['id']))
-            self._audit(db,actor,'ticket_unblocked',{'ticket_id':row['id'],'completed_dependency':completed_id})
-            self._discussion_event(db,actor,row['thread_id'],'All delegated prerequisites are complete. This task is ready for its original agent to resume.',[])
+        number = db.execute('SELECT number FROM tickets WHERE id=?', (completed_id,)).fetchone()
+        self._reevaluate_dependents(db, actor, completed_id, f'dependency #{number[0] if number else "?"} completed')
 
     def create_pairing(self, actor, label, capabilities=None):
         _text(label, 'label', 1, 100)

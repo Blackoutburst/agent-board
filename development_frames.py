@@ -178,7 +178,7 @@ def get_development_frame(board, fresh_actor, **values):
             frame[role][field] = read(method, session_id, **arguments)
             _bounded(frame)
         for role, session in [('selected', selected), ('parent', parent)]:
-            put(role, 'policy_first', 'get_work', session, project_id=selection['project_id'], limit=1)
+            put(role, 'policy_first', 'get_work', session, project_id=selection['project_id'], limit=1, _sweep=False)
         put('selected', 'first', 'get_ticket', selected, ticket_id=selection['ticket_id'])
         put('parent', 'first', 'get_ticket', parent, ticket_id=selection['parent_ticket_id'])
         put('family', 'first', 'get_delegation_family', parent, family_id=selection['family_id'])
@@ -188,7 +188,7 @@ def get_development_frame(board, fresh_actor, **values):
         put('parent', 'last', 'get_ticket', parent, ticket_id=selection['parent_ticket_id'])
         put('family', 'last', 'get_delegation_family', parent, family_id=selection['family_id'])
         for role, session in [('selected', selected), ('parent', parent)]:
-            put(role, 'policy_last', 'get_work', session, project_id=selection['project_id'], limit=1)
+            put(role, 'policy_last', 'get_work', session, project_id=selection['project_id'], limit=1, _sweep=False)
         if _selection(board, fresh_actor, args) != selection:
             _fail()
         return _bounded(frame)

@@ -17,6 +17,7 @@ STATUSES = ("todo", "in_progress", "blocked", "review", "done")
 PRIORITIES = ("low", "normal", "high", "urgent")
 _PROJECT_TEXT = {"name": (1, 120), "description": (0, 4000), "context": (0, 30000),
                  "repository_url": (0, 2000), "environment": (0, 4000)}
+_DEFAULT_BLOCK_RECHECK = 24 * 3600
 _TICKET_TEXT = {"title": (1, 200), "description": (0, 20000), "acceptance_criteria": (0, 20000),
                 "outcome": (0, 20000), "evidence": (0, 20000)}
 
@@ -328,7 +329,8 @@ class ProjectsMixin:
 
     def update_ticket(self, actor, ticket_id, expected_version, **changes):
         _version(expected_version)
-        allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim", "depends_on", "labels", "required_skills", "resource", "progress", "assignee_agent_id", "attachment_ids"}
+        allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim", "depends_on", "labels", "required_skills", "resource", "progress", "assignee_agent_id", "attachment_ids",
+                                       "blocked_reason", "recheck_after_seconds", "unblock_owner"}
         if not changes or set(changes) - allowed:
             _fail("Supply only editable ticket fields")
         values = {key: _text(value, key, *_TICKET_TEXT[key]) for key, value in changes.items() if key in _TICKET_TEXT}
@@ -336,6 +338,7 @@ class ProjectsMixin:
             if key in changes:
                 values[key] = _choice(changes[key], key, choices)
         values.update(self._coordination_values(changes))
+        block_reason, block_seconds, block_owner = self._block_values(actor, changes)
         release = changes.get("release_claim", False)
         if type(release) is not bool:
             _fail("release_claim must be a boolean")
@@ -403,11 +406,39 @@ class ProjectsMixin:
             detail = self._ticket(self._ticket_member(db, actor, ticket_id), db)
             if status in {"in_progress", "review", "done"} and (detail["blocked_by"] or detail["waiting_on_human"]):
                 _fail("Resolve prerequisite tasks and human requests first", 409)
+            if status == "done" and detail["delivered_dependencies"]:
+                _fail("Accept or complete delivered prerequisite tasks before completing this one", 409)
+            now = time.time()
+            if status == "blocked":
+                # A stored block needs a verifiable reason; anything else is a
+                # ghost that no agent could ever release.
+                if block_reason is None and row["status"] == "blocked":
+                    block_reason = row["blocked_reason"]
+                verifiable = detail["blocked_by"] or detail["waiting_on_human"]
+                if not block_reason and not verifiable:
+                    if actor["kind"] == "agent":
+                        _fail("A blocked task needs a blocked_reason (with optional recheck_after_seconds), "
+                              "an open human request or an unfinished dependency", 400)
+                    block_reason = "Blocked manually by " + self._author(db, actor)["display_name"]
+                if block_reason and (block_reason != row["blocked_reason"] or block_seconds is not None):
+                    values["blocked_reason"] = block_reason
+                    values["unblock_owner"] = block_owner or (self._author(db, actor).get("agent_id") or actor["owner_id"])
+                    if block_seconds is not None or actor["kind"] == "agent":
+                        values["recheck_at"] = now + (block_seconds or _DEFAULT_BLOCK_RECHECK)
+                    else:
+                        values["recheck_at"] = None
+                elif not block_reason:
+                    values.update(blocked_reason="", unblock_owner=None, recheck_at=None)
+            elif row["status"] == "blocked" or row["blocked_reason"]:
+                values.update(blocked_reason="", unblock_owner=None, recheck_at=None)
+                if "waiting_for_dependencies" not in values:
+                    values["waiting_for_dependencies"] = 0
+            elif block_reason or block_seconds is not None:
+                _fail("blocked_reason and recheck_after_seconds only apply to a blocked task")
             if status == "done":
                 values["lease_expires_at"] = None
             elif actor["kind"] == "agent" and not release:
                 values["lease_expires_at"] = time.time() + self.ticket_lease_seconds
-            now = time.time()
             # Even a no-op explicit release updates the optimistic version. No
             # caller may overwrite a newer state with a stale form.
             assignments = ",".join(key + "=?" for key in values)
@@ -425,8 +456,10 @@ class ProjectsMixin:
                 notice_row=db.execute('SELECT * FROM tickets WHERE id=?',(ticket_id,)).fetchone()
                 self._assignment_notice(db,actor,notice_row,row['assignee_agent_id'],'unassigned',expected_version+1)
                 self._assignment_notice(db,actor,notice_row,values['assignee_agent_id'],'assigned',expected_version+1)
-            if status == "done":
-                self._unblock_dependents(db, actor, ticket_id)
+            if status in ("done", "review") and status != row["status"]:
+                self._reevaluate_dependents(db, actor, ticket_id, f"#{row['number']} moved to {status}")
+            if status == "blocked" and "depends_on" in changes:
+                self._reevaluate_blocked(db, actor, [ticket_id], "dependencies edited")
             return self._ticket(self._ticket_member(db, actor, ticket_id), db)
 
     def _set_ticket_attachments(self, db, ticket, attachment_ids):

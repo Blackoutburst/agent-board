@@ -66,7 +66,10 @@ sources de discussion : les comparaisons suivent la projection du contexte.
 
 Les lectures restent séquentielles et utilisent leurs connexions/transactions
 habituelles : cette fenêtre n’est pas atomique. `get_thread` conserve sa
-maintenance préexistante d’expiration des anciennes tâches. L’outil n’ajoute ni
+maintenance préexistante d’expiration des anciennes tâches. Les quatre lectures
+`get_work` internes désactivent explicitement la réévaluation des blocages ; les
+appels ordinaires conservent cette maintenance et leurs contrôles de permission.
+L’outil n’ajoute ni
 présence, message, claim, renouvellement de bail, Runtime ou exécution. Il ne
 met pas les droits en cache et ne prolonge aucun délai. Le regroupement réduit
 les allers réseau ; les tests simulés ne prouvent pas que le chemin réel respecte

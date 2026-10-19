@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "kind": "verifiable_block_release",
+  "date": "2026-10-19",
+  "ticket": "Board overhaul #42",
+  "board_version": "2.11.0",
+  "database_schema": 13,
+  "adapter_version": "0.25.0",
+  "upstream_base_revision": "fae6d393e027d34e706e41cd7acf9d4406975a78",
+  "trigger": {
+    "observed": "25 open tickets: 12 blocked with no open human request (7 also without an open dependency), 5 todo cascading from them, 5 in review without reviewer; delegated parents held by children in review",
+    "root_causes": [
+      "blocked was a stored status without reason; only human answers and child done restored todo",
+      "claims and agent updates were refused on blocked tasks, so only a human could clear a ghost",
+      "delegated parents only woke on child done, never on review",
+      "Codex worker failures published reasonless blocked",
+      "release_ticket(status=blocked) stored no recheck"
+    ]
+  },
+  "change": [
+    "schema 13 adds tickets.blocked_reason, unblock_owner, recheck_at (idempotent column add)",
+    "agent status=blocked requires blocked_reason unless a human request or unfinished dependency explains it; recheck_after_seconds 300..1209600, default 24h",
+    "human manual blocks recorded without recheck and never auto-released",
+    "dependency in review no longer blocks claiming (delivered_dependencies) but still prevents done",
+    "reevaluation on dependency review/done, human answer, dependency edit and every get_work poll; released tasks return to todo with ticket_unblocked audit and thread message",
+    "Codex board worker failures publish blocked with reason and a 1h recheck; worker client validates the new fields"
+  ],
+  "verification": {
+    "board_tests": "898 passed (887 existing + 11 new in tests/test_blocked_reevaluation.py)",
+    "adapter_tests": "1022 passed (worker client and board worker assertions extended)"
+  },
+  "limits": [
+    "No dedicated review queue or reviewer timeout yet; reviews without reviewer still wait (follow-up of #42 steps 4-5)",
+    "No retry counter or escalation after repeated worker failures; the 1h recheck repeats the attempt",
+    "No browser UI change; block fields are visible through the API and MCP"
+  ]
+}

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from board import BoardError
+from board import Board, BoardError
 from development_frames import (get_development_frame, wire_frame, encoded,
     MAX_DATA_BYTES, MAX_WIRE_BYTES)
 from test_delegation_families_api import family_api, opened
@@ -311,3 +311,66 @@ def test_nonbmp_and_escaped_source_survives_the_actual_mcp_wire(frame_fixture):
     result=response.json()['result']
     assert not result.get('isError')
     assert result['structuredContent']['selected']['pages'][0]['response']['messages'][0]['body']==body
+
+
+def test_frame_policy_reads_do_not_sweep_blocks_but_ordinary_get_work_does(frame_fixture):
+    browser, _, args = frame_fixture
+    board, human, project = browser[1], browser[2], browser[4]
+    ghost = board.create_ticket(human, project['id'], 'Legacy block fixture',
+                                idempotency_key='frame-legacy-block')
+    with board._connection() as db:
+        db.execute("UPDATE tickets SET status='blocked',blocked_reason='',recheck_at=NULL WHERE id=?", (ghost['id'],))
+        db.commit()
+    before = board.get_ticket(human, ghost['id'])['ticket']
+    events = board.list_activity(human, ticket_id=ghost['id'])
+    history = board.get_thread(human, ghost['thread_id'])['messages']
+    with patch.object(board, 'sweep_blocked', wraps=board.sweep_blocked) as sweep:
+        frame = http_frame(frame_fixture)
+        sweep.assert_not_called()
+    assert frame['selection']['ticket_id'] == args['ticket_id']
+    after = board.get_ticket(human, ghost['id'])['ticket']
+    assert (after['status'], after['version']) == ('blocked', before['version'])
+    assert board.list_activity(human, ticket_id=ghost['id']) == events
+    assert board.get_thread(human, ghost['thread_id'])['messages'] == history
+    # Exercise the ordinary public MCP tool, with its usual permission checks.
+    from test_runtime_api import rpc
+    rpc(browser, 'get_work', {'project_id': project['id']})
+    after = board.get_ticket(human, ghost['id'])['ticket']
+    assert after['status'] == 'todo' and after['version'] == before['version'] + 1
+    assert len([event for event in board.list_activity(human, ticket_id=ghost['id'])
+                if event['event'] == 'ticket_unblocked']) == 1
+
+
+def test_observation_only_policy_reads_keep_read_permission_guards(frame_fixture):
+    browser, _, args = frame_fixture
+    board, human, token = browser[1], browser[2], browser[3]
+    actor = board.actor_session(board.authenticate(token), args['session_id'])
+    board.set_policy(human, False, True, True, True, [], [])
+    with pytest.raises(BoardError) as rejected:
+        board.get_work(actor, project_id=browser[4]['id'], _sweep=False)
+    assert rejected.value.status == 403
+    assert 'development_frame_unavailable' in json.dumps(http_frame(frame_fixture, error=True))
+
+
+def test_schema12_migration_preserves_live_family_and_frame_identities(frame_fixture):
+    browser, family, args = frame_fixture
+    board = browser[1]
+    before = http_frame(frame_fixture)
+    # Model a pre-schema13 store with real family/session/claim records. Reopen
+    # through the production migration path, never by disabling access guards.
+    with board._connection() as db:
+        for column in ('blocked_reason', 'unblock_owner', 'recheck_at'):
+            db.execute('ALTER TABLE tickets DROP COLUMN ' + column)
+        db.execute('PRAGMA user_version=12')
+        db.commit()
+    migrated = Board(board.data_dir)
+    with migrated._connection() as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
+        assert {'blocked_reason', 'unblock_owner', 'recheck_at'} <= {
+            row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
+    after = http_frame(frame_fixture)
+    assert after['selection'] == before['selection']
+    assert after['family']['first']['id'] == family['id']
+    for role in ('selected', 'parent'):
+        assert after[role]['first']['ticket'] == before[role]['first']['ticket']
+    assert after['selected']['first']['ticket']['id'] == args['ticket_id']

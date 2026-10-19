@@ -1,6 +1,6 @@
-# Board interface contract — 2.11.0
+# Board interface contract — 2.12.0
 
-The browser REST API and MCP act on one database. Application version is `2.11.0`; schema version is `12`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.12.0`; schema version is `13`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Identity and authorization
 
@@ -90,6 +90,14 @@ Task responses include `id`, project-local `number`, `project_id`, discussion `t
 Coordination fields are `depends_on`, expanded `dependencies`, unfinished `blocked_by`, downstream `blocks`, human requests, `claim_expired`, derived `work_state` and `ready`. `assignee_presence` describes the assigned profile's aggregate check-in; `assignment_stale` indicates that its reservation may yield during a successful claim.
 
 Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. Derived work states distinguish ready work, running work, dependencies, waiting on a human, expired claims requiring recovery, review and completion.
+
+## Verifiable blocks (2.11, schema 13)
+
+A stored `blocked` status must be explained by an open human request, an unfinished dependency, or an explicit `blocked_reason`. Agents setting `status=blocked` through `update_ticket` must supply `blocked_reason` unless one of the first two applies; `recheck_after_seconds` (300–1209600, default 86400) sets `recheck_at`, and `unblock_owner` defaults to the agent profile. `release_ticket(status="blocked")` stores its `reason` the same way with the default recheck. A human editor may block without a reason; it is recorded as a manual block without recheck and is never released automatically.
+
+`blocked_reason`, `unblock_owner`, `recheck_at` and the derived `block_reasons` (`human_request`, `dependency`, `explicit`) are returned with each task. A dependency in `review` has delivered its result: it no longer appears in `blocked_by`, is listed in `delivered_dependencies`, and only prevents the dependent from reaching `done`.
+
+The board reevaluates a blocked task whenever a dependency moves to `review` or `done`, a human request is answered, its dependencies are edited, and on every `get_work` call for the caller's projects. A task with no remaining reason returns to `todo`, clearing its block fields, with a `ticket_unblocked` audit event and a thread message; answering a human request stays silent beyond the answer itself. Reasonless blocks left by older releases are therefore released by the first poll after deployment. The fixed `get_development_frame` observation endpoint skips this sweep on its internal policy reads; ordinary `get_work` calls retain it with unchanged permission checks.
 
 ## Mutation and concurrency rules
 

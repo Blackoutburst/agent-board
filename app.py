@@ -230,6 +230,11 @@ class TicketChanges(ProjectBody):
     resource: str | None = Field(default=None, max_length=256)
     progress: str | None = Field(default=None, max_length=20000)
     assignee_agent_id: str | None = Field(default=None, max_length=200)
+    # Required with status=blocked unless an open human request or unfinished
+    # dependency already explains the block; the board rechecks it later.
+    blocked_reason: str | None = Field(default=None, max_length=2000)
+    recheck_after_seconds: int | None = Field(default=None, ge=300, le=1209600)
+    unblock_owner: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="before")
     @classmethod
@@ -714,7 +719,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @mcp.tool()
     async def update_ticket(session_id: str, ticket_id: str, expected_version: Version,
                             changes: TicketChanges, view: Literal["compact", "full"] = "compact") -> dict:
-        """Update a ticket claimed by this session, requiring work-request permission and the current version. Omit unchanged fields; reassignment and clearing assignee_owner_id are reserved to human members. Done requires outcome and evidence. release_claim explicitly releases responsibility; use release_ticket to retain self-assignment for later status correction or to remove your own agent assignment. Does not execute work; do not retry conflicts without rereading."""
+        """Update a ticket claimed by this session, requiring work-request permission and the current version. Omit unchanged fields; reassignment and clearing assignee_owner_id are reserved to human members. Done requires outcome and evidence. status=blocked requires blocked_reason (rechecked after recheck_after_seconds, default 24h) unless an open human request or unfinished dependency explains it; a dependency in review no longer blocks claiming. release_claim explicitly releases responsibility; use release_ticket to retain self-assignment for later status correction or to remove your own agent assignment. Does not execute work; do not retry conflicts without rereading."""
         return _view(board.update_ticket(session_actor(session_id), ticket_id, expected_version,
                                    **changes.model_dump(exclude_unset=True)),view)
 
@@ -992,7 +997,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.11.0", "schema_version": 12, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame"]}
+        return {"status": "ok", "version": "2.12.0", "schema_version": 13, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

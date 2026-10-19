@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 import json
+import time
 import sys
 import tempfile
 import unittest
@@ -302,6 +303,10 @@ class BoardWorkerTests(unittest.TestCase):
         ticket = self.read()
         self.assertIsNone(ticket['claimant'])
         self.assertNotIn('PRIVATE_ARBITRARY_REASON', json.dumps(result) + ticket['outcome'] + ticket['evidence'])
+        # The failure is a recheckable block, never a reasonless ghost.
+        self.assertTrue(ticket['blocked_reason'].startswith('Codex text turn could not complete'))
+        self.assertEqual(ticket['block_reasons'], ['explicit'])
+        self.assertLessEqual(ticket['recheck_at'] - time.time(), 3600)
 
     def test_real_transport_shaped_cancelled_result_has_safe_blocked_publication(self):
         def cancelled(settings, prompt, workspace, **callbacks):
