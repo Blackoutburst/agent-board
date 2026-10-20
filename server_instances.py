@@ -465,7 +465,9 @@ class ServerInstancesMixin:
             if command_id is None and generation != 0:
                 _fail('server_command_not_current', 409)
             cmd = None if command_id is None else db.execute('SELECT * FROM server_instance_commands WHERE id=?', (command_id,)).fetchone()
-            if cmd is not None and cmd['status'] not in ('accepted', 'complete', 'rejected'):
+            cleanup_only = state in ('unknown', 'stopped', 'stopping', 'needs_review')
+            queued_refusal = cmd is not None and cmd['status'] == 'queued' and cmd['action'] != 'stop' and cleanup_only
+            if cmd is not None and cmd['status'] not in ('accepted', 'complete', 'rejected') and not queued_refusal:
                 _fail('server_command_not_accepted', 409)
             if state in ('starting', 'ready', 'busy'):
                 if (cmd is None or cmd['status'] == 'rejected' or cmd['action'] == 'stop' or cmd['retired'] or row['desired_state'] != 'running'
@@ -483,7 +485,15 @@ class ServerInstancesMixin:
                 # A later observation must never resurrect an ended/uncertain
                 # activation. A new human command is required after settlement.
                 db.execute('UPDATE server_instance_commands SET retired=1 WHERE id=?', (command_id,))
-            if cmd is not None and cmd['status'] == 'accepted':
+            authorization_refusal = (cmd is not None and cmd['action'] != 'stop' and cleanup_only
+                and bool(self._server_start_reason(db, host, row)))
+            if queued_refusal or (cmd is not None and cmd['status'] == 'accepted' and authorization_refusal):
+                # A withdrawn work permission must not prevent the independent
+                # control channel from refusing an unstarted launch. This
+                # grants no positive execution authority and never touches Runtime.
+                db.execute("UPDATE server_instance_commands SET status='rejected',retired=1,revision=revision+1,updated_at=? WHERE id=?",
+                    (now, command_id))
+            elif cmd is not None and cmd['status'] == 'accepted':
                 if state == 'stopped' and cleanup_confirmed and cmd['action'] == 'restart':
                     db.execute('UPDATE server_instance_commands SET stop_confirmed=1,revision=revision+1,updated_at=? WHERE id=?', (now, command_id))
                 elif cmd['action'] == 'start' and state == 'stopped' and cleanup_confirmed:

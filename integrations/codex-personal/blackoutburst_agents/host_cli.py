@@ -37,6 +37,7 @@ def run(args):
                     if args.host_command == 'enable': output = journal.enable(args.revision)
                     elif args.host_command == 'reconcile': output = HostSupervisor(journal).reconcile(args.batch)
                     else:
+                        if journal.managed():raise HostError('managed_control_channel_required')
                         for signum in (signal.SIGINT,signal.SIGTERM):
                             def stop(*_):
                                 # Set the callback immediately; persist before

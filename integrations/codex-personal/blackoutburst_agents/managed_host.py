@@ -17,6 +17,7 @@ _TABLES = {
     'managed_targets': ('target_id','instance_id','launchspec_sha256','enabled','activation',
                         'generation','remaining','reason'),
     'managed_commands': ('id','payload','payload_sha256','target_id','generation','action','state'),
+    'managed_effects': ('id','method','arguments','payload_sha256','state','result'),
 }
 
 
@@ -85,6 +86,8 @@ class ManagedHostJournalMixin:
                 generation INTEGER NOT NULL,remaining INTEGER NOT NULL,reason TEXT NOT NULL)''')
             db.execute('''CREATE TABLE managed_commands(id TEXT PRIMARY KEY,payload TEXT NOT NULL,payload_sha256 TEXT NOT NULL,
                 target_id TEXT NOT NULL,generation INTEGER NOT NULL,action TEXT NOT NULL,state TEXT NOT NULL)''')
+            db.execute('''CREATE TABLE managed_effects(id TEXT PRIMARY KEY,method TEXT NOT NULL,arguments TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,state TEXT NOT NULL,result TEXT NOT NULL)''')
             db.execute('INSERT INTO managed_settings VALUES(1,?,?)',(host_id,hashed))
             db.executemany("INSERT INTO managed_targets VALUES(?,'',?,0,'',0,0,'not_enabled')",
                            [(k,e['launchspec_sha256']) for k,e in entries.items()])
@@ -120,6 +123,72 @@ class ManagedHostJournalMixin:
             raise HostError('host_corrupt')
         value['enabled']=bool(value['enabled'])
         return value
+
+    def managed_settings(self):
+        row=self._db.execute('SELECT * FROM managed_settings WHERE id=1').fetchone()
+        if row is None:raise HostError('host_corrupt')
+        return dict(row)
+
+    def managed_command(self, command_id):
+        row=self._db.execute('SELECT * FROM managed_commands WHERE id=?',(command_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def begin_managed_effect(self, identity, method, arguments):
+        """Preserve the FIRST CAS and key, even if a reply is lost."""
+        _opaque(identity)
+        if method not in ('publish_server_catalog','ack_instance_command','report_instance_state'):
+            raise HostError('managed_effect_invalid')
+        from .server_control_protocol import arguments as validate_arguments
+        validate_arguments(method,arguments)
+        with self._tx() as db:
+            old=db.execute('SELECT * FROM managed_effects WHERE id=?',(identity,)).fetchone()
+            if old:
+                value=self.managed_effect(identity)
+                comparable=lambda a:{k:v for k,v in a.items() if k!='expected_revision'}
+                if value['method']!=method or comparable(value['arguments'])!=comparable(arguments):
+                    raise HostError('managed_effect_conflict')
+                return value
+            encoded=json.dumps(arguments,sort_keys=True,separators=(',',':'))
+            db.execute("INSERT INTO managed_effects VALUES(?,?,?,?,'pending','{}')",
+                       (identity,method,encoded,digest(arguments)))
+            return self.managed_effect(identity)
+
+    def managed_effect(self, identity):
+        row=self._db.execute('SELECT * FROM managed_effects WHERE id=?',(identity,)).fetchone()
+        if row is None:return None
+        try:
+            value=dict(row)
+            if len(value['arguments'].encode())>16384 or len(value['result'].encode())>65536:raise ValueError()
+            value['arguments']=json.loads(value['arguments']);value['result']=json.loads(value['result'])
+            from .server_control_protocol import arguments,response
+            arguments(value['method'],value['arguments'])
+            if value['payload_sha256']!=digest(value['arguments']) or value['state'] not in ('pending','complete','superseded'):
+                raise ValueError()
+            if value['state']=='complete':response(value['method'],value['result'])
+            return value
+        except (ValueError,TypeError,KeyError,RecursionError,UnicodeError):raise HostError('host_corrupt') from None
+
+    def pending_managed_effects(self):
+        return [self.managed_effect(r[0]) for r in self._db.execute(
+            "SELECT id FROM managed_effects WHERE state='pending' ORDER BY rowid LIMIT 64")]
+
+    def finish_managed_effect(self, identity, result):
+        from .server_control_protocol import response
+        with self._tx() as db:
+            row=self.managed_effect(identity)
+            if row is None:raise HostError('managed_effect_invalid')
+            response(row['method'],result)
+            if row['state']=='complete':
+                if row['result']!=result:raise HostError('managed_effect_conflict')
+                return row
+            if row['state']!='pending':raise HostError('managed_effect_conflict')
+            db.execute("UPDATE managed_effects SET state='complete',result=? WHERE id=?",
+                       (json.dumps(result,sort_keys=True,separators=(',',':')),identity))
+            return self.managed_effect(identity)
+
+    def supersede_managed_effect(self, identity):
+        with self._tx() as db:
+            db.execute("UPDATE managed_effects SET state='superseded' WHERE id=? AND state='pending'",(identity,))
 
     def target_token(self, target_id):
         if not self.managed():return None
