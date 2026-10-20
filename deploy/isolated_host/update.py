@@ -404,7 +404,7 @@ def update_existing(directory,*,expected_old_release,expected_new_release):
             account_baseline=_accounts(accounts)
             def check_accounts():
                 if _accounts(accounts)!=account_baseline:fail('existing_owner_identity_changed')
-            expected_units={};new_units={};pins={}
+            expected_units={};new_units={};pins={};installed_new=None
             for username in OWNER_NAMES:
                 name=unit_name(username)
                 expected_units[name]=render_unit(old.data['unit.service.in'].decode(),old.manifest,old.path,username).encode()
@@ -413,6 +413,7 @@ def update_existing(directory,*,expected_old_release,expected_new_release):
                 if data!=expected_units[name]:fail('old_unit_bytes_changed')
             def recheck(expected):
                 base.verify();releases.verify();installations.verify();units.verify();old.verify();new.verify();runtime.verify()
+                if installed_new is not None:installed_new.verify()
                 if file_pin(base.stat('.install.lock'))!=lockpin:fail('install_lock_changed')
                 if file_pin(installations.stat(expected_old_release+'.json'))!=receipt_pin:fail('old_installation_receipt_changed')
                 check_accounts();_services();_links()
@@ -426,7 +427,7 @@ def update_existing(directory,*,expected_old_release,expected_new_release):
             operation=str(uuid.uuid4());backup=stack.enter_context(updates.mkdir(operation))
             backup.new('plan.json',encoded(_plan(new,expected_old_release,expected_new_release)),0o400)
             for index,name in enumerate(expected_units):backup.new('old-'+str(index),expected_units[name],0o400)
-            written=[];event=0
+            written=[];event=0;receipt_attempted=False
             def record(phase,**values):
                 nonlocal event
                 event+=1
@@ -434,7 +435,7 @@ def update_existing(directory,*,expected_old_release,expected_new_release):
                 backup.new('event-'+str(event).zfill(3)+'.json',encoded({'phase':phase,**values}),0o400)
             try:
                 record('release_intent');recheck(pins);_new_release(releases,expected_new_release,new)
-                with Bundle(RELEASES/expected_new_release,expected_new_release,installed=True):pass
+                installed_new=stack.enter_context(Bundle(RELEASES/expected_new_release,expected_new_release,installed=True))
                 record('release_verified')
                 for index,name in enumerate(expected_units):
                     recheck(pins);record('unit_exchange_intent',unit=name)
@@ -444,13 +445,22 @@ def update_existing(directory,*,expected_old_release,expected_new_release):
                 record('units_reloaded_inactive_disabled')
                 result={**_plan(new,expected_old_release,expected_new_release),'status':'updated_disabled',
                     'backup_id':operation,'services_confirmed_inactive_disabled':True}
-                backup.new('result.json',encoded(result),0o400)
+                # This last durable receipt is the commit boundary. An I/O
+                # exception during it is ambiguous: preserve both known states
+                # for review instead of rolling units back under a possibly
+                # committed new installation receipt.
+                receipt_attempted=True
                 installations.new(expected_new_release+'.json',encoded({**receipt,'bundle_id':expected_new_release}),0o600)
+                backup.new('result.json',encoded(result),0o400)
                 return result
             except BaseException:
+                if receipt_attempted:
+                    try:record('commit_receipt_uncertain_requires_review')
+                    except BaseException:pass
+                    raise PackageError('update_commit_requires_review') from None
                 rollback=True
                 try:
-                    runtime.verify();_services();check_accounts()
+                    base.verify();units.verify();old.verify();runtime.verify();_services();check_accounts();_links()
                     for index,(name,pin) in enumerate(reversed(written)):
                         restored=_swap_unit(units,name,pin,new_units[name],expected_units[name],operation,20+index,backup)
                         pins[name]=restored

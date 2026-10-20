@@ -53,8 +53,16 @@ Each immutable, fsynced phase record is created before its corresponding
 effect. An error attempts to restore only recognized unit writes from this
 operation, while the units remain inactive and disabled. An unrecognized
 replacement is never overwritten to manufacture a successful rollback.
+If an exchange succeeds but its archival or fsync fails before its write is
+confirmed, the new inactive unit may remain in place. The operation then
+requires review; complete automatic restoration is not guaranteed.
 The old release, new release, backup and any incomplete stage remain
 inspectable; no release or owner data is deleted.
+
+An interrupted update is never resumed or adopted. Failure during the final
+installation receipt is treated as an ambiguous commit: units and receipts are
+preserved for review, rather than restoring units below a possibly committed
+new receipt. Success is recorded only after that commit boundary.
 
 The only service effect is `systemctl daemon-reload`. The updater does not
 invoke an agent CLI, provider, model, pairing, `managed-prepare`, account

@@ -317,3 +317,21 @@ def test_account_observation_reads_metadata_and_pins_home_inode(case,monkeypatch
     assert before!=after and before[pkg.OWNER_NAMES[0]]['home_identity']!=after[pkg.OWNER_NAMES[0]]['home_identity']
     # The guard covers product observation, not synthetic fixture teardown.
     monkeypatch.setattr(update.os,'open',original_open)
+
+
+@pytest.mark.parametrize('boundary',['installation_receipt','backup_result'])
+def test_ambiguous_final_commit_preserves_new_units_for_review(case,monkeypatch,boundary):
+    original=update.Directory.new
+    def failed(directory,name,data,mode=0o600):
+        if ((boundary=='installation_receipt' and directory.path==case.base/'installations' and name==case.new_id+'.json')
+                or (boundary=='backup_result' and name=='result.json')):
+            raise OSError('synthetic_commit_storage_failure')
+        return original(directory,name,data,mode)
+    monkeypatch.setattr(update.Directory,'new',failed)
+    with pytest.raises(pkg.PackageError,match='update_commit_requires_review'):apply(case)
+    for username in pkg.OWNER_NAMES:
+        assert ' managed-run\n' in (case.units/pkg.unit_name(username)).read_text()
+    assert (case.releases/case.old_id).is_dir() and (case.releases/case.new_id).is_dir()
+    if boundary=='backup_result':
+        receipt=pkg.decode((case.base/'installations'/(case.new_id+'.json')).read_bytes())
+        assert receipt['bundle_id']==case.new_id and receipt['status']=='installed_disabled'
