@@ -2,6 +2,7 @@
 import io
 from contextlib import redirect_stdout
 from unittest.mock import patch
+import copy
 
 import pytest
 import test_isolated_host_entry as fixture
@@ -55,3 +56,38 @@ def test_managed_run_does_not_create_missing_journal_or_broaden_configuration(ca
     with patch.object(entry,'manifest_id',return_value='b'*64):
         with pytest.raises(entry.PackageError):entry.execute(case.args('managed-run'),case.manifest)
     assert not case.journal.exists()
+
+
+def prior_tool(case):
+    manifest=copy.deepcopy(case.manifest)
+    manifest.update(codex_version='codex-cli fixture',files={
+        'tools/codex':{'size':4,'sha256':'a'*64},'tools/codex-resources/bwrap':{'size':4,'sha256':'b'*64}})
+    previous=case.root/'releases'/('a'*64)
+    config=copy.deepcopy(case.config);config['targets'][0]['executable']=str(previous/'tools/codex')
+    return manifest,previous,config
+
+
+def test_update_can_keep_exact_old_root_pinned_cli_without_rewriting_private_config(case):
+    manifest,previous,config=prior_tool(case)
+    with patch.object(entry,'RELEASES',case.root/'releases'),patch.object(entry,'verify_release',return_value=manifest) as verify:
+        entry.check_configuration(config,manifest,case.release,case.username)
+    verify.assert_called_once_with(previous)
+    assert case.config['targets'][0]['executable']==str(case.codex)
+
+
+@pytest.mark.parametrize('changed',['owners','python','board_endpoint','codex_version','tool','bwrap'])
+def test_previous_executable_is_refused_if_any_owner_runtime_or_tool_pin_changed(case,changed):
+    manifest,previous,config=prior_tool(case);old=copy.deepcopy(manifest)
+    if changed in ('tool','bwrap'):
+        k='tools/codex' if changed=='tool' else 'tools/codex-resources/bwrap';old['files'][k]['sha256']='c'*64
+    else:old[changed]='different'
+    with patch.object(entry,'RELEASES',case.root/'releases'),patch.object(entry,'verify_release',return_value=old):
+        with pytest.raises(entry.PackageError,match='unpinned_host_executable'):
+            entry.check_configuration(config,manifest,case.release,case.username)
+
+
+def test_untrusted_old_release_failure_is_never_suppressed(case):
+    manifest,previous,config=prior_tool(case)
+    with patch.object(entry,'RELEASES',case.root/'releases'),patch.object(entry,'verify_release',side_effect=entry.PackageError('pin_changed')):
+        with pytest.raises(entry.PackageError,match='pin_changed'):
+            entry.check_configuration(config,manifest,case.release,case.username)

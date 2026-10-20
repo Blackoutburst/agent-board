@@ -37,6 +37,12 @@ Le déploiement du contrôleur et la connexion officielle du fournisseur sont de
 Unix, l’interpréteur, tous les fichiers publics installés et la configuration
 privée avant toute opération.
 
+La configuration existante peut conserver le chemin du CLI d’une ancienne
+version installée. L’entrée vérifie alors également cette ancienne version
+protégée et exige les mêmes propriétaires, domaine, architecture, interpréteur,
+version CLI et empreintes des deux outils. Le code du contrôleur provient de la
+nouvelle version. Cette vérification ne modifie aucun fichier privé.
+
 Après cette vérification, `managed-prepare --host-id …` prépare explicitement le
 journal arrêté et propre, sans modèle ni connexion réseau. `managed-run` utilise
 le même compte, le même journal, la même connexion locale épinglée et les mêmes
