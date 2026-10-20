@@ -178,6 +178,12 @@ class HostAppendStageMixin:
             if (_encoded(request) != row['request_json'] or _hashed(row['request_json']) != row['request_sha256']
                     or set(request) != {'candidate','configuration_sha256','catalog_sha256'}):
                 raise ValueError
+            _sha(request['configuration_sha256']); _sha(request['catalog_sha256'])
+            # Historical bodies validate on their own, never against today's config.
+            candidate = request['candidate']
+            normalized = validate(candidate, bind_connections=False)
+            if normalized['schema_version'] != 2 or _encoded(normalized,262144) != _encoded(candidate,262144):
+                raise ValueError
             result = json.loads(row['result_json'])
             expected = {} if row['state']=='intent' else self._append_result(row, request)
             if _encoded(result,4096) != row['result_json'] or _encoded(expected,4096) != row['result_json']:

@@ -1,6 +1,7 @@
 """Temporary SQLite/files only: proposals never grant config/Board authority."""
 from contextlib import contextmanager
 import copy
+import hashlib
 import json
 import os
 import pickle
@@ -11,6 +12,7 @@ import pytest
 from blackoutburst_agents.host_config import HostError, digest, validate
 from blackoutburst_agents.host_journal import HostJournal
 from blackoutburst_agents.host_append_stage import _StageAttempt
+from blackoutburst_agents.work_journal import _encode
 from blackoutburst_agents.server_controller import launch_catalog
 from blackoutburst_agents.message_journal import MessageJournal
 from test_host_journal import configuration
@@ -375,6 +377,53 @@ def test_optional_schema_and_records_fail_closed_without_adoption(host, corrupti
             stage(host)
         with pytest.raises(HostError, match='host_append_(schema_invalid|corrupt)'):
             stage(host, key='another-key')
+        assert tuple(host._db.iterdump()) == before
+
+
+@pytest.mark.parametrize('corruption', ['configuration_hash','catalog_hash','candidate_schema','candidate_not_normalized'])
+def test_rehashed_stored_proposal_still_requires_full_canonical_schema(host, corruption):
+    with locked(host):
+        stage(host)
+        row = dict(host._db.execute('SELECT * FROM host_append_stages').fetchone())
+        request = json.loads(row['request_json'])
+        if corruption=='configuration_hash': request['configuration_sha256'] = 'g'*64
+        elif corruption=='catalog_hash': request['catalog_sha256'] = False
+        elif corruption=='candidate_schema': del request['candidate']['interval_seconds']
+        else: request['candidate']['targets'][-1]['workspace'] += '/.'
+        # A coherent checksum and inert receipt must not legitimize malformed data.
+        encoded = _encode(request, 264192, 'fixture_invalid')
+        result = _encode(host._append_result(row, request), 4096, 'fixture_invalid')
+        host._db.execute('UPDATE host_append_stages SET request_json=?,request_sha256=?,result_json=?',
+            (encoded, hashlib.sha256(encoded.encode()).hexdigest(), result))
+        before = tuple(host._db.iterdump())
+        with pytest.raises(HostError, match='host_append_corrupt'):
+            host._append_schema(host._db)
+        for key in ('append-one','another-key'):
+            with pytest.raises(HostError, match='host_append_corrupt'):
+                stage(host, key=key)
+        assert tuple(host._db.iterdump()) == before
+
+
+def test_historical_schema_validation_is_independent_of_current_configuration(host, monkeypatch):
+    with locked(host):
+        stage(host)
+        row = dict(host._db.execute('SELECT * FROM host_append_stages').fetchone())
+        request = json.loads(row['request_json'])
+        # These valid historical pins need not match today's live predecessor.
+        request['configuration_sha256'] = 'a'*64
+        request['catalog_sha256'] = 'b'*64
+        encoded = _encode(request, 264192, 'fixture_invalid')
+        result = _encode(host._append_result(row, request), 4096, 'fixture_invalid')
+        host._db.execute('UPDATE host_append_stages SET request_json=?,request_sha256=?,result_json=?',
+            (encoded, hashlib.sha256(encoded.encode()).hexdigest(), result))
+        before = tuple(host._db.iterdump())
+        def forbidden(*args, **kwargs): raise AssertionError('No live configuration or credential reads')
+        from blackoutburst_agents import host_config, message_config
+        monkeypatch.setattr(host, 'control', forbidden)
+        monkeypatch.setattr(host_config, 'connection_digest', forbidden)
+        monkeypatch.setattr(message_config, 'connection_digest', forbidden)
+        monkeypatch.setattr(message_config, '_connection_file', forbidden)
+        host._append_schema(host._db)
         assert tuple(host._db.iterdump()) == before
 
 
