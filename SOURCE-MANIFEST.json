@@ -35,7 +35,7 @@
     "docs/ONBOARDING.md": "be61d253a9c7f4f2e9e3cae1e8c7fca33ac6cecc30f8ac9d3d563516f6df6ed5",
     "docs/OPERATIONS.md": "de7f83413735b963938964f0e2b567702b6bd850f4d9fda8882a0abc3d133703",
     "docs/PROVIDER-ONBOARDING.md": "99b12d838baf288808c7150537cd1917b6747a3d03bf7679bf93f7516fb14e9b",
-    "docs/SERVER-AGENT-CONTROLS.md": "79346872c56cce38282630869ee35b8e06b1b2462455c2807083740dd7e34d21",
+    "docs/SERVER-AGENT-CONTROLS.md": "c0b414e35ee11b715fb19bb04162d847d2287c52dc3916a008488e5c89c42481",
     "docs/cancellation-poll-release-2026-10-19.json": "86d58ecde6dc437a2552afc55040a744966d6c1649cde8719fa7ef1288a3710d",
     "docs/delegation-families-2026-10-16.json": "62c79eb2bda0ae0e392b5c3158c5bc45302ce1cf2e46aa28993de2d5de5cf0fe",
     "docs/family-release-2026-10-16.json": "f90db2fa1af06931a4bf6bcc8b51a80d378488459626000f2723186e4bf63f2a",
@@ -339,7 +339,7 @@
     "tests/browser_provider_onboarding.cjs": "cfc071239d65c8b25e8538856a4a5cf3f045f9626c6653cbc59d53a7862e013d",
     "tests/browser_requests.cjs": "7c3c77ee30357cdc8b603345ff085a22e962be523f34d4a1fb569885dfda443f",
     "tests/browser_runtime.cjs": "a6857c0eb04dc0e815ff4bb071d881f6974363a407392aaff9c0bd4939aaf3cc",
-    "tests/browser_server_instances.cjs": "c70eee41cf186c44ddf4109dab79024ff26c000c18e145113a091a35de7e7c32",
+    "tests/browser_server_instances.cjs": "d6521c594cef792713c825b05d84bee111959a970f0b814414fb9adf57eedf21",
     "tests/browser_sidebar.cjs": "fdaa6e446387be9be07761d3839131f3ff2468e6e0b8727f42fa8f01344de74a",
     "tests/connector_smoke.py": "db164689da35f076c45cf7ab4a2c1ddb047f6457361cc25e845c894a0741e275",
     "tests/fixtures/schema_v2.sql": "1592c22318b65741308518b6c02ddd61967d80a0893b0a8585a0e7b66e7186ca",
@@ -516,10 +516,10 @@
     "web/index.html": "f73f168c69f73345f34cffae24069b38715ef0876a02e77c7b24b170de6631ce",
     "web/interaction.js": "1413f7d88dffb6c4258dfaced5dfcfdb14d07a9a8f6c3c2e7b54577689323325",
     "web/markdown.js": "2d9d29c87e3eb16ab6791921206b43784675b32ec9fe421eaa98e3f990912242",
-    "web/style.css": "8cfdb2e0e179b2c7357d5eed6378527b9bad52df8318f759abf88b556b22da37",
+    "web/style.css": "427b3aa20047994efe52e846f755b97046aa077329902905b45006d0b3ca2c9c",
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "60d22267bac8d3923e996504f1efbc643d87ee101a12778b09d46f858cbf2fc0"
+    "web/workspace.js": "3c52312a7e5a56c8c72ed353bb9129fb03fae9ed48591bba26bf070a7111a733"
   }
 }
