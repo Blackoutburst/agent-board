@@ -54,7 +54,7 @@ def test_actual_http_lifecycle_has_no_registration_feed_or_runtime_side_effect(t
                         def __init__(self,j):self.journal=j
                         def tick(self,**_):return {'status':'idle','reason':'no_pending_events'}
                     controller=ServerController(journal,client,supervisor_factory=Idle,lock_directory=tmp_path/'locks')
-                    controller.publish(catalog);controller.start_worker();controller.step()
+                    controller.start_worker();controller.publish(catalog);controller.step()
                     def current():
                         r=browser.get('/api/server-hosts/'+host['id']);assert r.status_code==200
                         return r.json()['instances'][0]

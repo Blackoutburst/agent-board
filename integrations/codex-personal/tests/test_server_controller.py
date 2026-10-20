@@ -6,7 +6,7 @@ import time
 import pytest
 from board import Board,BoardError
 from blackoutburst_agents.board_reader import BoardReadError
-from blackoutburst_agents.host_config import HostError,validate
+from blackoutburst_agents.host_config import HostError,validate,digest
 from blackoutburst_agents.host_journal import HostJournal
 from blackoutburst_agents.server_controller import ServerController,launch_catalog
 from blackoutburst_agents.server_control_protocol import arguments,response
@@ -44,7 +44,9 @@ def env(tmp_path):
         def __init__(self,j):self.journal=j
         def tick(self,**kw):return {'status':'idle','reason':'no_pending_events'}
     control=ServerController(journal,client,supervisor_factory=IdleWorker,lock_directory=tmp_path/'locks')
-    control.publish(catalog)
+    published=client.call('publish_server_catalog',{'host_id':host['id'],'expected_catalog_version':0,
+        'entries':catalog,'idempotency_key':'managed-catalog-'+digest(sorted(catalog,key=lambda e:e['catalog_key']))})
+    journal.bind_managed_instances({i['catalog_key']:i['id'] for i in published['instances']})
     e={'board':b,'human':human,'actor':actor,'profile':p,'device':d,'remote':host,'journal':journal,
        'control':control,'client':client,'catalog':catalog,'root':tmp_path}
     try:yield e
@@ -260,3 +262,32 @@ def test_late_shutdown_of_old_object_never_stops_its_successor(env):
             wait_for(lambda:journal.target_selected('primary'))
             first.shutdown();assert journal.target_selected('primary')
         finally:second.shutdown()
+
+
+@pytest.mark.parametrize('boundary',['publish_server_catalog','poll_instance_commands','ack_instance_command','report_instance_state'])
+def test_old_rpc_completion_cannot_mutate_the_successor_after_handoff(env,boundary):
+    old=env['control'];old.start_worker();old.step();command(env)
+    original=env['client'].call;successors=[];captured=[]
+    def handoff(name,args):
+        result=original(name,args)
+        if name==boundary and not captured:
+            captured.append(result);assert old.shutdown()
+            state=HostJournal(env['journal'].directory)
+            new=ServerController(state,BoardControl(env['board'],env['actor']),
+                supervisor_factory=old.factory,lock_directory=env['root']/'locks')
+            successors.append((new,state));new.start_worker();new.publish(env['catalog'])
+            command(env,'stop','successor-stop');new.step()
+            command(env,'start','successor-new-start');new.step()
+            wait_for(lambda:state.target_selected('primary'));new.step()
+            assert state.managed_target('primary')['generation']==2
+        return result
+    env['client'].call=handoff
+    try:
+        with pytest.raises(HostError,match='managed_worker_not_owned'):
+            if boundary=='publish_server_catalog':old.publish(env['catalog'])
+            else:old.step()
+        assert captured and env['journal'].target_selected('primary')
+        assert env['journal'].managed_target('primary')['generation']==2
+    finally:
+        env['client'].call=original
+        for new,state in successors:new.shutdown();state.close()

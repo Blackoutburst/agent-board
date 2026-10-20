@@ -142,13 +142,15 @@ def execute(args, manifest):
                     session_id='fixed-server-control',timeout=5) as client:
                 if client.endpoint!=config['board_endpoint']:raise PackageError('connection_endpoint_mismatch')
                 controller=ServerController(state,client)
-                controller.publish(catalog)
                 cancelled=threading.Event();previous={}
                 try:
+                    controller.start_worker()
+                    controller.publish(catalog)
                     for signum in (signal.SIGINT,signal.SIGTERM):
                         previous[signum]=signal.signal(signum,lambda *_:cancelled.set())
                     output=controller.run(should_cancel=cancelled.is_set)
                 finally:
+                    controller.shutdown()
                     for signum,handler in previous.items():signal.signal(signum,handler)
                 print(json.dumps(output));return 2 if output['status']=='needs_review' else 0
     if args.action == 'doctor':

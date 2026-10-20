@@ -45,12 +45,19 @@ class ServerController:
     def _cancelled(self):
         with self._mutex:return self._quit.is_set() or self._error or self.clock()>=self._until
 
+    def _owned_call(self,name,*args):
+        # Never hold the mutex across network I/O. Every local read or write
+        # that participates in an effect is rechecked after that I/O instead.
+        with self._mutex:
+            if not self._owns_worker:raise HostError('managed_worker_not_owned')
+            return getattr(self.host,name)(*args)
+
     def _effect(self,identity,method,args):
-        record=self.host.begin_managed_effect(identity,method,args)
+        record=self._owned_call('begin_managed_effect',identity,method,args)
         if record['state']=='superseded':raise HostError('managed_effect_superseded')
         if record['state']=='complete':return record['result']
         result=self.client.call(method,record['arguments'])
-        return self.host.finish_managed_effect(identity,result)['result']
+        return self._owned_call('finish_managed_effect',identity,result)['result']
 
     def publish(self,catalog):
         expected=self.host.managed_settings()['catalog_sha256']
@@ -60,7 +67,7 @@ class ServerController:
             'host_id':self.host_id,'expected_catalog_version':0,'entries':catalog,
             'idempotency_key':'managed-catalog-'+expected})
         self._instances(result['instances'])
-        self.host.bind_managed_instances({i['catalog_key']:i['id'] for i in result['instances']})
+        self._owned_call('bind_managed_instances',{i['catalog_key']:i['id'] for i in result['instances']})
         return result
 
     def _instances(self,instances):
@@ -156,7 +163,7 @@ class ServerController:
                 i=by_id.get(args['instance_id'])
                 stale=i is None or any(i[k]!=args[k] for k in ('command_id','generation','launchspec_sha256'))
             if stale:
-                self.host.supersede_managed_effect(effect['id']);continue
+                self._owned_call('supersede_managed_effect',effect['id']);continue
             # Retry the exact original request, not a new revision under its key.
             self._effect(effect['id'],effect['method'],args)
 
@@ -174,6 +181,7 @@ class ServerController:
             if not self._owns_worker:raise HostError('managed_worker_not_owned')
         try:
             snapshot=self.client.call('poll_instance_commands',{'host_id':self.host_id,'limit':20})
+            self._owned_call('managed_settings')
             response('poll_instance_commands',snapshot)
             if snapshot['host_id']!=self.host_id:raise HostError('managed_catalog_conflict')
             self._instances(snapshot['instances'])
@@ -183,17 +191,18 @@ class ServerController:
                 local=self.host.managed_target(i['catalog_key'])
                 if (not snapshot['enabled'] or not i['can_start'] or i['desired_state']=='stopped'
                         or local['generation']!=i['generation'] or self._retired_observation(i)):
-                    self.host.stop_target(i['catalog_key'],'authorization_changed' if not i['can_start'] else 'stopped')
+                    self._owned_call('stop_target',i['catalog_key'],'authorization_changed' if not i['can_start'] else 'stopped')
                 c=i['current_command']
                 if c is not None and c['status'] in ('queued','accepted'):
                     if c['launchspec_sha256']!=i['launchspec_sha256'] or c['instance_version']!=i['version']:
                         if c['action']!='stop':raise HostError('managed_catalog_conflict')
-                    self.host.queue_managed_command(self._normalized(i,c))
+                    self._owned_call('queue_managed_command',self._normalized(i,c))
             self._remote_pending(instances)
             # A recovered outbox response may be older than the poll. Refresh
             # authoritative CAS metadata instead of adopting that old response.
             collected_at=self.clock()
             snapshot=self.client.call('poll_instance_commands',{'host_id':self.host_id,'limit':20})
+            self._owned_call('managed_settings')
             response('poll_instance_commands',snapshot);self._instances(snapshot['instances'])
             if snapshot['host_id']!=self.host_id:raise HostError('managed_catalog_conflict')
             authority_until=collected_at+self.authority_seconds
@@ -202,7 +211,7 @@ class ServerController:
                 target=i['catalog_key'];c=i['current_command']
                 if self.clock()>=authority_until:raise HostError('managed_authority_expired')
                 if c is not None and c['status']=='queued' and (c['action']=='stop' or (snapshot['enabled'] and i['can_start'])):
-                    self.host.queue_managed_command(self._normalized(i,c))
+                    self._owned_call('queue_managed_command',self._normalized(i,c))
                     ack=self._effect('ack-'+c['id'],'ack_instance_command',{
                         'host_id':self.host_id,'command_id':c['id'],'expected_revision':c['revision'],
                         'idempotency_key':'managed-ack-'+c['id']})
@@ -211,6 +220,7 @@ class ServerController:
                     # acceptance and is never proof of running or cleanup.
                     i=ack['instance'];c=i['current_command']
                 with self._mutex:
+                    if not self._owns_worker:raise HostError('managed_worker_not_owned')
                     local=self.host.managed_target(target)
                     busy=self._busy;failed=self._error
                     pending=any(d['state']!='complete' for d in self.host.dispatches())
@@ -219,9 +229,9 @@ class ServerController:
                     and c['status'] in ('accepted','complete') and c['action']!='stop'
                     and c['instance_version']==i['version'] and c['launchspec_sha256']==i['launchspec_sha256']
                     and i['desired_state']=='running' and not self._retired_observation(i))
-                if not allowed:self.host.stop_target(target,'stopped')
+                if not allowed:self._owned_call('stop_target',target,'stopped')
                 if failed or (not busy and (pending or local['reason']=='needs_review')):
-                    self.host.stop_target(target,'needs_review')
+                    self._owned_call('stop_target',target,'needs_review')
                     self._report(i,'needs_review',False,'cleanup_unconfirmed' if pending else 'execution_failed')
                     continue
                 if not busy and c is not None and c['action']=='restart' and not c['stop_confirmed']:
@@ -238,6 +248,7 @@ class ServerController:
                     reason='budget_exhausted' if local['reason']=='budget_exhausted' else 'stopped'
                     self._report(i,'stopped',True,reason)
             with self._mutex:
+                if not self._owns_worker:raise HostError('managed_worker_not_owned')
                 if self.clock()>=authority_until:raise HostError('managed_authority_expired')
                 self._commands=admissions;self._until=authority_until
             self._wake.set()
@@ -247,7 +258,9 @@ class ServerController:
 
     def run(self,*,should_cancel=lambda:False,interval=2):
         if type(interval) not in (float,int) or not .1<=interval<=5:raise HostError('managed_interval_invalid')
-        self.start_worker()
+        if self._thread is None:self.start_worker()
+        with self._mutex:
+            if not self._owns_worker:raise HostError('managed_worker_not_owned')
         try:
             while not should_cancel():
                 try:self.step()
