@@ -227,3 +227,12 @@ class ManagedHostJournalMixin:
         if not target['enabled']:raise HostError('host_target_stopped')
         if target['remaining']<1:raise HostError('host_budget_exhausted')
         db.execute('UPDATE managed_targets SET remaining=remaining-1 WHERE target_id=?',(target_id,))
+
+    def settle_managed_budgets(self):
+        self._require_lock()
+        if not self.managed():return
+        pending={d['target_id'] for d in self.dispatches() if d['state']!='complete'}
+        targets=[r['target_id'] for r in self._db.execute(
+            'SELECT target_id FROM managed_targets WHERE enabled=1 AND remaining=0')]
+        for target in targets:
+            if target not in pending:self.stop_target(target,'budget_exhausted')

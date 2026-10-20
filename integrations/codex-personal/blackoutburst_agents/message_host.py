@@ -103,7 +103,11 @@ class MessageHostSupervisor:
         try:
             for target in targets:
                 if cancelled():return self.receipt('disabled','stopped')
-                with self.resource_factory(self.host,target,config,cancelled) as resources:
+                if not unfinished and not self.host.target_selected(target['id']):continue
+                token=self.host.target_token(target['id'])
+                def target_cancelled(target_id=target['id'],target_token=token):
+                    return cancelled() or self.host.target_cancelled(target_id,target_token)
+                with self.resource_factory(self.host,target,config,target_cancelled) as resources:
                     client,journal,worker=resources.client,resources.journal,resources.worker
                     reader=self._reader(journal,target,config,control['instance_id'])
                     old=unfinished[0] if unfinished else None
@@ -155,7 +159,7 @@ class MessageHostSupervisor:
                         dispatch=self.host.reserve_dispatch(target['id'],batch,activation)
                         operation=journal.bind_worker(operation['id'],dispatch['worker_id'])
                         self.host.link_worker(operation['id'],operation['worker_id'])
-                        result=worker.run(operation['id'],target,config['owner_id'],should_cancel=cancelled)
+                        result=worker.run(operation['id'],target,config['owner_id'],should_cancel=target_cancelled)
                         if result.get('worker_operation_id')!=dispatch['worker_id']:raise HostError('host_reference_conflict')
                         state='complete' if result['status']=='complete' else 'needs_review' if result['status']=='needs_review' else 'pending'
                         self.host.finish_dispatch(operation['id'],state,result)
