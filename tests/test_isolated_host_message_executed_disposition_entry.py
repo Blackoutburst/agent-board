@@ -6,6 +6,7 @@ import json
 import subprocess
 import sqlite3
 import sys
+import uuid
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
@@ -186,6 +187,49 @@ class ExecutedDispositionEntryTests(unittest.TestCase):
                 coordinator.proposal.return_value = changed; coordinator.reset_mock()
                 self.assertCode('recovery_proposal_changed', lambda: self.invoke(args, coordinator=coordinator))
                 coordinator.resume.assert_not_called()
+
+    def dependent_message_references(self):
+        # Real journal APIs supply dependent IDs, while the coordinator is mocked
+        # only to isolate entry wiring; this fixture grants no disposition proof.
+        with MessageJournal(self.journal / 'messages') as messages:
+            reader = messages.reader('one', 'c' * 64, 'now', 2)
+            reader = messages.bind_feed(reader['id'], {'feed_id': '1' * 32,
+                'start_at': 'now', 'limit': 2, 'human_only': True, 'checkpoint': 0})
+            delivery = messages.ingest(reader['id'], {'feed_id': reader['feed_id'],
+                'checkpoint': 0, 'delivery_id': '2' * 32, 'messages': [], 'human_only': True},
+                [{'message_id': 'human-one', 'thread_id': 'thread-a', 'message_hash': 'a' * 64},
+                 {'message_id': 'human-two', 'thread_id': 'thread-a', 'message_hash': 'b' * 64}])
+            chosen = delivery['operations'][0]
+            return messages.bind_worker(chosen['id'], str(uuid.uuid4())), delivery['operations'][1]
+
+    def test_owner_entry_derives_only_unique_dependent_ids_from_explicit_work(self):
+        args = self.prepare(); selected, other = self.dependent_message_references()
+        args.work_id = selected['work_id']; args.batch_id = args.worker_id = None
+        coordinator = MagicMock(); coordinator.propose.return_value = {'proposal_sha256': 'd' * 64}
+        _, _, output = self.invoke(args, coordinator=coordinator)
+        passed = coordinator.propose.call_args.kwargs
+        self.assertEqual(passed['work_id'], selected['work_id'])
+        self.assertEqual(passed['batch_id'], selected['id'])
+        self.assertEqual(passed['worker_id'], selected['worker_id'])
+        self.assertNotEqual(selected['id'], selected['work_id'])
+        self.assertNotIn(selected['id'], output); self.assertNotIn(selected['worker_id'], output)
+        self.assertNotEqual(passed['work_id'], other['work_id'])
+
+    def test_missing_ambiguous_or_partial_dependent_reference_refuses_before_coordinator(self):
+        args = self.prepare(); args.batch_id = args.worker_id = None
+        coordinator = MagicMock()
+        self.assertCode('recovery_exact_message_references_required',
+            lambda: self.invoke(args, coordinator=coordinator))
+        coordinator.propose.assert_not_called()
+        selected, other = self.dependent_message_references(); args.work_id = selected['work_id']
+        with sqlite3.connect(self.journal / 'messages/messages.sqlite3') as database:
+            database.execute('UPDATE operations SET work_id=? WHERE id=?', (args.work_id, other['id']))
+        self.assertCode('recovery_exact_message_references_required',
+            lambda: self.invoke(args, coordinator=coordinator))
+        args.batch_id = selected['id']
+        self.assertCode('recovery_exact_message_references_required',
+            lambda: self.invoke(args, coordinator=coordinator))
+        coordinator.propose.assert_not_called()
 
     def test_current_installed_unit_bytes_are_required(self):
         self.prepare()

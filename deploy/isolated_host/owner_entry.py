@@ -397,6 +397,25 @@ def _message_executed_disposition(args, manifest):
             target['connection_file'], session_id=target['board_session_id'], timeout=5))
         if client.endpoint != config['board_endpoint']:
             raise PackageError('connection_endpoint_mismatch')
+        batch_id, worker_id = args.batch_id, args.worker_id
+        if (batch_id is None) != (worker_id is None):
+            raise PackageError('recovery_exact_message_references_required')
+        if batch_id is None:
+            # These two local IDs are dependent references of the explicitly
+            # selected public work. Discover them only under the true owner lock,
+            # never by exporting a journal or selecting a general pending queue.
+            references = messages.db.execute(
+                'SELECT id,worker_id FROM main.operations WHERE work_id=? LIMIT 2',
+                (args.work_id,)).fetchall()
+            if len(references) != 1:
+                raise PackageError('recovery_exact_message_references_required')
+            batch_id, worker_id = references[0]['id'], references[0]['worker_id']
+            try:
+                if any(type(value) is not str or str(uuid.UUID(value)) != value
+                       for value in (batch_id, worker_id)):
+                    raise ValueError
+            except (ValueError, TypeError, AttributeError):
+                raise PackageError('recovery_exact_message_references_required') from None
         coordinator = MessageExecutedDisposition(host, messages, runs, runtime, observer=client)
         identity = {'owner_id': config['owner_id'], 'agent_id': target['agent_id'],
                     'device_id': args.device_id, 'profile_version': target['profile_version'],
@@ -411,8 +430,8 @@ def _message_executed_disposition(args, manifest):
                     or proposal['host']['configuration_sha256'] != args.config_sha256
                     or proposal['host']['instance_id'] != args.host_instance
                     or proposal['dispatch']['target_id'] != args.target_id
-                    or proposal['dispatch']['batch_id'] != args.batch_id
-                    or proposal['dispatch']['worker_id'] != args.worker_id
+                    or proposal['dispatch']['batch_id'] != batch_id
+                    or proposal['dispatch']['worker_id'] != worker_id
                     or proposal['work']['id'] != args.work_id or proposal['turn']['id'] != args.turn_id):
                 raise PackageError('recovery_proposal_changed')
             status = coordinator.status(request_key=args.request_key)
@@ -423,7 +442,7 @@ def _message_executed_disposition(args, manifest):
             result = coordinator.status(intent_id=args.intent_id)
         else:
             proposal = coordinator.propose(request_key=args.request_key, target_id=args.target_id,
-                batch_id=args.batch_id, worker_id=args.worker_id,
+                batch_id=batch_id, worker_id=worker_id,
                 work_id=args.work_id, turn_id=args.turn_id,
                 identity=identity,
                 expected_config_sha256=args.config_sha256, expected_host_instance=args.host_instance)
@@ -757,8 +776,10 @@ def main(argv=None):
         help='Explicit finite disposition of a blocked executed message; no model retry or publication.')
     disposition.add_argument('operation', choices=('plan', 'apply', 'status', 'resume'))
     for name in ('old-release-id', 'config-sha256', 'host-instance', 'target-id',
-                 'batch-id', 'worker-id', 'work-id', 'turn-id', 'device-id', 'request-key'):
+                 'work-id', 'turn-id', 'device-id', 'request-key'):
         disposition.add_argument('--' + name, required=True)
+    disposition.add_argument('--batch-id')
+    disposition.add_argument('--worker-id')
     disposition.add_argument('--proposal-sha256')
     disposition.add_argument('--expected-revision', type=int)
     disposition.add_argument('--intent-id')
