@@ -23,7 +23,7 @@ class MessageWorker:
 
     @staticmethod
     def receipt(op,status=None,reason=None):
-        return {'status':status or ('complete' if op['state']=='complete' else 'needs_review' if op['state']=='needs_review' else 'pending'),
+        return {'status':status or ('abandoned' if op['state']=='abandoned' else 'complete' if op['state']=='complete' else 'needs_review' if op['state']=='needs_review' else 'pending'),
             'reason':reason or op['payload'].get('reason','message_pending'),'worker_operation_id':op['worker_id'],
             'message_operation_id':op['id']}
 
@@ -37,7 +37,7 @@ class MessageWorker:
     def run(self,operation_id,target,owner,*,should_cancel):
         op=self.journal.operation(operation_id)
         if not op['worker_id']:raise HostError('host_reference_conflict')
-        if op['state'] in ('complete','needs_review'):return self.receipt(op)
+        if op['state'] in ('complete','needs_review','abandoned'):return self.receipt(op)
         if op['state']=='ignored':raise HostError('host_reference_conflict')
         target_hash=digest(target)
         if op['payload'].get('configuration_sha256',target_hash)!=target_hash:raise HostError('message_configuration_conflict')

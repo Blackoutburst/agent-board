@@ -131,7 +131,7 @@ class MessageHostSupervisor:
                                     or (not linked['worker_id'] and linked['state']!='new')
                                     or old['subscription_id']!=reader['id']
                                     or old['request_id']!='host-message-'+linked['id']):raise HostError('host_reference_conflict')
-                            if linked['state']=='complete':
+                            if linked['state'] in ('complete','abandoned'):
                                 self.host.finish_dispatch(linked['id'],'complete',worker.receipt(linked))
                                 unfinished=[];old=None
                         # An ACK retry is never replaced by a fresh read.
@@ -144,7 +144,7 @@ class MessageHostSupervisor:
                             if operation['state']=='new' and operation['thread_id'] not in target['thread_ids']:
                                 journal.update(operation['id'],operation['revision'],'ignored',reason='thread_not_selected')
                         delivery=journal.delivery(delivery['id'])
-                        remaining=[o for o in delivery['operations'] if o['state'] not in ('complete','ignored')]
+                        remaining=[o for o in delivery['operations'] if o['state'] not in ('complete','ignored','abandoned')]
                         if not remaining:
                             self._ack(journal,client,delivery)
                             if self.host.control()['remaining']==0:
@@ -171,7 +171,7 @@ class MessageHostSupervisor:
                             self.host.stop('needs_review');return self.receipt('needs_review',result['reason'],batch_id=operation['id'])
                         if state=='complete':
                             delivery=journal.delivery(delivery['id'])
-                            if all(o['state'] in ('complete','ignored') for o in delivery['operations']):
+                            if all(o['state'] in ('complete','ignored','abandoned') for o in delivery['operations']):
                                 self._ack(journal,client,delivery);self.host.rotate()
                             if self.host.control()['remaining']==0:self.host.stop('budget_exhausted')
                         return self.receipt(result['status'],result['reason'],batch_id=operation['id'],

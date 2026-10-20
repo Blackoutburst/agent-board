@@ -86,13 +86,14 @@ def _result_json(result):
 
 
 class RunStore:
-    def __init__(self, state_dir: Path):
+    def __init__(self, state_dir: Path, *, existing_only=False):
+        if type(existing_only) is not bool:raise StoreError('invalid_existing_only')
         self.state_dir = Path(state_dir).expanduser().absolute()
         self._locks = {}
         self._db = None
         try:
             try:
-                self.state_dir.mkdir(mode=0o700)
+                if not existing_only:self.state_dir.mkdir(mode=0o700)
             except FileExistsError:
                 pass
             info = self.state_dir.lstat()
@@ -100,15 +101,33 @@ class RunStore:
                     or stat.S_IMODE(info.st_mode) != 0o700):
                 raise StoreError("insecure_state_directory")
             database = self.state_dir / "runs.sqlite3"
-            os.close(_private_file(database))
+            if existing_only:
+                fd=os.open(database,os.O_RDWR|os.O_NOFOLLOW)
+                try:
+                    info=os.fstat(fd)
+                    if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid()
+                            or stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1):
+                        raise StoreError('insecure_state_file')
+                    header=os.pread(fd,100,0)
+                    if len(header)!=100 or header[:16]!=b'SQLite format 3\x00' or header[18:20]!=b'\x01\x01':
+                        raise StoreError('state_schema_invalid')
+                finally:os.close(fd)
+            else:os.close(_private_file(database))
             # SQLite may touch these itself; reject a pre-planted alias first.
             for suffix in ("-journal", "-wal", "-shm"):
                 sidecar = Path(str(database) + suffix)
                 if sidecar.exists() or sidecar.is_symlink():
+                    if existing_only:raise StoreError('state_sidecar_present')
                     os.close(_private_file(sidecar))
-            self._db = sqlite3.connect(database, timeout=5, isolation_level=None)
+            self._db = sqlite3.connect(database.as_uri()+'?mode=rw' if existing_only else database,
+                uri=existing_only,timeout=5,isolation_level=None)
             self._db.row_factory = sqlite3.Row
             version=self._db.execute("PRAGMA user_version").fetchone()[0]
+            if existing_only:
+                if version!=2 or self._db.execute('PRAGMA application_id').fetchone()[0]!=0:
+                    raise StoreError('unsupported_state_version')
+                self._check_existing_schema()
+                return
             if version not in (0,1,2):raise StoreError("unsupported_state_version")
             if version==2 and tuple(row['name'] for row in self._db.execute('PRAGMA table_info(context_guards)'))!=('work_id','guard_json'):
                 raise StoreError('context_guard_invalid')
@@ -151,6 +170,48 @@ class RunStore:
             if self._db is not None:
                 self._db.close()
             raise StoreError("state_unavailable") from None
+
+
+    def _check_existing_schema(self):
+        from .message_abandon_protocol import guard_sql
+        db=self._db
+        try:guard_sql(db,('works','turns','context_guards'))
+        except Exception:raise StoreError('state_schema_invalid') from None
+        columns={
+            'works':('id','owner_id','agent_id','project_id','ticket_id','workspace','executable','model','provider_session_id','status','created_at','updated_at'),
+            'turns':('id','work_id','request_id','prompt_sha256','status','pid','provider_session_id','cancel_requested','requires_review','result_json','resolution','resolution_reason','created_at','updated_at'),
+            'context_guards':('work_id','guard_json')}
+        table_sql={
+            'works':"""CREATE TABLE works(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,agent_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,ticket_id TEXT NOT NULL,workspace TEXT NOT NULL,executable TEXT NOT NULL,
+                model TEXT,provider_session_id TEXT UNIQUE,status TEXT NOT NULL,created_at REAL NOT NULL,updated_at REAL NOT NULL)""",
+            'turns':"""CREATE TABLE turns(id TEXT PRIMARY KEY,work_id TEXT NOT NULL REFERENCES works(id),
+                request_id TEXT NOT NULL,prompt_sha256 TEXT NOT NULL,status TEXT NOT NULL,pid INTEGER,provider_session_id TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,requires_review INTEGER NOT NULL DEFAULT 0,result_json TEXT,
+                resolution TEXT,resolution_reason TEXT,created_at REAL NOT NULL,updated_at REAL NOT NULL,UNIQUE(work_id,request_id))""",
+            'context_guards':"""CREATE TABLE context_guards(work_id TEXT PRIMARY KEY REFERENCES works(id),guard_json TEXT NOT NULL)"""}
+        indexes={
+            'one_open_scope':('works',('owner_id','agent_id','project_id','ticket_id'),"CREATE UNIQUE INDEX one_open_scope ON works (owner_id, agent_id, project_id, ticket_id) WHERE status != 'closed'"),
+            'one_running_turn':('turns',('work_id',),"CREATE UNIQUE INDEX one_running_turn ON turns(work_id) WHERE status = 'running'")}
+        names=set(columns)|set(indexes)|{'sqlite_autoindex_works_1','sqlite_autoindex_works_2',
+            'sqlite_autoindex_turns_1','sqlite_autoindex_turns_2','sqlite_autoindex_context_guards_1'}
+        rows=db.execute("SELECT type,name,tbl_name,sql FROM main.sqlite_master LIMIT 20").fetchall()
+        if {r['name'] for r in rows}!=names:raise StoreError('state_schema_invalid')
+        if any(tuple(r['name'] for r in db.execute('PRAGMA main.table_info('+table+')'))!=wanted for table,wanted in columns.items()):
+            raise StoreError('state_schema_invalid')
+        normalize=lambda value:''.join(value.lower().split())
+        for name,sql in table_sql.items():
+            row=next(r for r in rows if r['name']==name)
+            if row['type']!='table' or normalize(row['sql'] or '')!=normalize(sql):
+                raise StoreError('state_schema_invalid')
+        for name,(table,cols,sql) in indexes.items():
+            row=next(r for r in rows if r['name']==name)
+            if (row['type']!='index' or row['tbl_name']!=table or normalize(row['sql'] or '')!=normalize(sql)
+                    or tuple(r['name'] for r in db.execute('PRAGMA main.index_info('+name+')'))!=cols):
+                raise StoreError('state_schema_invalid')
+        if (any(r['type'] not in ('table','index') for r in rows)
+                or db.execute('SELECT 1 FROM temp.sqlite_master LIMIT 1').fetchone()):
+            raise StoreError('state_schema_invalid')
 
     def close(self):
         if self._locks:
@@ -273,7 +334,9 @@ class RunStore:
         return self._work(work_id)
 
     @contextmanager
-    def work_lock(self, work_id):
+    def work_lock(self, work_id, *, inspection_only=False):
+        if type(inspection_only) is not bool:
+            raise StoreError('invalid_lock_mode')
         self._work(work_id)
         if work_id in self._locks:
             raise StoreError("work_busy")
@@ -292,6 +355,8 @@ class RunStore:
                 interrupted = db.execute("SELECT id FROM turns WHERE work_id=? AND status='running'",
                                          (work_id,)).fetchall()
                 if interrupted:
+                    if inspection_only:
+                        raise StoreError('work_busy')
                     now = time.time()
                     result = json.dumps({"status": "blocked", "reason": "interrupted"})
                     db.execute("""UPDATE turns SET status='interrupted',requires_review=1,
@@ -405,12 +470,31 @@ class RunStore:
             raise StoreError("result_not_ready")
         return json.loads(turn["result_json"])
 
-    def resolve_interruption(self, work_id, *, decision, reason):
+    def interruption_state_sha256(self, work_id):
+        """CAS fingerprint for the explicit single-turn administrative path."""
+        work=self._work(work_id)
+        turns=[dict(row) for row in self._db.execute('SELECT * FROM turns WHERE work_id=? ORDER BY rowid LIMIT 2',(work_id,))]
+        if len(turns)!=1:raise StoreError('interruption_state_conflict')
+        try:
+            raw=json.dumps({'work':work,'turn':turns[0]},sort_keys=True,ensure_ascii=False,
+                separators=(',',':'),allow_nan=False).encode()
+        except (ValueError,UnicodeError,TypeError):raise StoreError('interruption_state_conflict') from None
+        if len(raw)>2*1024*1024:raise StoreError('interruption_state_conflict')
+        return hashlib.sha256(raw).hexdigest()
+
+    def resolve_interruption(self, work_id, *, decision, reason, expected_state_sha256=None):
         self._require_lock(work_id)
         if decision not in {"continue", "abandon"}:
             raise StoreError("invalid_resolution")
         _identifier(reason, "invalid_resolution_reason")
         with self._transaction() as db:
+            if expected_state_sha256 is not None:
+                from .message_abandon_protocol import guard_sql
+                guard_sql(db,('works','turns','context_guards'))
+                if (type(expected_state_sha256) is not str or len(expected_state_sha256)!=64
+                        or any(c not in '0123456789abcdef' for c in expected_state_sha256)
+                        or self.interruption_state_sha256(work_id)!=expected_state_sha256):
+                    raise StoreError('interruption_state_conflict')
             work = self._work(work_id)
             if work["status"] == "closed":
                 raise StoreError("work_closed")

@@ -15,11 +15,11 @@ from .work_journal import JournalError, _encode, _private_file, _scope
 
 
 APPLICATION_ID = 0x42425254
-PHASES = frozenset({'reserving', 'reserved', 'starting', 'active', 'finished', 'needs_review', 'not_admitted'})
+PHASES = frozenset({'reserving', 'reserved', 'starting', 'active', 'finished', 'needs_review', 'not_admitted', 'abandoned_never_started'})
 COLUMNS = ('id','key','configuration','phase','receipt','revision','start_confirmed','created_at','updated_at')
 NEXT = {'reserving': {'reserved', 'needs_review', 'not_admitted'}, 'reserved': {'starting', 'needs_review'},
     'starting': {'active', 'needs_review'}, 'active': {'finished', 'needs_review'},
-    'needs_review': {'finished'}, 'finished': set(), 'not_admitted': set()}
+    'needs_review': {'finished'}, 'finished': set(), 'not_admitted': set(), 'abandoned_never_started': set()}
 
 
 class RuntimeJournal:
@@ -40,7 +40,7 @@ class RuntimeJournal:
             self.db = sqlite3.connect(path, isolation_level=None, timeout=5)
             self.db.row_factory = sqlite3.Row
             version = self.db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3): raise JournalError('unsupported_runtime_journal')
+            if version not in (0, 1, 2, 3, 4): raise JournalError('unsupported_runtime_journal')
             if version == 0:
                 if self.db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                     raise JournalError('runtime_journal_corrupt')
@@ -49,7 +49,9 @@ class RuntimeJournal:
                 raise JournalError('runtime_journal_corrupt')
             if version in (1,2) and self.db.execute("SELECT 1 FROM executions WHERE phase='not_admitted' LIMIT 1").fetchone():
                 raise JournalError('runtime_journal_corrupt')
-            if version==3:
+            if version<4 and version and self.db.execute("SELECT 1 FROM executions WHERE phase='abandoned_never_started' LIMIT 1").fetchone():
+                raise JournalError('runtime_journal_corrupt')
+            if version in (3,4):
                 # Read streaming; preserve every old identity/receipt unchanged.
                 # In particular a reopened negative proof is never just a bit.
                 for row in self.db.execute('SELECT * FROM executions'):
@@ -122,15 +124,21 @@ class RuntimeJournal:
                     or any(type(value[k]) not in (float,int) or not math.isfinite(value[k]) for k in ('created_at','updated_at'))
                     or str(uuid.UUID(value['id'])) != value['id']): raise ValueError
             value['configuration'] = config
-            if value['phase']=='not_admitted' and (type(value['receipt']) is not str or len(value['receipt'].encode())>4096):
+            if value['phase'] in ('not_admitted','abandoned_never_started') and (type(value['receipt']) is not str or len(value['receipt'].encode())>4096):
                 raise ValueError
-            value['receipt'] = json.loads(value['receipt']) if value['receipt'] else None
+            raw_receipt=value['receipt']
+            value['receipt'] = json.loads(raw_receipt) if raw_receipt else None
+            if value['phase']=='abandoned_never_started' and _encode(value['receipt'],4096,'runtime_journal_corrupt')!=raw_receipt:
+                raise ValueError
             if value['phase']=='not_admitted':
                 from .runtime_admission import refusal_arguments,validate_refusal
                 if config['scope'].get('scope_kind')!='message' or value['start_confirmed']:
                     raise ValueError
                 validate_refusal({'reserved':False,'refusal':value['receipt']},refusal_arguments(config,value['key']),
                     owner_id=config['scope']['owner_id'],agent_id=config['scope']['agent_id'])
+            if value['phase']=='abandoned_never_started':
+                from .message_abandon_protocol import validate_runtime_abandonment
+                validate_runtime_abandonment(value)
             return value
         except (ValueError, TypeError, KeyError, AttributeError, RecursionError): raise JournalError('runtime_journal_corrupt') from None
 
@@ -158,7 +166,10 @@ class RuntimeJournal:
             return self.get(identifier), True
 
     def get(self, identifier):
-        return self.decode(self.db.execute('SELECT * FROM executions WHERE id=?', (identifier,)).fetchone())
+        value=self.decode(self.db.execute('SELECT * FROM executions WHERE id=?', (identifier,)).fetchone())
+        if value['phase']=='abandoned_never_started' and self.db.execute('PRAGMA user_version').fetchone()[0]!=4:
+            raise JournalError('runtime_journal_corrupt')
+        return value
 
     def find(self, configuration):
         row = self.db.execute('SELECT * FROM executions WHERE key=?', (self.key(configuration),)).fetchone()
@@ -166,11 +177,13 @@ class RuntimeJournal:
 
     def update(self, identifier, revision, phase, receipt=None, *, start_confirmed=False):
         if type(revision) is not int or revision<1: raise JournalError('invalid_revision')
+        if phase=='abandoned_never_started':raise JournalError('explicit_runtime_abandonment_required')
         if phase not in PHASES: raise JournalError('invalid_runtime_phase')
         if type(start_confirmed) is not bool: raise JournalError('invalid_runtime_phase')
         with self.transaction():
             current = self.get(identifier)
             if current['revision'] != revision: raise JournalError('revision_conflict')
+            if current['phase']=='abandoned_never_started':raise JournalError('runtime_already_abandoned')
             if current['phase'] == 'finished': raise JournalError('runtime_already_finished')
             if current['phase'] == 'not_admitted': raise JournalError('runtime_already_refused')
             if phase != current['phase'] and phase not in NEXT[current['phase']]:
@@ -188,7 +201,8 @@ class RuntimeJournal:
                 except (ValueError,TypeError,KeyError):raise JournalError('runtime_refusal_invalid') from None
                 # Atomic schema marker + negative receipt. Old readers refuse;
                 # existing rows/receipts/identities are never rewritten.
-                self.db.execute('PRAGMA user_version=3')
+                if self.db.execute('PRAGMA user_version').fetchone()[0]<3:
+                    self.db.execute('PRAGMA user_version=3')
             if phase=='active' and not (current['start_confirmed'] or start_confirmed):
                 raise JournalError('runtime_start_unconfirmed')
             if phase=='finished' and (not isinstance(receipt,dict) or receipt.get('state')!='finished'
@@ -205,3 +219,20 @@ class RuntimeJournal:
 
     def list_status(self):
         return [self.status(row['id']) for row in self.db.execute('SELECT id FROM executions ORDER BY created_at,id')]
+
+    def _abandon_never_started(self, expected, intent_id, seal, pinned):
+        """Explicit exact sealed legacy predecessor; never a cleanup receipt."""
+        from .message_abandon_protocol import guard_sql,proof,encoded,uuid_id
+        uuid_id(intent_id)
+        with self.transaction():
+            guard_sql(self.db,('executions',))
+            current=self.get(expected['id'])
+            if (current!=expected or current['phase']!='needs_review'
+                    or current['receipt'] is not None or current['start_confirmed']):
+                raise JournalError('runtime_abandonment_conflict')
+            actual=proof(current,seal,pinned)
+            receipt={'schema':'message-runtime-local-abandonment-v1','intent_id':intent_id,'seal':actual}
+            self.db.execute('UPDATE executions SET phase=?,receipt=?,revision=revision+1,updated_at=? WHERE id=?',
+                ('abandoned_never_started',encoded(receipt,4096),time.time(),current['id']))
+            self.db.execute('PRAGMA user_version=4')
+            return self.get(current['id'])

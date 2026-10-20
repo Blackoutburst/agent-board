@@ -39,7 +39,7 @@ def _sha(value):
 
 class ManagedHostJournalMixin:
     def managed(self):
-        return self._db.execute('PRAGMA user_version').fetchone()[0] == 2
+        return self._db.execute('PRAGMA user_version').fetchone()[0] in (2,3)
 
     def _check_managed(self):
         if not self.managed():return
@@ -277,6 +277,7 @@ class ManagedHostJournalMixin:
             pending=[d for d in self.dispatches() if d['state']!='complete']
             if pending:raise HostError('host_work_pending')
             if command['action'] in ('start','restart'):
+                self._require_no_unsettled_abandonment()
                 if target['enabled']:raise HostError('host_target_active')
                 control=self.control()
                 if command['budget']>control['configuration']['dispatch_budget']:raise HostError('managed_budget_exceeds_configuration')

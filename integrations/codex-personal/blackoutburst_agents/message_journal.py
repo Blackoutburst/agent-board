@@ -14,10 +14,10 @@ APPLICATION_ID = 0x42424D46
 MAX_DELIVERIES = 256
 MAX_OPERATIONS = 256
 MAX_PAYLOAD = 256 * 1024
-STATES = frozenset({'new','prepared','running','result_ready','posting','complete','ignored','needs_review'})
+STATES = frozenset({'new','prepared','running','result_ready','posting','complete','ignored','needs_review','abandoned'})
 NEXT = {'new': {'prepared','ignored','needs_review'}, 'prepared': {'running','needs_review'},
     'running': {'result_ready','needs_review'}, 'result_ready': {'posting','needs_review'},
-    'posting': {'complete','needs_review'}, 'complete': set(), 'ignored': set(), 'needs_review': set()}
+    'posting': {'complete','needs_review'}, 'complete': set(), 'ignored': set(), 'needs_review': set(), 'abandoned': set()}
 
 
 def identifier(value, *, hex32=False, uuid_value=False):
@@ -45,7 +45,7 @@ class MessageJournal:
             self.db=sqlite3.connect(path,isolation_level=None,timeout=5)
             self.db.row_factory=sqlite3.Row
             version=self.db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0,1):raise HostError('unsupported_message_journal')
+            if version not in (0,1,2):raise HostError('unsupported_message_journal')
             if version==0 and self.db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                 raise HostError('message_journal_corrupt')
             self.db.execute('PRAGMA synchronous=FULL');self.db.execute('PRAGMA foreign_keys=ON')
@@ -70,6 +70,11 @@ class MessageJournal:
                 'operations':('id','delivery_id','message_id','thread_id','message_hash','worker_id','work_id','state','revision','payload_json')}
             if any(tuple(r['name'] for r in self.db.execute('PRAGMA table_info('+t+')'))!=cols for t,cols in expected.items()):
                 raise HostError('message_journal_corrupt')
+            if version==1 and self.db.execute("SELECT 1 FROM operations WHERE state='abandoned' LIMIT 1").fetchone():
+                raise HostError('message_journal_corrupt')
+            if version==2:
+                for row in self.db.execute('SELECT id FROM operations'):
+                    self.operation(row['id'])
         except Exception:
             self.close();raise
 
@@ -172,6 +177,10 @@ class MessageJournal:
         if value['worker_id']:identifier(value['worker_id'],uuid_value=True)
         if value['state'] not in STATES or type(value['revision']) is not int or value['revision']<1:
             raise HostError('message_journal_corrupt')
+        if value['state']=='abandoned':
+            from .message_abandon_protocol import validate_message_abandonment
+            if self.db.execute('PRAGMA user_version').fetchone()[0]!=2:raise HostError('message_journal_corrupt')
+            validate_message_abandonment(value)
         return value
 
     def bind_worker(self,operation_id,worker_id):
@@ -185,9 +194,11 @@ class MessageJournal:
 
     def update(self,operation_id,expected_revision,state,**payload):
         encoded=_encode(payload,MAX_PAYLOAD,'message_payload_too_large')
+        if state=='abandoned':raise HostError('explicit_message_abandonment_required')
         if state not in STATES:raise HostError('message_state_invalid')
         with self.transaction() as db:
             op=self.operation(operation_id)
+            if op['state']=='abandoned':raise HostError('message_already_abandoned')
             if op['revision']!=expected_revision:raise HostError('message_revision_conflict')
             if state!=op['state'] and state not in NEXT[op['state']]:raise HostError('message_state_invalid')
             db.execute('UPDATE operations SET state=?,revision=revision+1,payload_json=? WHERE id=?',
@@ -197,7 +208,7 @@ class MessageJournal:
     def begin_ack(self,delivery_id):
         with self.transaction() as db:
             delivery=self.delivery(delivery_id)
-            if any(op['state'] not in ('complete','ignored') for op in delivery['operations']):
+            if any(op['state'] not in ('complete','ignored','abandoned') for op in delivery['operations']):
                 raise HostError('message_delivery_unfinished')
             if delivery['state']=='pending':db.execute("UPDATE deliveries SET state='acking' WHERE id=?",(delivery_id,))
         return self.delivery(delivery_id)
@@ -216,7 +227,7 @@ class MessageJournal:
                 return delivery
             if delivery['state']!='acking' or reader['checkpoint']!=delivery['checkpoint']:
                 raise HostError('message_ack_conflict')
-            if any(op['state'] not in ('complete','ignored') for op in delivery['operations']):
+            if any(op['state'] not in ('complete','ignored','abandoned') for op in delivery['operations']):
                 raise HostError('message_delivery_unfinished')
             db.execute("UPDATE deliveries SET state='acked',ack_json=? WHERE id=?",(json.dumps(response,sort_keys=True),delivery_id))
             db.execute('UPDATE readers SET checkpoint=? WHERE id=?',(response['checkpoint'],reader['id']))
@@ -225,3 +236,19 @@ class MessageJournal:
             db.execute("DELETE FROM operations WHERE delivery_id=? AND state='ignored'",(delivery_id,))
             db.execute("DELETE FROM deliveries WHERE reader_id=? AND state='acked' AND id!=? AND NOT EXISTS(SELECT 1 FROM operations WHERE delivery_id=deliveries.id)",(reader['id'],delivery_id))
         return self.delivery(delivery_id)
+
+    def _abandon(self, expected, payload_sha256, intent_id, seal_sha256):
+        from .message_abandon_protocol import guard_sql,hashed,uuid_id,MESSAGE_REASON
+        uuid_id(intent_id)
+        with self.transaction() as db:
+            guard_sql(db,('readers','deliveries','operations'))
+            current=self.operation(expected['id'])
+            row={k:v for k,v in current.items() if k!='payload'}
+            if row!=expected or current['state']!='running' or hashed(current['payload'])!=payload_sha256:
+                raise HostError('message_abandon_conflict')
+            payload={**current['payload'],'reason':MESSAGE_REASON,'abandonment':{
+                'intent_id':intent_id,'seal_sha256':seal_sha256,'reason':MESSAGE_REASON}}
+            db.execute("UPDATE operations SET state='abandoned',revision=revision+1,payload_json=? WHERE id=?",
+                (_encode(payload,MAX_PAYLOAD,'message_payload_too_large'),expected['id']))
+            db.execute('PRAGMA user_version=2')
+            return self.operation(expected['id'])
