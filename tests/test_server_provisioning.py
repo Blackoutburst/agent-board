@@ -399,3 +399,44 @@ def test_long_metadata_pages_shrink_before_response_bound(ready):
         page=b.list_server_provisioning_requests(e[1],e[5]['id'],before=page['next_before'])
         seen.extend(v['request_id'] for v in page['requests'])
     assert len(seen)==len(set(seen))==16
+
+
+@pytest.mark.parametrize('operation',['grant','request','cancel'])
+@pytest.mark.parametrize('fault',['history','marker','ddl','application_id'])
+def test_exact_transaction_write_set_and_markers_are_preserved(ready,monkeypatch,operation,fault):
+    e,p,values=ready; b=e[0]
+    with b._connection() as db:
+        historical=db.execute('SELECT id FROM server_instance_commands ORDER BY seq LIMIT 1').fetchone()[0]
+    stop(e,'new-current-stop')
+    values=body(e,p,'guarded-request')
+    r=request(e,values) if operation=='cancel' else None
+    before=snapshot(b)
+    with b._connection() as db:
+        metadata=tuple(db.execute('PRAGMA '+key).fetchone()[0] for key in ('user_version','schema_version','application_id'))
+    original=b._audit
+    def audited(db,actor,event,detail):
+        result=original(db,actor,event,detail)
+        if event=='server_provisioning_'+operation:
+            if fault=='history':db.execute('UPDATE server_instance_commands SET retired=1 WHERE id=?',(historical,))
+            elif fault=='marker':db.execute('PRAGMA user_version=15')
+            elif fault=='ddl':db.execute('CREATE TABLE synthetic_unexpected_table(id TEXT)')
+            else:db.execute('PRAGMA application_id=99')
+        return result
+    monkeypatch.setattr(b,'_audit',audited)
+    with pytest.raises(BoardError):
+        if operation=='grant':grant(e,False,'guarded-revoke')
+        elif operation=='request':request(e,values)
+        else:cancel(e,r,'guarded-cancel')
+    assert snapshot(b)==before
+    with b._connection() as db:
+        assert tuple(db.execute('PRAGMA '+key).fetchone()[0] for key in ('user_version','schema_version','application_id'))==metadata
+        assert db.execute("SELECT 1 FROM sqlite_master WHERE name='synthetic_unexpected_table'").fetchone() is None
+
+
+def test_live_object_refuses_a_rewound_schema_marker_before_any_write(ready):
+    e,_,values=ready;b=e[0]
+    with b._tx() as db:db.execute('PRAGMA user_version=15')
+    before=snapshot(b)
+    with pytest.raises(BoardError,match='schema_invalid'):request(e,values)
+    assert snapshot(b)==before
+    with b._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==15

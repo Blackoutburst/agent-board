@@ -106,6 +106,8 @@ def _request_view(row, body):
 
 class ServerProvisioningMixin:
     def _provisioning_schema(self, db):
+        if db.execute('PRAGMA user_version').fetchone()[0] != 16:
+            _fail('server_provisioning_schema_invalid', 409)
         names = tuple(SQL)[:4]
         if any(row['name'] not in SQL for row in db.execute(
                 "SELECT name FROM main.sqlite_master WHERE name GLOB 'server_provisioning_*'")):
@@ -266,7 +268,11 @@ class ServerProvisioningMixin:
 
     def _provisioning_snapshot(self, db, host):
         rows = self._provisioning_instances(db, host)
-        return (dict(host), rows)
+        # Captured immediately before the first DML of this operation. No
+        # history scan is needed to reject an extra write outside the contract.
+        write_guard = (db.total_changes, db.execute('PRAGMA schema_version').fetchone()[0],
+            db.execute('PRAGMA application_id').fetchone()[0])
+        return (dict(host), rows, write_guard)
 
     def _provisioning_remember(self, db, actor, host, operation, key, payload, result, snapshot):
         encoded = _json(result)
@@ -281,7 +287,10 @@ class ServerProvisioningMixin:
         current = self._server_host(db, actor, host['id'])
         if operation == 'request' or (operation == 'grant' and result['enabled']):
             self._provisioning_host(db, actor, host['id'], live=True)
-        if self._provisioning_snapshot(db, current) != snapshot:
+        final = self._provisioning_snapshot(db, current)
+        expected_changes = 3 if operation == 'grant' else 4
+        if (final[:2] != snapshot[:2] or final[2][0] - snapshot[2][0] != expected_changes
+                or final[2][1:] != snapshot[2][1:]):
             _fail('server_provisioning_postcondition_failed', 409)
         expected = (host['owner_id'], PURPOSE, operation, key, _hash(payload), encoded)
         saved = db.execute('SELECT * FROM server_provisioning_receipts WHERE owner_id=? AND purpose=? AND operation=? AND key=?', expected[:4]).fetchone()
