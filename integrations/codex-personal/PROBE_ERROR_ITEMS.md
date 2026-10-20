@@ -1,35 +1,42 @@
-# Subscription probe: negative JSONL diagnostics
+# Subscription probe: known CLI notices and bounded diagnostics
 
-This development branch changes failure diagnostics only. It is not a new
-qualified release or an installed owner operator. Its eventual release version
-and source pins must be set during integration; existing0.28 qualifications
-remain bound to their original sources.
+Adapter0.28.1 distinguishes a documented completed CLI notice from a tool call.
+This is a narrow connectivity check, not a qualification of the requested model,
+execution permissions, sandbox, hosted service, another account or future quota.
+Existing0.28 native qualifications remain bound to their original sources.
 
 The public Codex0.163 schema and producer at
 [`83086188`](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/exec/src/exec_events.rs)
 define an `item.completed` with `id`, `type:error`, and `message`. The
 [`JSONL producer`](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/exec/src/event_processor_with_jsonl_output.rs)
-also uses that item for non-fatal warnings. Its presence alone does not identify
-an authentication or quota failure. These public sources do not establish the
-type or cause of any previously discarded private stream, or a binary/source
-equivalence for an installed executable.
+also uses that item for non-fatal warnings, configuration notices and model
+rerouting. A known shape does not establish that its private text is benign or
+that the requested model or permissions were honored. These public sources do
+not identify the type or cause of a previously discarded private stream, or
+establish installed binary/source equivalence.
 
-The probe now validates that completed item's exact shape and bounded strings.
-It still rejects qualification, including when exit status, terminal and nonce
-checks are all positive. Its fixed reason is `cli_diagnostic_item` unless a
-validated terminal failure supplies an existing failure category. Tool and
-unknown-item refusals keep their priority. Malformed or misplaced error items
-remain protocol errors. No warning is silently ignored or converted to success.
+The parser requires the exact completed-item shape and bounded strings. Its
+presence never supplies a positive gate: doctor must independently confirm
+ChatGPT authentication, the process must exit zero, one completed terminal must
+be observed and the only completed response must equal the fresh random nonce.
+Known notices may coexist with those facts. Such success retains a schema2
+fixed-counter diagnostic rather than hiding the notice. A clean success keeps
+its original shape. Actual tools (including collaboration), unknown items,
+malformed or misplaced notices, protocol errors, fatal top-level errors,
+turn.failed and failed/truncated transport remain refused. A notice alone,
+missing terminal, wrong nonce, duplicate terminal or nonzero exit cannot pass.
 
-Failure diagnostic schema2 has ten fixed event counters: agent_message,
-reasoning, command_execution, file_change, mcp_tool_call, collab_tool_call,
-web_search, todo_list, error, unknown. Counts saturate at1024. They describe
-decoded events, not executions. No item text, identifier, hash, preview or
-unrecognized type leaves the parser. The successful receipt shape is unchanged.
-Transport failures are not reparsed.
+Diagnostic schema2 has ten fixed event counters: agent_message, reasoning,
+command_execution, file_change, mcp_tool_call, collab_tool_call, web_search,
+todo_list, error, unknown. Counts saturate at1024, while every later event is
+still validated. They describe decoded events, not executions. No item text,
+identifier, hash, preview or unrecognized type leaves the parser. Transport
+failures are not reparsed. Terminal failures retain their existing category
+without treating the notice text as a fatal authentication/quota error.
 
-The existing installed schema1 diagnostic operator must not be combined with
-this module. A separately reviewed operator with exact new source pins and
-schema2 validation is required before any personal trial. No feature flags,
-tool controls, invocation, timeout, authentication or provider policy change in
-this patch. No real probe or account is invoked by its pure protocol tests.
+The installed schema1 diagnostic operator must not use this module. A distinct
+reviewed operator must pin its exact source and strictly validate schema2 on
+both positive and negative receipts. Old unknown-item receipts remain failed;
+none is reclassified or replayed. No feature flag, tool control, invocation,
+timeout, authentication or provider policy changes. No real account or probe is
+invoked by these protocol tests. No host is enabled by a connectivity receipt.

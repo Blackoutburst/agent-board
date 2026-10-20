@@ -112,6 +112,26 @@ class SubscriptionProbeTests(unittest.TestCase):
         self.assertNotIn("fake-thread", serialized)
         self.assertNotIn("input_tokens", serialized)
 
+    def test_known_notice_with_doctor_and_exact_response_is_connectivity_only(self) -> None:
+        result = run_subscription_probe(self.settings(self.fake_cli("""
+            event({'type':'item.completed','item':{'id':'notice_0','type':'error',
+                  'message':'PRIVATE_CONFIG_NOTICE'}})
+            success()
+        """)))
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['doctor']['authentication'], 'chatgpt')
+        self.assertEqual(result['status'], 'passed')
+        self.assertEqual(result['proof_scope'], 'local_personal_codex_cli_only')
+        self.assertEqual(result['verification'], {
+            'exit_zero':True,'turn_completed':True,'nonce_verified':True,
+        })
+        self.assertEqual(result['diagnostic']['schema_version'], 2)
+        self.assertEqual(result['diagnostic']['item_events']['error'], 1)
+        self.assertEqual(result['diagnostic']['item_events']['unknown'], 0)
+        self.assertNotIn('PRIVATE_CONFIG_NOTICE', json.dumps(result))
+        self.assertNotIn('notice_0', json.dumps(result))
+        self.assertNotIn('BLACKOUTBURST_SUBSCRIPTION_PROBE_', json.dumps(result))
+
     def test_nonzero_exit_never_passes(self) -> None:
         result = run_subscription_probe(self.settings(self.fake_cli("success()\nraise SystemExit(1)\n")))
         self.assertFalse(result["ok"])

@@ -381,7 +381,8 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
             if item["type"] == "error":
                 # Codex 0.163 also emits this completed item for non-fatal
                 # warnings. It is not a tool or proof of a fatal quota/auth
-                # error. Still reject qualification, even with an exact nonce.
+                # error. A known item does not establish any positive proof;
+                # all independent connectivity gates below must still pass.
                 # No message text, hash or preview leaves this parser.
                 if (event_type != "item.completed"
                         or set(item) != {"id", "type", "message"}
@@ -409,8 +410,6 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
         reason = "protocol_error"
     elif terminal_failure:
         reason = next((reason for reason in failures if reason != "execution_failed"), "execution_failed")
-    elif diagnostic_item:
-        reason = "cli_diagnostic_item"
     elif result.returncode != 0:
         reason = _failure_category(result.stderr.decode("utf-8", "replace"))
     elif completed_count != 1:
@@ -421,7 +420,18 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
         reason = "verified"
     if reason != "verified":
         return rejected(reason)
-    return {"ok": True, "reason": reason, "verification": verification}
+    verified: dict[str, object] = {
+        "ok": True, "reason": reason, "verification": verification,
+    }
+    if diagnostic_item:
+        # Preserve the fact that CLI notices occurred. This proves connectivity,
+        # never that their private text is benign, the requested model was used,
+        # or any sandbox/service/host is qualified.
+        verified["diagnostic"] = {
+            "schema_version": 2, "item_events": dict(item_events),
+            "saturated": saturated,
+        }
+    return verified
 
 
 def run_subscription_probe(settings: ProbeSettings) -> dict[str, object]:

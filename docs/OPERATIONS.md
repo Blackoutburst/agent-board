@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.13.0/schema 13 with adapter 0.28.0. It combines
+Current source is Board 2.13.0/schema 13 with adapter 0.28.1. It combines
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures

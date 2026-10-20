@@ -30,9 +30,9 @@ def success():
             {'type':'turn.completed'})
 
 
-def test_completed_error_item_cannot_qualify_even_with_nonce_and_exit_zero():
+def test_known_completed_notice_preserves_connectivity_proof_and_fixed_diagnostic():
     result = parse(item(), *success())
-    assert result['ok'] is False and result['reason'] == 'cli_diagnostic_item'
+    assert result['ok'] is True and result['reason'] == 'verified'
     assert result['verification'] == {'exit_zero':True, 'turn_completed':True, 'nonce_verified':True}
     assert result['diagnostic']['schema_version'] == 2
     assert result['diagnostic']['item_events']['error'] == 1
@@ -42,7 +42,7 @@ def test_completed_error_item_cannot_qualify_even_with_nonce_and_exit_zero():
 def test_diagnostic_item_does_not_assert_a_fatal_auth_or_quota_error():
     for text in ('authentication failed '+PRIVATE, 'quota exceeded '+PRIVATE):
         result = parse(item(message=text), *success())
-        assert result['reason'] == 'cli_diagnostic_item' and result['ok'] is False
+        assert result['reason'] == 'verified' and result['ok'] is True
 
 
 @pytest.mark.parametrize('terminal,reason', [
@@ -85,9 +85,9 @@ def test_error_item_after_a_terminal_is_not_ignored():
     assert result['reason'] == 'protocol_error' and result['ok'] is False
 
 
-def test_error_counter_saturates_and_never_turns_into_success():
+def test_error_counter_saturates_without_replacing_positive_gates():
     result = parse(*([item()]*1025), *success())
-    assert result['reason'] == 'cli_diagnostic_item' and result['ok'] is False
+    assert result['reason'] == 'verified' and result['ok'] is True
     assert result['diagnostic']['item_events']['error'] == 1024
     assert result['diagnostic']['saturated'] is True
 
@@ -97,3 +97,42 @@ def test_transport_failure_is_not_reparsed_for_new_diagnostics():
     result = _parse_probe(_ProcessResult(0,raw,b'', 'cleanup_failed'), NONCE)
     assert result['reason'] == 'cleanup_failed' and result['ok'] is False
     assert sum(result['diagnostic']['item_events'].values()) == 0
+
+
+@pytest.mark.parametrize('events,code,reason', [
+    ((), 0, 'turn_not_completed'),
+    (({'type':'turn.completed'},), 0, 'nonce_mismatch'),
+    (success(), 1, 'execution_failed'),
+    (({'type':'item.completed','item':{'type':'agent_message','text':'wrong'}},
+      {'type':'turn.completed'}), 0, 'nonce_mismatch'),
+    (success() + ({'type':'turn.completed'},), 0, 'protocol_error'),
+])
+def test_notice_is_never_itself_positive_evidence(events, code, reason):
+    result = parse(item(), *events, code=code)
+    assert result['ok'] is False and result['reason'] == reason
+
+
+@pytest.mark.parametrize('late', [
+    {'type':'item.started','item':{'type':'command_execution'}},
+    {'type':'item.completed','item':{'type':'collab_tool_call'}},
+    {'type':'item.completed','item':{'type':'future_item'}},
+])
+def test_saturation_never_stops_validation_of_a_later_tool_or_unknown(late):
+    result = parse(*([item()] * 1025), late, *success())
+    assert result['ok'] is False and result['reason'] == 'unexpected_tool_event'
+    assert result['diagnostic']['saturated'] is True
+
+
+def test_saturation_never_stops_validation_of_a_later_protocol_or_fatal_error():
+    prefix = [item()] * 1025
+    malformed = parse(*prefix, item(message=None), *success())
+    assert malformed['ok'] is False and malformed['reason'] == 'protocol_error'
+    failed = parse(*prefix, {'type':'turn.failed','error':{'message':'quota exceeded'}}, code=1)
+    assert failed['ok'] is False and failed['reason'] == 'quota_or_rate_limit'
+
+
+def test_clean_positive_shape_remains_unchanged():
+    assert parse(*success()) == {
+        'ok':True,'reason':'verified',
+        'verification':{'exit_zero':True,'turn_completed':True,'nonce_verified':True},
+    }
