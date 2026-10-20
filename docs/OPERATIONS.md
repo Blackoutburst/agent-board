@@ -8,6 +8,16 @@ only. Historical native receipts are not adopted by adapter 0.30.
 Older qualification receipts remain tied to their exact source and private pins;
 they do not qualify this integrated source or authorize a deployment.
 
+
+Adapter 0.30.3 recognizes the same bounded completed diagnostic items in
+personal text turns and subscription probes. These notices may precede the
+session; they do not establish a session, a valid response or successful
+completion. Fatal errors, unknown/tool events, invalid ordering, exit and
+cleanup checks still apply. No private diagnostic text is published. Existing
+failed turns and budgets are preserved: upgrading does not retry or reclassify
+them. A transport that already started cannot use the separate pretransport
+admission seal; its failed message needs an explicit reviewed disposition.
+
 Schema 16 adds only human preparation drafts and their durable Start/Restart
 barrier. It does not install a profile, consume a manager request, pair a device,
 log in to a provider or start a model. A draft remains until explicit human
