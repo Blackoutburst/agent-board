@@ -150,7 +150,7 @@ def test_worker_authority_expires_when_control_loop_is_stalled(env):
 
 
 def test_slow_report_does_not_extend_authority_from_an_old_poll(env):
-    c=env['control'];now=[10.];c.clock=lambda:now[0];c.step();command(env)
+    c=env['control'];now=[10.];c.clock=lambda:now[0];c.start_worker();c.step();command(env)
     original=env['client'].call
     def delayed(name,args):
         result=original(name,args)
@@ -237,3 +237,26 @@ def test_manager_device_revocation_is_absolute(env):
     env['board'].revoke_device(env['human'],env['device']['id'])
     with pytest.raises(BoardReadError):c.step()
     assert not env['journal'].control()['enabled']
+
+
+def test_shutdown_of_rejected_second_controller_never_stops_the_live_owner(env):
+    first=env['control'];first.start_worker();first.step();command(env);first.step()
+    wait_for(lambda:env['journal'].target_selected('primary'));first.step()
+    with HostJournal(env['journal'].directory) as journal:
+        second=ServerController(journal,env['client'],lock_directory=env['root']/'locks')
+        with pytest.raises(HostError,match='managed_worker_unavailable'):second.start_worker()
+        assert env['journal'].target_selected('primary')
+        second.shutdown();assert env['journal'].target_selected('primary')
+        with pytest.raises(HostError,match='managed_worker_not_owned'):second.step()
+
+
+def test_late_shutdown_of_old_object_never_stops_its_successor(env):
+    first=env['control'];first.start_worker();first.step();command(env);first.step()
+    wait_for(lambda:env['journal'].target_selected('primary'));first.step();assert first.shutdown()
+    with HostJournal(env['journal'].directory) as journal:
+        second=ServerController(journal,env['client'],supervisor_factory=first.factory,lock_directory=env['root']/'locks')
+        try:
+            second.start_worker();second.step();command(env,key='explicit-new-generation');second.step()
+            wait_for(lambda:journal.target_selected('primary'))
+            first.shutdown();assert journal.target_selected('primary')
+        finally:second.shutdown()

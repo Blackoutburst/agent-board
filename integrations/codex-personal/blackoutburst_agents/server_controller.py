@@ -39,6 +39,7 @@ class ServerController:
         self._until=0.;self._commands={};self._busy=False;self._error=False
         self._mutex=threading.RLock();self._quit=threading.Event();self._wake=threading.Event()
         self._ready=threading.Event();self._thread=None
+        self._owns_worker=False
         self._last_tick={}
 
     def _cancelled(self):
@@ -85,43 +86,52 @@ class ServerController:
         try:
             with HostJournal(self.host.directory) as worker:
                 with worker.owner_lock(lock_directory=self.lock_directory):
-                    # Only the successful owner may alter startup state. A
-                    # competing controller fails before stopping the live one.
-                    # A restart never resumes an old activation/reset budget.
-                    worker.stop()
-                    supervisor=self.factory(worker);self._ready.set();next_tick=0.
-                    while not self._quit.is_set():
-                        self._wake.wait(.1);self._wake.clear()
-                        if self._cancelled():
-                            worker.stop('authorization_changed');continue
+                    normal_exit=False
+                    with self._mutex:self._owns_worker=True
+                    try:
+                        # Only the successful owner may alter startup state.
+                        # A restart never resumes/reset an old activation.
+                        worker.stop()
+                        supervisor=self.factory(worker);self._ready.set();next_tick=0.
+                        while not self._quit.is_set():
+                            self._wake.wait(.1);self._wake.clear()
+                            if self._cancelled():
+                                if worker.control()['enabled']:worker.stop('authorization_changed')
+                                continue
+                            with self._mutex:
+                                commands=list(self._commands.values())
+                                queued=[c for c in commands if (worker.managed_command(c['id']) or {}).get('state')=='queued']
+                                if not queued and (not worker.control()['enabled'] or self.clock()<next_tick):continue
+                                self._busy=True
+                            try:
+                                for c in queued:
+                                    if self._cancelled():break
+                                    try:worker.apply_managed_command(c['id'])
+                                    except HostError as error:
+                                        if error.code!='host_work_pending':raise
+                                if not worker.control()['enabled']:continue
+                                result=supervisor.tick(should_cancel=self._cancelled)
+                                worker.settle_managed_budgets()
+                                with self._mutex:self._last_tick=result
+                                next_tick=self.clock()+worker.control()['configuration']['interval_seconds']
+                            finally:
+                                with self._mutex:self._busy=False
+                        normal_exit=True
+                    finally:
+                        # Persist while still owning the process lock; serialize
+                        # with shutdown so no stale object can stop a successor.
                         with self._mutex:
-                            commands=list(self._commands.values())
-                            queued=[c for c in commands if (worker.managed_command(c['id']) or {}).get('state')=='queued']
-                            if not queued and (not worker.control()['enabled'] or self.clock()<next_tick):continue
-                            # Set before changing any target activation. The
-                            # control thread snapshots local state under this
-                            # same lock, so it cannot observe half a transition.
-                            self._busy=True
-                        try:
-                            for c in queued:
-                                if self._cancelled():break
-                                try:worker.apply_managed_command(c['id'])
-                                except HostError as error:
-                                    if error.code!='host_work_pending':raise
-                            if not worker.control()['enabled']:continue
-                            result=supervisor.tick(should_cancel=self._cancelled)
-                            worker.settle_managed_budgets()
-                            with self._mutex:self._last_tick=result
-                            next_tick=self.clock()+worker.control()['configuration']['interval_seconds']
-                        finally:
-                            with self._mutex:self._busy=False
+                            try:worker.stop('stopped' if normal_exit else 'needs_review')
+                            finally:self._owns_worker=False
         except BaseException:
             with self._mutex:self._error=True;self._until=0.;self._busy=False
             self._ready.set()
 
     def _stop_authority(self):
-        with self._mutex:self._until=0.;self._commands={}
-        self.host.stop('authorization_changed');self._wake.set()
+        with self._mutex:
+            self._until=0.;self._commands={}
+            if self._owns_worker:self.host.stop('authorization_changed')
+        self._wake.set()
 
     @staticmethod
     def _normalized(instance,c):
@@ -160,6 +170,8 @@ class ServerController:
 
     def step(self):
         """One bounded poll; local stops are persisted before ACKs or reports."""
+        with self._mutex:
+            if not self._owns_worker:raise HostError('managed_worker_not_owned')
         try:
             snapshot=self.client.call('poll_instance_commands',{'host_id':self.host_id,'limit':20})
             response('poll_instance_commands',snapshot)
@@ -240,6 +252,7 @@ class ServerController:
             while not should_cancel():
                 try:self.step()
                 except (BoardReadError,HostError):pass
+                if self._error:break
                 if self._quit.wait(interval):break
         finally:self.shutdown()
         return {'status':'stopped' if not self._error else 'needs_review','model_calls_by_control_loop':0}
