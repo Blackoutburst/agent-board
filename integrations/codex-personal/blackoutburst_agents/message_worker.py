@@ -9,6 +9,7 @@ from .message_scope import local_agent, validate_scope
 from .runner import PersonalRunner
 from .runtime_guard import RuntimeControlError, RuntimeAdmissionRefused
 from .message_runtime import MessageRuntimeGuard
+from .message_journal import DISPOSED_STATE,DISPOSITION_REASON,validate_executed_disposition
 from .run_store import StoreError
 
 
@@ -23,6 +24,11 @@ class MessageWorker:
 
     @staticmethod
     def receipt(op,status=None,reason=None):
+        if op['state']==DISPOSED_STATE:
+            marker=validate_executed_disposition(op)
+            return {'status':'executed_disposed','reason':DISPOSITION_REASON,
+                'worker_operation_id':op['worker_id'],'message_operation_id':op['id'],
+                'disposition_intent_id':marker['intent_id'],'proof_sha256':marker['proof_sha256']}
         return {'status':status or ('abandoned' if op['state']=='abandoned' else 'complete' if op['state']=='complete' else 'needs_review' if op['state']=='needs_review' else 'pending'),
             'reason':reason or op['payload'].get('reason','message_pending'),'worker_operation_id':op['worker_id'],
             'message_operation_id':op['id']}
@@ -37,7 +43,7 @@ class MessageWorker:
     def run(self,operation_id,target,owner,*,should_cancel):
         op=self.journal.operation(operation_id)
         if not op['worker_id']:raise HostError('host_reference_conflict')
-        if op['state'] in ('complete','needs_review','abandoned'):return self.receipt(op)
+        if op['state'] in ('complete','needs_review','abandoned',DISPOSED_STATE):return self.receipt(op)
         if op['state']=='ignored':raise HostError('host_reference_conflict')
         target_hash=digest(target)
         if op['payload'].get('configuration_sha256',target_hash)!=target_hash:raise HostError('message_configuration_conflict')

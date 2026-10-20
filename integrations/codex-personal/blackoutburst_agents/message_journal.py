@@ -14,10 +14,14 @@ APPLICATION_ID = 0x42424D46
 MAX_DELIVERIES = 256
 MAX_OPERATIONS = 256
 MAX_PAYLOAD = 256 * 1024
-STATES = frozenset({'new','prepared','running','result_ready','posting','complete','ignored','needs_review','abandoned'})
+DISPOSED_STATE = 'executed_disposed'
+DISPOSITION_SCHEMA = 'message-executed-disposition-v1'
+DISPOSITION_REASON = 'message_executed_blocked_disposed'
+SETTLED_STATES = frozenset({'complete','ignored','abandoned',DISPOSED_STATE})
+STATES = frozenset({'new','prepared','running','result_ready','posting','complete','ignored','needs_review','abandoned',DISPOSED_STATE})
 NEXT = {'new': {'prepared','ignored','needs_review'}, 'prepared': {'running','needs_review'},
     'running': {'result_ready','needs_review'}, 'result_ready': {'posting','needs_review'},
-    'posting': {'complete','needs_review'}, 'complete': set(), 'ignored': set(), 'needs_review': set(), 'abandoned': set()}
+    'posting': {'complete','needs_review'}, 'complete': set(), 'ignored': set(), 'needs_review': set(), 'abandoned': set(),DISPOSED_STATE:set()}
 
 
 def identifier(value, *, hex32=False, uuid_value=False):
@@ -30,6 +34,30 @@ def identifier(value, *, hex32=False, uuid_value=False):
             if str(uuid.UUID(value)) != value:raise ValueError
         except ValueError:raise HostError('message_reference_invalid') from None
     return value
+
+
+def validate_executed_disposition(value):
+    """Marker consistency only; the coordinator owns Runtime/owner authority."""
+    try:
+        if (type(value) is not dict or type(value['payload']) is not dict
+                or value['state'] != DISPOSED_STATE or type(value['revision']) is not int or value['revision'] < 2):
+            raise ValueError
+        payload = dict(value['payload']); marker = payload.pop('disposition')
+        if (type(marker) is not dict or set(marker) != {
+                'schema','intent_id','proof_sha256','original_payload_sha256','reason'}
+                or type(marker['schema']) is not str or marker['schema'] != DISPOSITION_SCHEMA
+                or type(marker['reason']) is not str or marker['reason'] != DISPOSITION_REASON
+                or payload.get('reason') != 'message_result_requires_review'):
+            raise ValueError
+        identifier(marker['intent_id'],uuid_value=True)
+        for key in ('proof_sha256','original_payload_sha256'):
+            if type(marker[key]) is not str or re.fullmatch('[0-9a-f]{64}',marker[key]) is None:
+                raise ValueError
+        if digest(payload) != marker['original_payload_sha256']:
+            raise ValueError
+        return dict(marker)
+    except Exception:
+        raise HostError('message_disposition_invalid') from None
 
 
 class MessageJournal:
@@ -45,7 +73,7 @@ class MessageJournal:
             self.db=sqlite3.connect(path,isolation_level=None,timeout=5)
             self.db.row_factory=sqlite3.Row
             version=self.db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0,1,2):raise HostError('unsupported_message_journal')
+            if version not in (0,1,2,3):raise HostError('unsupported_message_journal')
             if version==0 and self.db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                 raise HostError('message_journal_corrupt')
             self.db.execute('PRAGMA synchronous=FULL');self.db.execute('PRAGMA foreign_keys=ON')
@@ -72,7 +100,9 @@ class MessageJournal:
                 raise HostError('message_journal_corrupt')
             if version==1 and self.db.execute("SELECT 1 FROM operations WHERE state='abandoned' LIMIT 1").fetchone():
                 raise HostError('message_journal_corrupt')
-            if version==2:
+            if version in (1,2) and self.db.execute("SELECT 1 FROM operations WHERE state=? LIMIT 1",(DISPOSED_STATE,)).fetchone():
+                raise HostError('message_journal_corrupt')
+            if version in (2,3):
                 for row in self.db.execute('SELECT id FROM operations'):
                     self.operation(row['id'])
         except Exception:
@@ -179,14 +209,18 @@ class MessageJournal:
             raise HostError('message_journal_corrupt')
         if value['state']=='abandoned':
             from .message_abandon_protocol import validate_message_abandonment
-            if self.db.execute('PRAGMA user_version').fetchone()[0]!=2:raise HostError('message_journal_corrupt')
+            if self.db.execute('PRAGMA user_version').fetchone()[0] not in (2,3):raise HostError('message_journal_corrupt')
             validate_message_abandonment(value)
+        if value['state']==DISPOSED_STATE:
+            if self.db.execute('PRAGMA user_version').fetchone()[0]!=3:raise HostError('message_journal_corrupt')
+            validate_executed_disposition(value)
         return value
 
     def bind_worker(self,operation_id,worker_id):
         identifier(worker_id,uuid_value=True)
         with self.transaction() as db:
             op=self.operation(operation_id)
+            if op['state']==DISPOSED_STATE:raise HostError('message_already_disposed')
             if op['worker_id'] not in ('',worker_id) or (not op['worker_id'] and op['state']!='new'):
                 raise HostError('host_reference_conflict')
             db.execute('UPDATE operations SET worker_id=? WHERE id=?',(worker_id,operation_id))
@@ -195,10 +229,12 @@ class MessageJournal:
     def update(self,operation_id,expected_revision,state,**payload):
         encoded=_encode(payload,MAX_PAYLOAD,'message_payload_too_large')
         if state=='abandoned':raise HostError('explicit_message_abandonment_required')
+        if state==DISPOSED_STATE:raise HostError('explicit_message_disposition_required')
         if state not in STATES:raise HostError('message_state_invalid')
         with self.transaction() as db:
             op=self.operation(operation_id)
             if op['state']=='abandoned':raise HostError('message_already_abandoned')
+            if op['state']==DISPOSED_STATE:raise HostError('message_already_disposed')
             if op['revision']!=expected_revision:raise HostError('message_revision_conflict')
             if state!=op['state'] and state not in NEXT[op['state']]:raise HostError('message_state_invalid')
             db.execute('UPDATE operations SET state=?,revision=revision+1,payload_json=? WHERE id=?',
@@ -208,7 +244,7 @@ class MessageJournal:
     def begin_ack(self,delivery_id):
         with self.transaction() as db:
             delivery=self.delivery(delivery_id)
-            if any(op['state'] not in ('complete','ignored','abandoned') for op in delivery['operations']):
+            if any(op['state'] not in SETTLED_STATES for op in delivery['operations']):
                 raise HostError('message_delivery_unfinished')
             if delivery['state']=='pending':db.execute("UPDATE deliveries SET state='acking' WHERE id=?",(delivery_id,))
         return self.delivery(delivery_id)
@@ -227,7 +263,7 @@ class MessageJournal:
                 return delivery
             if delivery['state']!='acking' or reader['checkpoint']!=delivery['checkpoint']:
                 raise HostError('message_ack_conflict')
-            if any(op['state'] not in ('complete','ignored','abandoned') for op in delivery['operations']):
+            if any(op['state'] not in SETTLED_STATES for op in delivery['operations']):
                 raise HostError('message_delivery_unfinished')
             db.execute("UPDATE deliveries SET state='acked',ack_json=? WHERE id=?",(json.dumps(response,sort_keys=True),delivery_id))
             db.execute('UPDATE readers SET checkpoint=? WHERE id=?',(response['checkpoint'],reader['id']))
@@ -250,5 +286,39 @@ class MessageJournal:
                 'intent_id':intent_id,'seal_sha256':seal_sha256,'reason':MESSAGE_REASON}}
             db.execute("UPDATE operations SET state='abandoned',revision=revision+1,payload_json=? WHERE id=?",
                 (_encode(payload,MAX_PAYLOAD,'message_payload_too_large'),expected['id']))
-            db.execute('PRAGMA user_version=2')
+            if db.execute('PRAGMA user_version').fetchone()[0]<2:db.execute('PRAGMA user_version=2')
             return self.operation(expected['id'])
+
+    def _dispose_executed_blocked(self, expected_row, *, payload_sha256, intent_id, proof_sha256):
+        """One exact reviewed predecessor; no admission, cleanup or publication.
+
+        The explicit coordinator must hold owner/work locks and validate the
+        positive Runtime proof. These hashes are consistency links, not grants.
+        """
+        from .message_abandon_protocol import guard_sql,sha
+        if type(expected_row) is not dict or type(expected_row.get('id')) is not str:
+            raise HostError('message_disposition_invalid')
+        identifier(intent_id,uuid_value=True);sha(payload_sha256);sha(proof_sha256)
+        with self.transaction() as db:
+            guard_sql(db,('readers','deliveries','operations'))
+            version=db.execute('PRAGMA user_version').fetchone()[0]
+            if version not in (1,2,3):raise HostError('unsupported_message_journal')
+            current=self.operation(expected_row['id'])
+            row={key:value for key,value in current.items() if key!='payload'}
+            if (digest(row)!=digest(expected_row) or current['state']!='needs_review'
+                    or not current['worker_id'] or type(current['payload']) is not dict
+                    or digest(current['payload'])!=payload_sha256
+                    or current['payload'].get('reason')!='message_result_requires_review'
+                    or 'disposition' in current['payload']):
+                raise HostError('message_disposition_conflict')
+            marker={'schema':DISPOSITION_SCHEMA,'intent_id':intent_id,'proof_sha256':proof_sha256,
+                'original_payload_sha256':payload_sha256,'reason':DISPOSITION_REASON}
+            payload={**current['payload'],'disposition':marker}
+            encoded=_encode(payload,MAX_PAYLOAD,'message_payload_too_large')
+            db.execute('UPDATE operations SET state=?,revision=revision+1,payload_json=? WHERE id=?',
+                (DISPOSED_STATE,encoded,current['id']))
+            db.execute('PRAGMA user_version=3')
+            result=self.operation(current['id'])
+            expected={**row,'state':DISPOSED_STATE,'revision':row['revision']+1,'payload':payload}
+            if digest(result)!=digest(expected):raise HostError('message_disposition_conflict')
+            return result
