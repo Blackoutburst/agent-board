@@ -52,6 +52,12 @@ pas contourner le canal de contrôle. L’installation d’un service doit point
 explicitement sur cette nouvelle entrée ; les services déjà préparés ne sont
 pas migrés ou activés automatiquement.
 
+Pour une installation existante, la [mise à jour explicite des services](../deploy/isolated_host/UPDATE.md)
+vérifie la version précédente et conserve les outils, comptes et configurations.
+Elle installe les nouvelles unités arrêtées et désactivées. L’autorisation du
+contrôleur sur le board, la préparation de son journal et le démarrage du service
+restent des étapes distinctes.
+
 Le contrôleur n’appelle aucun modèle pour attendre des événements. Un démarrage
 autorise le budget fini demandé, dans les limites de la configuration locale.
 Un budget supérieur à cette limite est refusé sur le site ; le gestionnaire
