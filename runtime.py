@@ -109,6 +109,20 @@ def _identifier(value, name, *, model=False):
     return value
 
 
+def validate_message_admission_seal_arguments(values):
+    """Preserve the exact original wire request before FastMCP coercion."""
+    keys = {'session_id', 'idempotency_key', 'thread_id', 'message_id',
+            'source_sha256', 'work_id', 'turn_id', 'provider', 'model'}
+    if type(values) is not dict or set(values) != keys:
+        _fail('invalid_admission_seal_arguments')
+    for key, value in values.items():
+        if key == 'source_sha256':
+            if type(value) is not str or not _SHA256.fullmatch(value):
+                _fail('invalid_source_sha256')
+        else:
+            _identifier(value, key, model=key in {'provider', 'model'})
+
+
 def _bool(value, name):
     if type(value) is not bool:
         _fail(f'invalid_{name}')
@@ -218,6 +232,18 @@ def _message_capacity_refusal(actor,profile,arguments):
         'session_id':actor['session_id']}}
 
 
+def _message_admission_seal(actor,profile,arguments):
+    def hashed(method):
+        return hashlib.sha256(_json({'method':method,'arguments':arguments}).encode()).hexdigest()
+    return {'reserved':False,'refusal':{
+        'schema':'message-runtime-admission-seal-v1','reason':'explicit_pretransport_abandonment',
+        'request_sha256':hashed('seal_message_execution_admission'),
+        'admission_request_sha256':hashed('reserve_message_execution'),
+        'owner_id':actor['owner_id'],'agent_id':profile['id'],
+        'device_id':actor['device_id'],'profile_version':profile['version'],
+        'session_id':actor['session_id']}}
+
+
 class RuntimeMixin:
     @staticmethod
     def _runtime_denial(db,actor,values):
@@ -225,6 +251,21 @@ class RuntimeMixin:
             ((device_id=? AND session_id=? AND idempotency_key=?) OR (work_id=? AND turn_id=?)) LIMIT 2''',
             (actor['owner_id'],actor['device_id'],actor['session_id'],values['idempotency_key'],
              values['work_id'],values['turn_id'])).fetchall()
+
+    def _runtime_confirm_denial(self,db,actor,values,profile,payload,response):
+        """Final write postcondition, including effects of preexisting triggers."""
+        if db.execute('''SELECT 1 FROM runtime_executions WHERE owner_id=? AND
+                ((device_id=? AND session_id=? AND idempotency_key=?) OR (work_id=? AND turn_id=?)) LIMIT 1''',
+                (actor['owner_id'],actor['device_id'],actor['session_id'],values['idempotency_key'],
+                 values['work_id'],values['turn_id'])).fetchone():
+            _fail('execution_admission_conflict',409)
+        expected={key:actor[key] for key in ('owner_id','device_id','session_id')} | {
+            key:values[key] for key in ('idempotency_key','work_id','turn_id')} | {
+            'agent_id':profile['id'],'profile_version':profile['version'],
+            'payload_sha256':hashlib.sha256(payload.encode()).hexdigest(),'response':_json(response)}
+        denied=self._runtime_denial(db,actor,values)
+        if len(denied)!=1 or dict(denied[0])!=expected:
+            _fail('execution_admission_conflict',409)
 
     def _runtime_review_prerequisites(self, db, ticket_id):
         """Bounded proof of each current prerequisite's latest status audit.
@@ -627,6 +668,7 @@ class RuntimeMixin:
                         work_id,turn_id,payload_sha256,response) VALUES(?,?,?,?,?,?,?,?,?,?)''',
                         (actor['owner_id'],actor['device_id'],actor['session_id'],profile['id'],profile['version'],
                          idempotency_key,work_id,turn_id,hashlib.sha256(payload.encode()).hexdigest(),_json(response)))
+                    self._runtime_confirm_denial(db,actor,values,profile,payload,response)
                     return response
                 _fail('capacity_exhausted',409)
             self._delegation_runtime_check(db,actor,linked['ticket_id'],provider,model)
@@ -642,6 +684,48 @@ class RuntimeMixin:
             self._audit(db,actor,'message_execution_reserved',{'execution_id':identifier})
             row = db.execute('SELECT * FROM runtime_executions WHERE id=?',(identifier,)).fetchone()
             return {'reserved':True,'execution':self._execution_view(db,row),'retried':False}
+
+    def seal_message_execution_admission(self, actor, idempotency_key, thread_id, message_id,
+                                         source_sha256, work_id, turn_id, provider, model):
+        """Explicit irreversible denial of one old turn, never execution cleanup."""
+        values={key:_identifier(value,key,model=key in {'provider','model'})
+            for key,value in locals().copy().items() if key in {
+                'idempotency_key','thread_id','message_id','work_id','turn_id','provider','model'}}
+        if type(source_sha256) is not str or not _SHA256.fullmatch(source_sha256):
+            _fail('invalid_source_sha256')
+        with self._tx() as db:
+            actor,profile,linked=self._runtime_message_authorize(db,actor,thread_id,message_id,source_sha256)
+            # Serialized with both reservation methods. A real execution,
+            # including a terminal one or an alias key, can never become absence.
+            if db.execute('''SELECT 1 FROM runtime_executions WHERE owner_id=? AND
+                    ((device_id=? AND session_id=? AND idempotency_key=?) OR (work_id=? AND turn_id=?)) LIMIT 1''',
+                    (actor['owner_id'],actor['device_id'],actor['session_id'],idempotency_key,work_id,turn_id)).fetchone():
+                _fail('execution_admission_conflict',409)
+            payload=_json(values | linked | {'scope_kind':'message','source_sha256':source_sha256,
+                'agent_id':profile['id'],'profile_version':profile['version']})
+            arguments={**values,'source_sha256':source_sha256,'session_id':actor['session_id']}
+            response=_message_admission_seal(actor,profile,arguments)
+            exact={key:actor[key] for key in ('owner_id','device_id','session_id')} | {
+                key:values[key] for key in ('idempotency_key','work_id','turn_id')} | {
+                'agent_id':profile['id'],'profile_version':profile['version'],
+                'payload_sha256':hashlib.sha256(payload.encode()).hexdigest()}
+            denied=self._runtime_denial(db,actor,values)
+            if denied:
+                if len(denied)!=1 or any(denied[0][key]!=value for key,value in exact.items()):
+                    _fail('execution_key_conflict',409)
+                # In particular, never rewrite a capacity-v1 denial as a seal.
+                if denied[0]['response']!=_json(response):
+                    _fail('execution_admission_conflict',409)
+                return response
+            self._delegation_claim_scope(db,actor,None)
+            db.execute('''INSERT INTO runtime_admission_refusals(
+                owner_id,device_id,session_id,agent_id,profile_version,idempotency_key,
+                work_id,turn_id,payload_sha256,response) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                (actor['owner_id'],actor['device_id'],actor['session_id'],profile['id'],profile['version'],
+                 idempotency_key,work_id,turn_id,exact['payload_sha256'],_json(response)))
+            self._audit(db,actor,'message_admission_sealed',{'request_sha256':response['refusal']['request_sha256']})
+            self._runtime_confirm_denial(db,actor,values,profile,payload,response)
+            return response
 
     def lookup_execution(self, actor, idempotency_key):
         _identifier(idempotency_key, 'idempotency_key')

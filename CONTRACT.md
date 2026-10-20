@@ -1,6 +1,21 @@
-# Board interface contract — 2.15.0
+# Board interface contract — 2.15.1
 
-The browser REST API and MCP act on one database. Application version is `2.15.0`; schema version is `15`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.15.1`; schema version is `15`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Explicit pretransport admission seal (2.15.1, schema unchanged)
+
+`seal_message_execution_admission` permanently denies the exact original message
+reservation key and owner/work/turn when no real execution exists. It rechecks
+current identity, permissions and message source and is serialized with every
+reservation. The closed seal is distinct from a capacity refusal and binds both
+the seal call and original legacy admission request. A positive execution or an
+existing capacity refusal is never reclassified. The catalogue now has 63 tools.
+See [the seal contract](docs/MESSAGE-ADMISSION-SEAL.md).
+
+The explicit client is not called by normal workers. This API neither resolves a
+private journal nor attests local process cleanup, releases capacity or changes
+a dispatch budget. It must never be invoked automatically for an uncertain turn;
+local abandonment and owner/catalog upgrades remain separate reviewed steps.
 
 ## Explicit message admission refusal (2.15.0, schema 15)
 
@@ -46,7 +61,7 @@ mutations retain browser authentication/CSRF, owner isolation, version/generatio
 CAS and immutable idempotency payloads. Start/restart budgets are integers 1–20;
 stop uses 0. A role cannot be self-granted through MCP.
 
-Four device-only MCP tools are added, bringing the total to 62:
+Four device-only MCP tools are added, bringing the total to 62 at version 2.14:
 `publish_server_catalog`, `poll_instance_commands`, `ack_instance_command`,
 `report_instance_state`. These narrow manager operations take no model
 `session_id` and never register a chat or grant work permissions. They require
@@ -72,7 +87,7 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (62)
+## MCP tools (63)
 
 | Purpose | Tools |
 | --- | --- |
@@ -84,7 +99,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Bounded delegation families | `open_delegation_family`, `get_delegation_family`, `lookup_delegation_family`, `stop_delegation_family`, `accept_delegation_result`, `finalize_delegation_family` |
 | Fixed development observations | `get_development_frame` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
-| Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools |
+| Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools; explicit `seal_message_execution_admission` |
 | Informational subscription observations | `report_usage_observation` |
 | Human collaboration | `request_human_input`, `lookup_human_request`, `list_human_requests` |
 | Confirmed human-message stream | `open_message_feed`, `read_message_feed`, `checkpoint_message_feed` |
