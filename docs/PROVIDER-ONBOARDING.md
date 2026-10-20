@@ -19,8 +19,8 @@ supplémentaires ne sont pas annoncés comme compatibles.
 session humaine du propriétaire. Il n’a aucun équivalent MCP et n’ajoute aucune
 permission à un appareil. Il expose un catalogue fermé, l’hôte actif de ce
 propriétaire, au plus 16 cibles réellement publiées, et les seules préférences du
-profil demandé. Il ne lit ni credentials, instructions privées, conversations,
-politiques de routage locales ni historique fournisseur. Les réponses gardent
+profil demandé. Il n’ouvre aucun fichier de credentials et n’expose ni les instructions du profil,
+ni les conversations, les politiques de routage locales ou l’historique fournisseur. Les réponses gardent
 la limite JSON existante de 64 Kio et le `no-store` des routes privées. Les erreurs
 de paramètres ont des codes fixes, sans renvoyer l’entrée invalide.
 
