@@ -1,6 +1,24 @@
-# Board interface contract — 2.14.2
+# Board interface contract — 2.15.0
 
-The browser REST API and MCP act on one database. Application version is `2.14.2`; schema version is `14`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.15.0`; schema version is `15`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Explicit message admission refusal (2.15.0, schema 15)
+
+The optional `refusal_mode="capacity-v1"` on `reserve_message_execution` returns a
+closed, request-bound refusal only for a confirmed capacity rejection. The
+serialized transaction stores a permanent tombstone for its key and owner/work/turn;
+subsequent legacy or ticket calls cannot turn it into an execution. Fresh
+permission and exact-source checks remain required. No Runtime or cleanup receipt
+is fabricated. Generic errors, timeouts and lost responses remain uncertain.
+See [the normative refusal contract](docs/RUNTIME-ADMISSION-REFUSALS.md).
+
+Adapter 0.30 records fresh confirmed refusals as terminal `not_admitted` in private
+Runtime journal schema 3. It never converts existing uncertain attempts, restarts
+a model or refunds the consumed dispatch. Message readiness requires a confirmed
+feed. The [append-only staging primitive](integrations/codex-personal/HOST_APPEND_STAGE.md)
+prepares one inactive target under the existing owner lock; applying, provider login,
+provisioning and activation remain separate work. Existing prepared owner catalogs
+are not replaced by rerunning `managed-prepare` after a source upgrade.
 
 ## Server capacity display (2.14.2, schema unchanged)
 
@@ -54,10 +72,11 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (58)
+## MCP tools (62)
 
 | Purpose | Tools |
 | --- | --- |
+| Human-granted server management | `publish_server_catalog`, `poll_instance_commands`, `ack_instance_command`, `report_instance_state` |
 | Identity and discovery | `register_agent`, `inspect_profile_refresh`, `refresh_agent_session`, `list_agents`, `get_work`, `read_inbox` |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |

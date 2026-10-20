@@ -231,13 +231,13 @@ def test_schema_ten_upgrade_is_atomic_and_preserves_old_runtime_rows(family,monk
     restored=Board(b.data_dir)
     assert restored.lookup_execution(f['actors'][0],'old')['execution']==old
     with restored._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==14
+        assert db.execute('PRAGMA user_version').fetchone()[0]==15
         assert not db.execute('PRAGMA foreign_key_check').fetchall()
 
 
 def test_backup_restores_family_claims_pending_runtime_and_private_plan(family,tmp_path):
     f=family;b=f['b'];opened=open_family(f);child=claimed(f,opened);row=execution(f,child)
-    archive=tmp_path/'family.zip';assert create_backup(b.data_dir,archive)['schema']['user_version']==14
+    archive=tmp_path/'family.zip';assert create_backup(b.data_dir,archive)['schema']['user_version']==15
     destination=tmp_path/'restored';restore_backup(archive,destination);restored=Board(destination)
     assert restored.get_delegation_family(f['actors'][0],opened['id'])==opened
     assert restored.lookup_execution(f['actors'][1],'turn')['execution']==row
