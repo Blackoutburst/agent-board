@@ -32,7 +32,7 @@ class HostMessageAbandonMixin:
     def _check_abandonments(self):
         version=self._db.execute('PRAGMA user_version').fetchone()[0]
         exists=self._db.execute("SELECT 1 FROM main.sqlite_master WHERE name=?",(TABLE,)).fetchone()
-        if version!=3:
+        if version not in (3,4):
             if exists:raise HostError('message_abandon_schema')
             return
         self._abandon_schema(self._db)
@@ -41,7 +41,7 @@ class HostMessageAbandonMixin:
 
     def _abandon_record(self,*,request_key=None,intent_id=None):
         if (request_key is None)==(intent_id is None):raise HostError('message_abandon_invalid')
-        if self._db.execute('PRAGMA user_version').fetchone()[0]!=3:return None
+        if self._db.execute('PRAGMA user_version').fetchone()[0] not in (3,4):return None
         self._abandon_schema(self._db)
         row=self._db.execute(f'SELECT * FROM main.{TABLE} WHERE '+('request_key' if request_key is not None else 'id')+'=?',
             (request_key if request_key is not None else intent_id,)).fetchone()
@@ -85,20 +85,22 @@ class HostMessageAbandonMixin:
             'settings':self.managed_settings(),'dispatch':chosen})
 
     def _require_no_unsettled_abandonment(self):
-        if self._db.execute('PRAGMA user_version').fetchone()[0]==3:
+        self._require_no_unsettled_executed_disposition()
+        if self._db.execute('PRAGMA user_version').fetchone()[0] in (3,4):
             self._abandon_schema(self._db)
             if self._db.execute(f"SELECT 1 FROM main.{TABLE} WHERE phase!='complete' LIMIT 1").fetchone():
                 raise HostError('message_abandon_unsettled')
 
     def _abandon_create(self,p):
         self._require_lock();p=proposal(p)
+        self._require_no_unsettled_executed_disposition()
         with self._tx() as db:
             if self._abandon_record(request_key=p['request_key']) is not None:raise HostError('message_abandon_exists')
             if self._abandon_host_fingerprint(p['host']['target_id'],p['dispatch']['batch_id'])!=p['host']['fingerprint']:
                 raise HostError('message_abandon_conflict')
             version=db.execute('PRAGMA user_version').fetchone()[0]
             self._check_abandonments()
-            if version not in (2,3):raise HostError('message_abandon_schema')
+            if version not in (2,3,4):raise HostError('message_abandon_schema')
             self._abandon_schema(db,create=version==2)
             if db.execute(f"SELECT 1 FROM main.{TABLE} WHERE phase!='complete' LIMIT 1").fetchone():raise HostError('message_abandon_unsettled')
             if db.execute(f'SELECT 1 FROM main.{TABLE} WHERE json_extract(proposal_json,\'$.dispatch.batch_id\')=? LIMIT 1',
@@ -108,7 +110,7 @@ class HostMessageAbandonMixin:
             identifier=str(uuid.uuid4())
             db.execute(f'INSERT INTO main.{TABLE} VALUES(?,?,1,\'intent\',?,?,\'null\',\'{{}}\')',
                 (identifier,p['request_key'],p['proposal_sha256'],encoded(p)))
-            db.execute('PRAGMA user_version=3')
+            if version<3:db.execute('PRAGMA user_version=3')
             self._abandon_record(intent_id=identifier)
         return self._abandon_record(intent_id=identifier)
 

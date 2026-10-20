@@ -1,6 +1,6 @@
-# Board interface contract — 2.16.1
+# Board interface contract — 2.16.2
 
-The browser REST API and MCP act on one database. Application version is `2.16.1`; schema version is `16`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.16.2`; schema version is `16`. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Human preparation drafts (2.16.0, schema 16)
 
@@ -118,11 +118,11 @@ Authenticate MCP with a revocable owner/device credential. Register each chat wi
 
 Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
-## MCP tools (63)
+## MCP tools (64)
 
 | Purpose | Tools |
 | --- | --- |
-| Human-granted server management | `publish_server_catalog`, `poll_instance_commands`, `ack_instance_command`, `report_instance_state` |
+| Human-granted server management | `publish_server_catalog`, `replace_server_catalog`, `poll_instance_commands`, `ack_instance_command`, `report_instance_state` |
 | Identity and discovery | `register_agent`, `inspect_profile_refresh`, `refresh_agent_session`, `list_agents`, `get_work`, `read_inbox` |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -84,6 +85,114 @@ def _result_json(result):
     if len(encoded.encode("utf-8")) > 1024 * 1024:
         raise StoreError("result_too_large")
     return encoded
+
+
+def _executed_disposition_proof(proof, work, turn, expected, intent_id):
+    """Check closed evidence data; the coordinator authenticates observations.
+
+    This is deliberately not a live grant or a process-liveness test. The caller
+    must have recorded the original positive Runtime observations under its
+    verified owner/source boundary before invoking the private storage mutation.
+    """
+    code = 'executed_disposition_proof_invalid'
+    def fail():
+        raise StoreError(code)
+    def sha(value):
+        return type(value) is str and re.fullmatch('[0-9a-f]{64}', value) is not None
+    def opaque(value):
+        return type(value) is str and re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}', value) is not None
+    def positive(value):
+        return type(value) is int and 1 <= value < 2**63
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False,
+                          separators=(',', ':'), allow_nan=False).encode('utf-8')
+    try:
+        fields = {'schema', 'intent_id', 'state_sha256', 'result_sha256',
+                  'configuration', 'identity', 'local_runtime', 'lookup', 'control'}
+        if (type(proof) is not dict or set(proof) != fields
+                or proof['schema'] != 'message-executed-runstore-proof-v1'
+                or proof['intent_id'] != intent_id or proof['state_sha256'] != expected
+                or not sha(proof['state_sha256']) or not sha(proof['result_sha256'])):
+            fail()
+        identity = proof['identity']
+        if (type(identity) is not dict
+                or set(identity) != {'owner_id', 'agent_id', 'device_id', 'profile_version', 'session_id'}
+                or any(not opaque(identity[k]) for k in ('owner_id', 'agent_id', 'device_id', 'session_id'))
+                or not positive(identity['profile_version'])):
+            fail()
+        config = proof['configuration']
+        if (type(config) is not dict or set(config) != {'scope', 'work_id', 'turn_id', 'provider', 'model'}
+                or type(config['scope']) is not dict
+                or set(config['scope']) != {'board_endpoint', 'board_session_id', 'owner_id',
+                    'agent_id', 'scope_kind', 'thread_id', 'message_id', 'source_sha256'}
+                or any(type(v) is not str for v in config['scope'].values())
+                or config['provider'] != 'codex_chatgpt' or type(config['model']) is not str):
+            fail()
+        from .runtime_journal import RuntimeJournal
+        from .message_scope import local_agent
+        scope = config['scope']
+        validated = RuntimeJournal.configuration(scope, config['work_id'], config['turn_id'],
+                                                 config['model'], provider=config['provider'])
+        if (canonical(config) != canonical(validated)
+                or scope['owner_id'] != work['owner_id'] or local_agent(scope) != work['agent_id']
+                or scope['thread_id'] != work['project_id'] or scope['message_id'] != work['ticket_id']
+                or config['work_id'] != work['id'] or config['turn_id'] != turn['id']
+                or config['model'] != work['model']
+                or any(identity[k] != scope[k] for k in ('owner_id', 'agent_id'))
+                or identity['session_id'] != scope['board_session_id']):
+            fail()
+        local = proof['local_runtime']
+        if (type(local) is not dict or set(local) != {'id', 'key', 'phase', 'revision', 'start_confirmed', 'receipt'}
+                or type(local['id']) is not str or str(uuid.UUID(local['id'])) != local['id']
+                or local['key'] != RuntimeJournal.key(config) or local['phase'] != 'finished'
+                or not positive(local['revision']) or local['start_confirmed'] is not True):
+            fail()
+        terminal_fields = {'id', 'revision', 'state', 'owner_id', 'agent_id', 'device_id',
+            'profile_version', 'session_id', 'scope_kind', 'thread_id', 'message_id',
+            'source_sha256', 'work_id', 'turn_id', 'provider', 'model', 'outcome', 'reason',
+            'cleanup_confirmed'}
+        terminal = local['receipt']
+        for value in (terminal, proof['lookup'], proof['control']):
+            if (type(value) is not dict or set(value) != terminal_fields
+                    or not opaque(value['id']) or not positive(value['revision'])
+                    or value['state'] != 'finished' or value['outcome'] != 'blocked'
+                    or value['reason'] != 'protocol_error' or value['cleanup_confirmed'] is not True
+                    or any(type(value[k]) is not str for k in terminal_fields - {
+                        'revision', 'profile_version', 'cleanup_confirmed'})
+                    or any(value[k] != identity[k] or type(value[k]) is not type(identity[k]) for k in identity)
+                    or any(value[k] != scope[k] for k in ('scope_kind', 'thread_id', 'message_id', 'source_sha256'))
+                    or any(value[k] != config[k] for k in ('work_id', 'turn_id', 'provider', 'model'))
+                    or canonical(value) != canonical(terminal)):
+                fail()
+        if len(canonical(proof)) > 32768:
+            fail()
+        raw = turn['result_json']
+        if type(raw) is not str or len(raw) > 1024 * 1024:
+            fail()
+        data = raw.encode('utf-8')
+        if len(data) > 1024 * 1024 or hashlib.sha256(data).hexdigest() != proof['result_sha256']:
+            fail()
+        def pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value: fail()
+                value[key] = item
+            return value
+        result = json.loads(raw, object_pairs_hook=pairs)
+        flags = {'cleanup_confirmed': True, 'exit_zero': False, 'session_verified': True,
+                 'tool_free': True, 'turn_completed': False}
+        if (type(result) is not dict or result.get('status') != 'blocked'
+                or result.get('reason') != 'protocol_error'
+                or type(result.get('verification')) is not dict
+                or any(result['verification'].get(k) is not v for k, v in flags.items())
+                or result.get('session_id') != turn['provider_session_id']
+                or ('provider_session_id' in result and result['provider_session_id'] != turn['provider_session_id'])
+                or _result_json(result) != raw):
+            fail()
+    except StoreError:
+        raise
+    except Exception:
+        raise StoreError(code) from None
 
 
 class RunStore:
@@ -492,6 +601,57 @@ class RunStore:
         except (ValueError,UnicodeError,TypeError):raise StoreError('interruption_state_conflict') from None
         if len(raw)>2*1024*1024:raise StoreError('interruption_state_conflict')
         return hashlib.sha256(raw).hexdigest()
+
+    def _dispose_executed_blocked(self, work_id, *, expected_state_sha256, intent_id, proof):
+        """Close one exact executed-blocked work without clearing its review.
+
+        Only the explicit coordinator may use this storage boundary, after its
+        durable intent and positive authenticated Runtime reads. There is no PID
+        probe, Runtime mutation, retry, or acceptance of an already closed work.
+        """
+        self._require_lock(work_id)
+        _uuid(intent_id)
+        if (type(expected_state_sha256) is not str
+                or re.fullmatch('[0-9a-f]{64}', expected_state_sha256) is None):
+            raise StoreError('interruption_state_conflict')
+        with self._transaction() as db:
+            def schema():
+                if (db.execute('PRAGMA user_version').fetchone()[0] != 2
+                        or db.execute('PRAGMA application_id').fetchone()[0] != 0):
+                    raise StoreError('state_schema_invalid')
+                self._check_existing_schema()
+            schema()
+            if self.interruption_state_sha256(work_id) != expected_state_sha256:
+                raise StoreError('interruption_state_conflict')
+            work = self._work(work_id)
+            turn = dict(db.execute('SELECT * FROM turns WHERE work_id=?', (work_id,)).fetchone())
+            if (work['status'] != 'needs_review' or turn['status'] != 'blocked'
+                    or type(turn['requires_review']) is not int or turn['requires_review'] != 1
+                    or type(turn['pid']) is not int or turn['pid'] <= 0
+                    or turn['resolution'] is not None or turn['resolution_reason'] is not None
+                    or type(turn['provider_session_id']) is not str
+                    or turn['provider_session_id'] != work['provider_session_id']
+                    or db.execute('SELECT 1 FROM context_guards WHERE work_id=?', (work_id,)).fetchone()):
+                raise StoreError('executed_disposition_predecessor_invalid')
+            _uuid(turn['provider_session_id'])
+            _executed_disposition_proof(proof, work, turn, expected_state_sha256, intent_id)
+            changes = db.total_changes
+            now = time.time()
+            if (type(now) not in (int, float) or not math.isfinite(now) or now <= 0
+                    or any(type(v) not in (int, float) or not math.isfinite(v) or now < v
+                           for v in (work['updated_at'], turn['updated_at']))):
+                raise StoreError('executed_disposition_clock_invalid')
+            reason = 'message_executed_blocked_disposed:' + intent_id
+            db.execute('UPDATE turns SET resolution=?,resolution_reason=?,updated_at=? WHERE id=?',
+                       ('abandon', reason, now, turn['id']))
+            db.execute('UPDATE works SET status=?,updated_at=? WHERE id=?', ('closed', now, work_id))
+            schema()
+            expected_work = {**work, 'status': 'closed', 'updated_at': now}
+            expected_turn = {**turn, 'resolution': 'abandon', 'resolution_reason': reason, 'updated_at': now}
+            if (db.total_changes - changes != 2 or self._work(work_id) != expected_work
+                    or self._turn(turn['id']) != expected_turn):
+                raise StoreError('executed_disposition_postcondition')
+            return self._work(work_id)
 
     def resolve_interruption(self, work_id, *, decision, reason, expected_state_sha256=None):
         self._require_lock(work_id)

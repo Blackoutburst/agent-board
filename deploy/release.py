@@ -106,13 +106,13 @@ def main():
             try:
                 with urllib.request.urlopen('http://127.0.0.1:9140/health',timeout=2) as response:
                     health=json.load(response)
-                if health.get('version')=='2.16.1' and health.get('schema_version')==16:
+                if health.get('version')=='2.16.2' and health.get('schema_version')==16:
                     break
             except (OSError,ValueError):
                 pass
             time.sleep(.4)
         else:
-            raise RuntimeError('Health did not recover; matching source/data rollback snapshot: '+str(snapshot))
+            raise RuntimeError('Health did not recover; preserve current schema/data and use a compatible corrective release. Private recovery snapshot: '+str(snapshot))
         with sqlite3.connect(data.joinpath('board.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
             integrity=db.execute('PRAGMA integrity_check').fetchone()[0]
             foreign_keys=db.execute('PRAGMA foreign_key_check').fetchall()
