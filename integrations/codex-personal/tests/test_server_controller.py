@@ -291,3 +291,81 @@ def test_old_rpc_completion_cannot_mutate_the_successor_after_handoff(env,bounda
     finally:
         env['client'].call=original
         for new,state in successors:new.shutdown();state.close()
+
+
+@pytest.mark.parametrize('reason',['waiting_for_human','publication_pending','board_unavailable'])
+def test_live_pending_continues_same_dispatch_without_new_budget(env,reason):
+    c=env['control'];now=[10.];c.clock=lambda:now[0];finished=threading.Event();resume=threading.Event();calls=[]
+    class Waiting:
+        def __init__(self,j):self.journal=j
+        def tick(self,**kw):
+            j=self.journal
+            row=j.reserve_dispatch('primary',{'id':'pending-batch','request_id':'pending-request',
+                'subscription_id':'pending-sub'},j.control()['activation'])
+            calls.append(row['worker_id'])
+            state='complete' if resume.is_set() else 'pending'
+            j.finish_dispatch(row['batch_id'],state,{'status':state,'reason':reason})
+            finished.set()
+            return {'status':state,'reason':reason}
+    c.factory=Waiting;c.start_worker();c.step();command(env);c.step();assert finished.wait(2)
+    wait_for(lambda:not c._busy);first=env['journal'].dispatches()[0]
+    for _ in range(3):c.step()
+    assert current(env)['observed_state']=='ready'
+    assert env['journal'].managed_target('primary')['enabled']
+    assert env['journal'].managed_target('primary')['remaining']==0
+    assert len(calls)==1
+    resume.set();now[0]+=6.;c.step()
+    wait_for(lambda:env['journal'].dispatches()[0]['state']=='complete')
+    c.step()
+    assert calls==[first['worker_id'],first['worker_id']]
+    assert len(env['journal'].dispatches())==1
+    assert current(env)['observed_state']=='stopped' and current(env)['reason']=='budget_exhausted'
+
+
+def test_unchanged_observations_only_send_one_heartbeat_per_minute(env,monkeypatch):
+    import server_instances
+    now=[1000.];monkeypatch.setattr(server_instances.time,'time',lambda:now[0])
+    c=env['control'];c.start_worker();c.step()
+    for _ in range(100):c.step()
+    reports=lambda:[a for n,a in env['client'].calls if n=='report_instance_state']
+    assert len(reports())==1
+    now[0]+=61.;c.step();assert len(reports())==2
+    # Clock rollback refreshes telemetry but never alters local authority TTL.
+    now[0]-=120.;c.step();assert len(reports())==3
+
+
+def test_empty_feed_scan_remains_ready_instead_of_flapping_busy(env):
+    c=env['control'];scan=threading.Event();release=threading.Event()
+    class EmptyScan:
+        def __init__(self,j):pass
+        def tick(self,**kw):
+            scan.set();assert release.wait(3)
+            return {'status':'idle','reason':'no_pending_events'}
+    c.factory=EmptyScan;c.start_worker();c.step();command(env);c.step();assert scan.wait(2)
+    try:
+        c.step();assert current(env)['observed_state']=='ready'
+        before=len([1 for n,_ in env['client'].calls if n=='report_instance_state'])
+        for _ in range(3):c.step()
+        assert len([1 for n,_ in env['client'].calls if n=='report_instance_state'])==before
+        assert current(env)['current_command']['status']=='complete'
+    finally:release.set()
+
+
+@pytest.mark.parametrize('action',['start','restart'])
+@pytest.mark.parametrize('already_accepted',[False,True])
+def test_budget_over_fixed_owner_limit_is_refused_without_losing_controller(env,action,already_accepted):
+    c=env['control'];c.start_worker();c.step();i=current(env)
+    cmd=env['board'].command_server_instance(env['human'],i['id'],action,i['version'],i['generation'],
+        i['launchspec_sha256'],4,'over-fixed-limit')
+    if already_accepted:
+        env['client'].call('ack_instance_command',{'host_id':env['remote']['id'],'command_id':cmd['id'],
+            'expected_revision':cmd['revision'],'idempotency_key':'prior-ack'})
+    c.step();i=current(env)
+    assert i['current_command']['status']=='rejected' and i['reason']=='launch_refused'
+    assert i['observed_state']=='stopped' and i['cleanup_confirmed']
+    assert c._owns_worker and not c._error and c._thread.is_alive()
+    assert env['journal'].dispatches()==[]
+    # A corrected explicit request works without an SSH restart.
+    command(env,key='corrected-budget');c.step()
+    wait_for(lambda:env['journal'].managed_target('primary')['enabled'])
+    c.step();assert current(env)['observed_state']=='ready'

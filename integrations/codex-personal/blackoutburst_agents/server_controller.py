@@ -41,6 +41,19 @@ class ServerController:
         self._ready=threading.Event();self._thread=None
         self._owns_worker=False
         self._last_tick={}
+        self._known_pending=set()
+        self._remote_seen_at=None
+
+    @staticmethod
+    def _dispatch_identity(journal,dispatch):
+        target=journal.managed_target(dispatch['target_id'])
+        return (dispatch['target_id'],dispatch['batch_id'],dispatch['worker_id'],
+                dispatch['activation'],target['generation'],target['activation'])
+
+    def _continuable_pending(self,journal,dispatch):
+        return (dispatch['state']=='pending' and bool(dispatch['worker_id'])
+            and journal.managed_target(dispatch['target_id'])['enabled']
+            and self._dispatch_identity(journal,dispatch) in self._known_pending)
 
     def _cancelled(self):
         with self._mutex:return self._quit.is_set() or self._error or self.clock()>=self._until
@@ -119,7 +132,16 @@ class ServerController:
                                 if not worker.control()['enabled']:continue
                                 result=supervisor.tick(should_cancel=self._cancelled)
                                 worker.settle_managed_budgets()
-                                with self._mutex:self._last_tick=result
+                                with self._mutex:
+                                    self._last_tick=result
+                                    # A live, successful supervisor return may wait
+                                    # for a human or retry an exact durable effect.
+                                    # Cold or explicitly uncertain children are
+                                    # never adopted by this process-local set.
+                                    self._known_pending={self._dispatch_identity(worker,d)
+                                        for d in worker.dispatches()
+                                        if result['status']=='pending' and d['state']=='pending'
+                                        and d['worker_id'] and worker.managed_target(d['target_id'])['enabled']}
                                 next_tick=self.clock()+worker.control()['configuration']['interval_seconds']
                             finally:
                                 with self._mutex:self._busy=False
@@ -168,6 +190,16 @@ class ServerController:
             self._effect(effect['id'],effect['method'],args)
 
     def _report(self,instance,state,cleanup,reason=''):
+        command=instance['current_command']
+        # Even an identical observation must settle an outstanding transition.
+        settle=(command is not None and command['status'] in ('queued','accepted')
+            and (state in ('ready','busy') or (state=='stopped' and cleanup)))
+        seen=instance['last_seen_at']
+        if (not settle and seen is not None and self._remote_seen_at is not None
+                and 0<=self._remote_seen_at-seen<60
+                and (instance['observed_state'],instance['cleanup_confirmed'],instance['reason'])
+                    ==(state,cleanup,reason)):
+            return instance
         args={'host_id':self.host_id,'instance_id':instance['id'],
             'expected_observation_revision':instance['observation_revision'],
             'generation':instance['generation'],'launchspec_sha256':instance['launchspec_sha256'],
@@ -205,11 +237,24 @@ class ServerController:
             self._owned_call('managed_settings')
             response('poll_instance_commands',snapshot);self._instances(snapshot['instances'])
             if snapshot['host_id']!=self.host_id:raise HostError('managed_catalog_conflict')
+            self._remote_seen_at=snapshot['last_seen_at']
             authority_until=collected_at+self.authority_seconds
             admissions={}
             for i in snapshot['instances']:
                 target=i['catalog_key'];c=i['current_command']
                 if self.clock()>=authority_until:raise HostError('managed_authority_expired')
+                if (c is not None and c['status'] in ('queued','accepted') and c['action']!='stop'
+                        and c['budget']>self.host.control()['configuration']['dispatch_budget']):
+                    # The web bound is shared; this owner's fixed launch policy
+                    # may be tighter. Refuse without killing its control worker.
+                    self._owned_call('stop_target',target,'stopped')
+                    with self._mutex:
+                        if not self._owns_worker:raise HostError('managed_worker_not_owned')
+                        pending=any(d['state']!='complete' for d in self.host.dispatches())
+                        busy=self._busy
+                    self._report(i,'stopping' if busy else 'needs_review' if pending else 'stopped',
+                        not busy and not pending,'launch_refused')
+                    continue
                 if c is not None and c['status']=='queued' and (c['action']=='stop' or (snapshot['enabled'] and i['can_start'])):
                     self._owned_call('queue_managed_command',self._normalized(i,c))
                     ack=self._effect('ack-'+c['id'],'ack_instance_command',{
@@ -223,14 +268,17 @@ class ServerController:
                     if not self._owns_worker:raise HostError('managed_worker_not_owned')
                     local=self.host.managed_target(target)
                     busy=self._busy;failed=self._error
-                    pending=any(d['state']!='complete' for d in self.host.dispatches())
+                    unfinished=[d for d in self.host.dispatches() if d['state']!='complete']
+                    pending=bool(unfinished)
+                    uncertain=any(not self._continuable_pending(self.host,d) for d in unfinished)
+                    target_busy=busy and any(d['target_id']==target for d in unfinished)
                     row=None if c is None else self.host.managed_command(c['id'])
                 allowed=(snapshot['enabled'] and i['can_start'] and c is not None
                     and c['status'] in ('accepted','complete') and c['action']!='stop'
                     and c['instance_version']==i['version'] and c['launchspec_sha256']==i['launchspec_sha256']
                     and i['desired_state']=='running' and not self._retired_observation(i))
                 if not allowed:self._owned_call('stop_target',target,'stopped')
-                if failed or (not busy and (pending or local['reason']=='needs_review')):
+                if failed or (not busy and (uncertain or local['reason']=='needs_review')):
                     self._owned_call('stop_target',target,'needs_review')
                     self._report(i,'needs_review',False,'cleanup_unconfirmed' if pending else 'execution_failed')
                     continue
@@ -241,7 +289,7 @@ class ServerController:
                     i=self._report(i,'starting',False)
                     admissions[target]=self._normalized(i,c)
                 elif local['enabled'] and allowed:
-                    self._report(i,'busy' if busy else 'ready',False)
+                    self._report(i,'busy' if target_busy else 'ready',False)
                 elif busy:
                     self._report(i,'stopping',False,'stopped')
                 else:

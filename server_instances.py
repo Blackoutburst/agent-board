@@ -487,7 +487,8 @@ class ServerInstancesMixin:
                 db.execute('UPDATE server_instance_commands SET retired=1 WHERE id=?', (command_id,))
             authorization_refusal = (cmd is not None and cmd['action'] != 'stop' and cleanup_only
                 and bool(self._server_start_reason(db, host, row)))
-            if queued_refusal or (cmd is not None and cmd['status'] == 'accepted' and authorization_refusal):
+            launch_refusal = cmd is not None and cmd['action'] != 'stop' and cleanup_only and reason == 'launch_refused'
+            if queued_refusal or (cmd is not None and cmd['status'] == 'accepted' and (authorization_refusal or launch_refusal)):
                 # A withdrawn work permission must not prevent the independent
                 # control channel from refusing an unstarted launch. This
                 # grants no positive execution authority and never touches Runtime.

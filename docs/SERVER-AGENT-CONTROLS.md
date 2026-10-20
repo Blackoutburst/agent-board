@@ -54,6 +54,14 @@ pas migrés ou activés automatiquement.
 
 Le contrôleur n’appelle aucun modèle pour attendre des événements. Un démarrage
 autorise le budget fini demandé, dans les limites de la configuration locale.
+Un budget supérieur à cette limite est refusé sur le site ; le gestionnaire
+reste disponible pour une nouvelle demande corrigée. Une attente de réponse
+humaine ou de confirmation réseau poursuit le même travail enregistré, sans
+nouvelle activation ni recharge du budget. Après un redémarrage du processus,
+un travail inachevé reste à vérifier et n’est pas repris automatiquement.
+Un état inchangé envoie au plus un rapport par minute ; les commandes et les
+changements d’état sont signalés immédiatement. Une simple lecture vide du
+tableau laisse l’instance prête et ne la signale pas comme occupée.
 Une tâche éventuelle conserve ses validations, son contexte et ses journaux
 existants. La création d’un nouveau profil, sa configuration locale et le
 parcours officiel de connexion au fournisseur sont traités séparément. Ce lot
