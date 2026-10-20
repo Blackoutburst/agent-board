@@ -735,7 +735,295 @@ const Workspace = (() => {
         agentTab = "runtime"; await agents();
       }), "quiet"));
   }
-  function serverInstanceCard(owner, host, instance, profiles, data, capacityUpdates) {
+  // Draft preparation has its own human permission and outbox. None of these
+  // records is a command to a manager, a login, or evidence of model access.
+  const provisionSchemas = { grant: "server-provision-draft-grant-v1", request: "server-provision-draft-request-v1", cancel: "server-provision-draft-cancel-v1" };
+  const provisionBusy = new Set();
+  const provisionStorageKey = owner => `board-provision-drafts-v1:${owner}`;
+  const provisionKeys = (value, names) => value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === names.split(",").sort().join(",");
+  const provisionHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const provisionText = value => typeof value === "string" && Array.from(value).length > 0 && Array.from(value).length <= 200
+    && new TextEncoder().encode(value).length <= 800 && !/[\u0000-\u001f\u007f]/u.test(value)
+    && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+  const provisionModel = value => value === null || provisionText(value);
+  const provisionProviders = { codex_chatgpt: "Codex · ChatGPT", claude_code: "Claude Code" };
+  function provisionBodyValid(kind, body) {
+    if (!Object.hasOwn(provisionSchemas, kind) || body?.schema !== provisionSchemas[kind]) return false;
+    if (kind === "cancel") return provisionKeys(body, "schema,expected_revision") && serverInteger(body.expected_revision, 1);
+    if (kind === "grant") return provisionKeys(body, "schema,expected_host_version,expected_grant_version,enabled")
+      && serverInteger(body.expected_host_version, 1) && serverInteger(body.expected_grant_version) && typeof body.enabled === "boolean";
+    return provisionKeys(body, "schema,expected_host_version,expected_catalog_version,expected_instances_sha256,grant_version,profile_id,profile_version,profile_sha256,provider_id,requested_model")
+      && serverInteger(body.expected_host_version, 1) && serverInteger(body.expected_catalog_version, 1)
+      && provisionHash(body.expected_instances_sha256) && serverInteger(body.grant_version, 1)
+      && provisionText(body.profile_id) && serverInteger(body.profile_version, 1) && provisionHash(body.profile_sha256)
+      && Object.hasOwn(provisionProviders, body.provider_id) && provisionModel(body.requested_model);
+  }
+  function provisionGrantValid(value, owner, host) {
+    return provisionKeys(value, "schema,owner_id,host_id,device_id,purpose,version,enabled")
+      && value.schema === "server-provision-draft-grant-view-v1" && value.owner_id === owner
+      && value.host_id === host.id && value.device_id === host.device_id && value.purpose === "metadata_request_only_v1"
+      && serverInteger(value.version) && typeof value.enabled === "boolean" && (value.version > 0 || value.enabled === false);
+  }
+  function provisionViewValid(value, owner, host) {
+    return provisionKeys(value, "schema,request_id,request_sha256,owner_id,host_id,device_id,revision,state,reason,barrier_held,reserved_slots,profile_id,profile_version,provider_id,requested_model,apply_implemented,connection_status,model_catalog_status,model_access_status,can_cancel")
+      && value.schema === "server-provision-draft-view-v1" && value.owner_id === owner && value.host_id === host.id && value.device_id === host.device_id
+      && provisionText(value.request_id) && provisionHash(value.request_sha256) && serverInteger(value.revision, 1)
+      && provisionText(value.profile_id) && serverInteger(value.profile_version, 1) && Object.hasOwn(provisionProviders, value.provider_id)
+      && provisionModel(value.requested_model) && value.apply_implemented === false && typeof value.can_cancel === "boolean"
+      && ["connection_status", "model_catalog_status", "model_access_status"].every(key => value[key] === "not_attested")
+      && (value.state === "requested" && value.reason === "requested" && value.barrier_held === true && value.reserved_slots === 1
+        || value.state === "cancelled" && value.reason === "cancelled_by_owner" && value.barrier_held === false && value.reserved_slots === 0 && value.can_cancel === false);
+  }
+  function provisionListValid(value, owner, host) {
+    return provisionKeys(value, "schema,requests,next_before") && value.schema === "server-provision-draft-list-v1"
+      && Array.isArray(value.requests) && value.requests.length <= 16 && value.requests.every(item => provisionViewValid(item, owner, host))
+      && new Set(value.requests.map(item => item.request_id)).size === value.requests.length
+      && value.requests.filter(item => item.state === "requested").length <= 1
+      && (value.next_before === null || provisionText(value.next_before) && value.requests.length > 0
+        && value.next_before === value.requests.at(-1).request_id);
+  }
+  function provisionContextValid(value, owner, host, profile) {
+    if (!provisionKeys(value, "schema,owner_id,host_id,device_id,expected_host_version,expected_catalog_version,expected_instances_sha256,grant_version,profile_id,profile_version,profile_sha256,provider_id,requested_model")
+        || value.schema !== "server-provision-draft-context-v1" || value.owner_id !== owner || value.host_id !== host.id
+        || value.device_id !== host.device_id || value.profile_id !== profile.id || value.profile_version !== profile.version
+        || value.provider_id !== profile.preferred_provider || value.requested_model !== (profile.preferred_model || null)) return false;
+    return provisionBodyValid("request", { schema: provisionSchemas.request,
+      ...Object.fromEntries(["expected_host_version", "expected_catalog_version", "expected_instances_sha256", "grant_version", "profile_id", "profile_version", "profile_sha256", "provider_id", "requested_model"].map(key => [key, value[key]])) });
+  }
+  function provisionStore(owner) {
+    const raw = sessionStorage.getItem(provisionStorageKey(owner));
+    if (raw && raw.length > 65536) throw new Error("Le suivi des préparations est plein. Aucune demande n’a été envoyée.");
+    const data = raw === null ? { schema: 1, owner, records: [] } : JSON.parse(raw);
+    if (!provisionKeys(data, "schema,owner,records") || data.schema !== 1 || data.owner !== owner || !Array.isArray(data.records) || data.records.length > 32) throw new Error("Le suivi des préparations est indisponible.");
+    const seen = new Set();
+    for (const record of data.records) {
+      if (!provisionKeys(record, "kind,host_id,device_id,request_id,key,body,status,created_at") || !provisionText(record.host_id) || !provisionText(record.device_id)
+          || !provisionText(record.key) || seen.has(record.key) || !serverInteger(record.created_at)
+          || !(record.kind === "cancel" ? provisionText(record.request_id) : record.request_id === null)
+          || !["prepared", "uncertain", "confirmed", "conflict", "refused", "reloaded"].includes(record.status) || !provisionBodyValid(record.kind, record.body)) throw new Error("Le suivi des préparations est invalide. Aucune demande n’a été envoyée.");
+      seen.add(record.key);
+    }
+    return data;
+  }
+  function saveProvisionStore(owner, data) {
+    const raw = JSON.stringify(data);
+    if (raw.length > 65536) throw new Error("Le suivi des préparations est plein.");
+    sessionStorage.setItem(provisionStorageKey(owner), raw);
+    if (sessionStorage.getItem(provisionStorageKey(owner)) !== raw) throw new Error("La demande ne peut pas être conservée. Rien n’a été envoyé.");
+  }
+  function provisionRecord(owner, host, kind, body, requestId = null) {
+    if (state.actor?.owner_id !== owner) throw new Error("Le compte a changé. Rouvrez vos demandes de préparation.");
+    const data = provisionStore(owner), encoded = JSON.stringify(body);
+    let record = data.records.find(item => item.host_id === host.id && item.device_id === host.device_id && item.kind === kind && item.request_id === requestId
+      && JSON.stringify(item.body) === encoded && ["prepared", "uncertain"].includes(item.status));
+    if (!record) {
+      if (data.records.some(item => item.host_id === host.id && !["confirmed", "reloaded"].includes(item.status))) throw new Error("Une réponse reste à confirmer. Réessayez la même demande ou actualisez avant de continuer.");
+      data.records = data.records.filter(item => !["confirmed", "reloaded"].includes(item.status));
+      if (data.records.length >= 32 || !provisionBodyValid(kind, body)) throw new Error("La demande de préparation ne peut pas être conservée.");
+      record = { kind, host_id: host.id, device_id: host.device_id, request_id: requestId, body, key: idempotencyKey(), status: "prepared", created_at: Date.now() };
+      data.records.push(record);
+    }
+    saveProvisionStore(owner, data); return record;
+  }
+  function updateProvisionRecord(owner, key, status) {
+    const data = provisionStore(owner), record = data.records.find(item => item.key === key);
+    if (!record) throw new Error("Le suivi de cette préparation est introuvable.");
+    record.status = status; saveProvisionStore(owner, data);
+  }
+  async function provisionApi(path, { method = "GET", data } = {}) {
+    // This metadata lane has finite reads and no retry. Aborting a write does
+    // not prove refusal: the durable outbox keeps its original body and key.
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const body = data === undefined ? undefined : JSON.stringify(data);
+      if (body !== undefined && new TextEncoder().encode(body).length > 8192) throw new Error("Demande trop longue.");
+      const headers = body === undefined ? {} : { "Content-Type": "application/json", "X-CSRF-Token": state.csrf };
+      const response = await fetch(`${basePath}api${path}`, { method, headers, body, credentials: "same-origin", cache: "no-store", signal: controller.signal });
+      if (!response.ok) {
+        if (response.status === 401) showLogin();
+        const failure = new Error("Préparation indisponible."); failure.status = response.status; throw failure;
+      }
+      const reader = response.body.getReader(), chunks = []; let bytes = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 16384) { await reader.cancel(); throw new Error("Réponse de préparation indisponible."); }
+        chunks.push(part.value);
+      }
+      const result = new Uint8Array(bytes); let offset = 0;
+      for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result));
+    } finally { clearTimeout(timer); }
+  }
+  async function sendProvisionRecord(owner, host, record) {
+    if (state.actor?.owner_id !== owner || provisionBusy.has(record.key)) return;
+    const saved = provisionStore(owner).records.find(item => item.key === record.key);
+    if (!saved || saved.host_id !== host.id || saved.device_id !== host.device_id || !["prepared", "uncertain"].includes(saved.status)
+        || JSON.stringify(saved) !== JSON.stringify(record)) throw new Error("Actualisez avant de reprendre cette préparation.");
+    const modalSnapshot = $("modal").open ? $("modal-content").firstElementChild : null;
+    provisionBusy.add(record.key);
+    try {
+      updateProvisionRecord(owner, record.key, "uncertain");
+      const base = `/server-hosts/${workPath(host.id)}`;
+      const route = record.kind === "grant" ? `${base}/provisioning-grant`
+        : record.kind === "request" ? `${base}/provisioning-requests` : `${base}/provisioning-requests/${workPath(record.request_id)}/cancel`;
+      const value = await provisionApi(route, { method: record.kind === "grant" ? "PUT" : "POST", data: { ...record.body, idempotency_key: record.key } });
+      if (record.kind === "grant" ? !provisionGrantValid(value, owner, host) || value.enabled !== record.body.enabled || value.version !== record.body.expected_grant_version + 1
+          : !provisionViewValid(value, owner, host) || (record.kind === "cancel" ? value.request_id !== record.request_id || value.state !== "cancelled" || value.revision !== record.body.expected_revision + 1
+            : value.state !== "requested" || value.revision !== 1 || ["profile_id", "profile_version", "provider_id", "requested_model"].some(key => value[key] !== record.body[key]))) throw new Error("Confirmation indisponible.");
+      updateProvisionRecord(owner, record.key, "confirmed");
+      // A replay is a receipt, not current authority. Render only after new GETs.
+      if (state.actor?.owner_id === owner && state.view === "agents" && agentTab === "hosted") {
+        if (modalSnapshot && $("modal-content").firstElementChild === modalSnapshot) closeModal();
+        await agents(); notify("Demande enregistrée. Vérification de l’état actuel en cours.");
+      }
+    } catch (failure) {
+      const reload = failure.status === 409 || [400, 401, 403, 404, 422].includes(failure.status);
+      if (reload) updateProvisionRecord(owner, record.key, failure.status === 409 ? "conflict" : "refused");
+      if (state.actor?.owner_id === owner) {
+        notify(reload ? "La demande n’est pas acceptée dans l’état actuel. Actualisez avant de la corriger ou de choisir une nouvelle action."
+          : "Réponse non confirmée. Réessayez cette même demande à l’identique ; aucune reprise automatique n’a lieu.", true);
+        if (reload && modalSnapshot && $("modal-content").firstElementChild === modalSnapshot) closeModal();
+      }
+    } finally { provisionBusy.delete(record.key); }
+  }
+  function provisionGrantDialog(owner, host, grant) {
+    if (state.actor?.owner_id !== owner) return;
+    const enabled = !grant.enabled;
+    const form = el("form", {}, el("p", {}, enabled
+      ? "Autoriser cet appareil à recevoir vos demandes de préparation inactives ? Cette permission est distincte du contrôle des instances et des droits de travail."
+      : "Retirer la permission de créer des demandes ? Une demande existante et son blocage restent conservés jusqu’à leur annulation explicite."),
+      el("p", {}, "Cette autorisation ne prépare aucun fichier, ne connecte aucun fournisseur et ne démarre aucun agent."),
+      serverButtons(enabled ? "Autoriser les demandes inactives" : "Retirer cette autorisation"));
+    bindForm(form, () => sendProvisionRecord(owner, host, provisionRecord(owner, host, "grant", {
+      schema: provisionSchemas.grant, expected_host_version: host.version, expected_grant_version: grant.version, enabled })));
+    serverModal("Autorisation de demande séparée", form);
+  }
+  function provisionCancelDialog(owner, host, value) {
+    if (state.actor?.owner_id !== owner || !value.can_cancel || value.state !== "requested") return;
+    const form = el("form", {}, el("p", {}, "Annuler cette demande inactive et lever son blocage des démarrages ? L’historique reste conservé."),
+      el("p", {}, "Cette annulation concerne seulement cette préparation. Elle n’arrête ni ne nettoie une autre exécution."), serverButtons("Annuler la demande inactive"));
+    bindForm(form, () => sendProvisionRecord(owner, host, provisionRecord(owner, host, "cancel", { schema: provisionSchemas.cancel, expected_revision: value.revision }, value.request_id)));
+    serverModal("Annuler la préparation demandée", form);
+  }
+  const provisionProfileLink = (owner, profile) => btn(`Connexions du profil : ${profile.name}`, guard(async () => {
+    if (state.actor?.owner_id !== owner) return;
+    await profileBindings(profile.id);
+  }), "quiet");
+  async function provisionRequestDialog(owner, host, profiles) {
+    if (state.actor?.owner_id !== owner) return;
+    const candidates = profiles.filter(p => p.owner_id === owner && p.status === "active" && serverInteger(p.version, 1)
+      && Object.hasOwn(provisionProviders, p.preferred_provider) && provisionModel(p.preferred_model || null)
+      && Array.isArray(p.bindings) && p.bindings.some(binding => binding.device_id === host.device_id && binding.revoked === false));
+    if (!candidates.length) {
+      serverModal("Choisir un profil déjà lié", el("div", {}, el("p", {}, "Il faut un profil actif, un fournisseur souhaité et une liaison explicite à cet appareil. Cette demande ne crée pas la liaison."),
+        el("p", {}, "Ouvrez les connexions du profil, choisissez l’appareil de votre serveur puis confirmez sa liaison. Revenez dans « Sur le serveur » et actualisez pour relire les droits."),
+        el("div", { class: "button-row" }, profiles.filter(p => p.owner_id === owner && p.status === "active").map(p => provisionProfileLink(owner, p))),
+        btn("Voir mes profils", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "profiles"; await agents(); })))); return;
+    }
+    const picker = select("Profil souhaité", "profile_id", candidates.map(p => [p.id, `${p.name} · v${p.version}`]));
+    const details = el("div", { class: "callout", role: "status" });
+    const unlinked = profiles.filter(p => p.owner_id === owner && p.status === "active" && !candidates.some(item => item.id === p.id));
+    const form = el("form", {}, el("p", {}, "Enregistrez une demande de préparation pour répondre aux messages. Elle restera inactive : aucun fichier, agent, processus ou budget de modèle ne sera créé."),
+      picker, details, el("p", {}, "Tant que cette demande existe, les démarrages et redémarrages de cet hôte sont bloqués. Seule son annulation explicite lèvera ce blocage."), serverButtons("Enregistrer la demande inactive"));
+    if (unlinked.length) form.append(el("details", {}, el("summary", {}, "Mon profil n’apparaît pas"),
+      el("p", {}, "Vérifiez son fournisseur souhaité et sa liaison explicite à l’appareil du serveur. Après votre modification, revenez et actualisez les profils avant de demander leur préparation."),
+      el("div", { class: "button-row" }, unlinked.map(p => provisionProfileLink(owner, p)))));
+    const button = form.querySelector('button[type="submit"]');
+    let context = null, generation = 0;
+    const load = async () => {
+      const current = ++generation, profile = candidates.find(p => p.id === picker.querySelector("select").value);
+      context = null; button.disabled = true; details.textContent = "Vérification du profil souhaité…";
+      try {
+        const value = await provisionApi(`/server-hosts/${workPath(host.id)}/provisioning-context?profile_id=${workPath(profile.id)}`);
+        if (current !== generation || state.actor?.owner_id !== owner || !form.isConnected) return;
+        if (!provisionContextValid(value, owner, host, profile)) throw new Error("Contexte indisponible.");
+        context = value;
+        details.replaceChildren(el("p", {}, `Fournisseur demandé : ${provisionProviders[value.provider_id]}`), el("p", {}, `Modèle demandé : ${value.requested_model || "À choisir ultérieurement"}`),
+          el("p", {}, "Connexion fournisseur et accès au modèle : non vérifiés. Aucun remplacement par une API payante."));
+        button.disabled = false;
+      } catch (_) {
+        if (current === generation && state.actor?.owner_id === owner && form.isConnected) details.replaceChildren(
+          el("p", {}, "La préparation n’a pas pu être vérifiée. Relisez les préférences et les connexions de ce profil, puis actualisez avant de continuer."),
+          provisionProfileLink(owner, profile), btn("Relire les profils et demandes", guard(async () => {
+            if (state.actor?.owner_id !== owner) return;
+            closeModal(); await agents();
+          }), "quiet"));
+      }
+    };
+    picker.querySelector("select").addEventListener("change", () => { void load(); });
+    bindForm(form, async () => {
+      if (state.actor?.owner_id !== owner || !context || context.profile_id !== picker.querySelector("select").value) throw new Error("Relisez le profil souhaité avant de continuer.");
+      const body = { schema: provisionSchemas.request, ...Object.fromEntries(["expected_host_version", "expected_catalog_version", "expected_instances_sha256", "grant_version", "profile_id", "profile_version", "profile_sha256", "provider_id", "requested_model"].map(key => [key, context[key]])) };
+      await sendProvisionRecord(owner, host, provisionRecord(owner, host, "request", body));
+    });
+    serverModal("Demander une préparation inactive", form); await load();
+  }
+  async function renderProvisioning(section, owner, host, profiles, request, barrierUpdates) {
+    const current = () => state.actor?.owner_id === owner && request === state.request && section.isConnected;
+    try {
+      if (host.owner_id !== owner || !provisionText(host.device_id) || !serverInteger(host.version, 1)
+          || !serverInteger(host.catalog_version)) throw new Error("Hôte indisponible.");
+      const base = `/server-hosts/${workPath(host.id)}`;
+      const [grant, list] = await Promise.all([provisionApi(`${base}/provisioning-grant`), provisionApi(`${base}/provisioning-requests?limit=16`)]);
+      if (!current()) return;
+      if (!provisionGrantValid(grant, owner, host) || !provisionListValid(list, owner, host)) throw new Error("Projection indisponible.");
+      const data = provisionStore(owner); let changed = false;
+      for (const item of data.records) if (item.host_id === host.id && item.device_id === host.device_id && serverNeedsReload(item.status)) { item.status = "reloaded"; changed = true; }
+      if (changed) saveProvisionStore(owner, data);
+      // Verify storage works before offering a write, even with no old record.
+      saveProvisionStore(owner, data);
+      const pending = data.records.find(item => item.host_id === host.id && !["confirmed", "reloaded"].includes(item.status));
+      const active = list.requests.find(item => item.state === "requested");
+      barrierUpdates.forEach(update => update(Boolean(active)));
+      const stopped = host.instances.length > 0 && host.instances.length < 16 && host.instances.every(instance => {
+        const command = serverCommand(instance);
+        return instance.desired_state === "stopped" && instance.observed_state === "stopped" && instance.cleanup_confirmed === true
+          && command?.action === "stop" && command.status === "complete";
+      });
+      const rows = el("div", {});
+      const renderRow = value => {
+        const profile = profiles.find(p => p.id === value.profile_id);
+        return el("article", { class: "profile-section", "data-provision-request": value.request_id },
+          el("h4", {}, profile?.name || "Profil souhaité", ` · v${value.profile_version}`),
+          badge(value.state === "requested" ? "Demandée · inactive" : "Demande annulée", value.barrier_held ? "status-blocked" : ""),
+          el("p", {}, `${provisionProviders[value.provider_id]} · ${value.requested_model || "Modèle non choisi"}`),
+          el("p", { class: "small muted" }, "Connexion fournisseur et accès au modèle : non vérifiés."),
+          value.barrier_held ? el("p", { class: "callout" }, "Démarrages et redémarrages bloqués sur cet hôte. Aucun agent n’est préparé ni lancé par cette demande.") : el("p", {}, "Le blocage lié à cette demande a été levé. Cela ne prouve pas l’arrêt ou le nettoyage d’une autre exécution."),
+          value.can_cancel ? btn("Annuler cette demande", () => provisionCancelDialog(owner, host, value), "quiet", { disabled: Boolean(pending) }) : null);
+      };
+      rows.append(...list.requests.map(renderRow));
+      const heading = el("h3", {}, "Demandes de préparation");
+      section.replaceChildren(...[heading, el("p", {}, "1. Choisissez un profil et ses préférences. 2. Autorisez séparément les demandes. 3. Enregistrez une demande inactive."),
+        el("p", { class: "small muted" }, "La préparation effective et la connexion personnelle viendront ensuite. Cette étape ne crée aucune instance et ne rend aucun agent prêt."),
+        el("p", {}, grant.enabled ? "Demandes inactives autorisées pour cet appareil." : "Demandes inactives non autorisées pour cet appareil."),
+        el("div", { class: "button-row" }, btn(grant.enabled ? "Retirer l’autorisation de demande" : "Autoriser les demandes", () => provisionGrantDialog(owner, host, grant), "quiet", { disabled: Boolean(pending) || host.revoked_at !== null }),
+          btn("Demander la préparation d’un profil", guard(() => provisionRequestDialog(owner, host, profiles)), "", { disabled: Boolean(pending) || Boolean(active) || !grant.enabled || !stopped || host.revoked_at !== null })),
+        !stopped && !active ? el("p", { class: "small muted" }, host.instances.length === 16 ? "Cet hôte a déjà 16 profils. Aucune place de préparation n’est disponible."
+          : "Chaque instance doit avoir un arrêt demandé puis confirmé avant une demande. La liaison initiale du serveur se prépare séparément.") : null,
+        pending ? el("div", { class: "callout", role: "status" }, el("p", {}, "Une réponse reste à confirmer. Aucune nouvelle demande ne sera envoyée automatiquement."),
+          ["prepared", "uncertain"].includes(pending.status) ? btn("Réessayer la même préparation", guard(() => sendProvisionRecord(owner, host, pending))) : null) : null,
+        rows, list.requests.length ? null : el("p", { class: "muted" }, "Aucune demande enregistrée.")].filter(node => node !== null));
+      if (list.next_before !== null) {
+        let before = list.next_before, count = list.requests.length;
+        const more = btn("Voir les demandes précédentes", guard(async () => {
+          more.disabled = true;
+          try {
+            const page = await provisionApi(`${base}/provisioning-requests?limit=16&before=${workPath(before)}`);
+            if (!current()) return;
+            if (!provisionListValid(page, owner, host) || count + page.requests.length > 32 || page.requests.some(item => rows.querySelector(`[data-provision-request="${CSS.escape(item.request_id)}"]`))) throw new Error("Historique indisponible.");
+            rows.append(...page.requests.map(renderRow)); count += page.requests.length; before = page.next_before;
+            if (before === null || count >= 32) more.remove(); else more.disabled = false;
+          } catch (_) { if (current()) notify("Historique indisponible. Actualisez avant de continuer.", true); }
+        }), "quiet"); section.append(more);
+      }
+    } catch (_) {
+      if (current()) section.replaceChildren(el("h3", {}, "Demandes de préparation"), el("p", { role: "status" }, "Préparation indisponible. Aucune demande n’a été envoyée ; actualisez pour vérifier les autorisations et demandes actuelles."));
+    }
+  }
+  function serverInstanceCard(owner, host, instance, profiles, data, capacityUpdates, barrierUpdates = []) {
     const profile = profiles.get(instance.profile_id), command = serverCommand(instance), pending = pendingServerRecord(data, instance);
     const activeCommand = command === undefined || command && ["queued", "accepted"].includes(command.status);
     const locallyPending = pending && ["prepared", "uncertain", "submitted", "conflict", "refused"].includes(pending.status);
@@ -766,16 +1054,20 @@ const Workspace = (() => {
     const note = el("p", { class: serverNeedsReload(pending?.status) ? "form-error" : "server-request-note", role: "status", hidden: !locallyPending, "data-server-request": instance.id },
       pending?.status === "refused" ? "La demande a été refusée. Actualisez avant une nouvelle commande." : pending?.status === "conflict" ? "L’état a changé. Actualisez avant une nouvelle commande." : pending?.status === "submitted" ? "Demande enregistrée ; l’observation du serveur reste attendue." : "La réponse reste à confirmer. Réessayez la même demande.");
     const startButton = btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart });
+    const restartButton = btn("Redémarrer", () => serverActionDialog(owner, instance, "restart"), "quiet", { disabled: !canRestart });
     const actions = el("div", { class: "server-instance-actions" }, startButton,
       btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && !activeCommand && !locallyPending }),
-      btn("Redémarrer", () => serverActionDialog(owner, instance, "restart"), "quiet", { disabled: !canRestart }));
+      restartButton);
     if (pending && ["prepared", "uncertain"].includes(pending.status)) actions.append(btn("Réessayer la même demande", guard(() => sendServerRecord(owner, pending)), "quiet"));
     card.append(note, actions);
+    let barrier = false, full = false;
+    const update = () => { startButton.disabled = !canStart || full || barrier; restartButton.disabled = !canRestart || barrier; };
     capacityUpdates.push(capacity => {
-      const full = capacity !== null && capacity.occupied >= capacity.maximum;
-      startButton.disabled = !canStart || full;
+      full = capacity !== null && capacity.occupied >= capacity.maximum;
+      update();
       capacityNote.hidden = !full || !cleanStopped;
     });
+    barrierUpdates.push(value => { barrier = value; update(); });
     return card;
   }
   async function renderServerHosts(body, request) {
@@ -822,12 +1114,18 @@ const Workspace = (() => {
         btn("Lier un serveur", guard(() => serverHostDialog(owner, settings.devices)), "", { disabled: hosts.some(host => host.revoked_at === null) })),
         capacityPanel,
         ...(pendingHost ? [el("div", { class: "callout server-pending-host" }, el("p", {}, "La liaison d’un appareil attend confirmation."), btn("Réessayer la liaison", guard(() => sendServerRecord(owner, pendingHost))))] : []),
-        el("div", { class: "server-hosts" }, hosts.length ? hosts.map(host => el("section", { class: "server-host", "data-server-host": host.id },
-          el("div", { class: "server-host-heading" }, el("div", {}, el("h2", {}, host.name || "Mon serveur"), el("p", { class: "small muted" }, ownerName(owner))),
-            badge(host.revoked_at !== null ? "Hôte retiré" : host.enabled ? "Hôte autorisé" : "Démarrages suspendus", host.enabled && host.revoked_at === null ? "status-ready" : "status-blocked")),
-          host.revoked_at === null ? serverManagerSetup(host) : null,
-          host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data, capacityUpdates)))
-            : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent.")))
+        el("div", { class: "server-hosts" }, hosts.length ? hosts.map(host => {
+          const barrierUpdates = [], preparation = el("section", { class: "profile-section", "data-provision-host": host.id }, el("h3", {}, "Demandes de préparation"), el("p", {}, "Vérification des demandes…"));
+          const card = el("section", { class: "server-host", "data-server-host": host.id },
+            el("div", { class: "server-host-heading" }, el("div", {}, el("h2", {}, host.name || "Mon serveur"), el("p", { class: "small muted" }, ownerName(owner))),
+              badge(host.revoked_at !== null ? "Hôte retiré" : host.enabled ? "Hôte autorisé" : "Démarrages suspendus", host.enabled && host.revoked_at === null ? "status-ready" : "status-blocked")),
+            host.revoked_at === null ? serverManagerSetup(host) : null,
+            host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data, capacityUpdates, barrierUpdates)))
+              : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent."), preparation);
+          // Optional draft metadata never delays the existing stop controls.
+          void Promise.resolve().then(() => renderProvisioning(preparation, owner, host, profiles, request, barrierUpdates)).catch(() => {});
+          return card;
+        })
           : box("Aucun serveur lié", "Choisissez un appareil déjà connecté à votre compte pour héberger vos profils.", btn("Lier mon serveur", guard(() => serverHostDialog(owner, settings.devices)), "primary"))));
       // This optional hint must not hold agents() or command feedback open.
       void capacityRead.then(capacity => {
@@ -1090,7 +1388,7 @@ const Workspace = (() => {
       data.host ? el("section", {}, el("h3", {}, "Hôte lié : " + data.host.name),
         el("p", {}, `${data.host.published_targets.length} profil(s) déclaré(s) par ce serveur. Le nouveau profil devra être préparé séparément.`), serverManagerSetup(data.host))
         : el("p", { class: "callout" }, "Aucun hôte lié à votre compte. Après la création du profil, utilisez « Lier un serveur », puis configurez votre gestionnaire personnel."),
-      el("p", { class: "small muted" }, "Pour le moment, un administrateur doit préparer le nouvel agent sur votre serveur. La connexion depuis cette page sera ajoutée ensuite. Chaque personne conserve sa propre connexion."),
+      el("p", { class: "small muted" }, "Après la création du profil, liez-le explicitement à l’appareil. Vous pourrez ensuite autoriser séparément une demande de préparation inactive. La préparation effective et la connexion personnelle restent des étapes ultérieures."),
       serverButtons("Personnaliser le profil"));
     bindForm(form, async values => {
       if (state.actor?.owner_id !== owner) return;
@@ -1113,6 +1411,7 @@ const Workspace = (() => {
         el("dt", {}, "Modèle demandé"), el("dd", {}, requested.model || "À choisir")),
       el("p", {}, "Connexion fournisseur : non vérifiée. Accès au modèle : non vérifié."),
       el("p", {}, "Votre profil est enregistré. Le serveur doit encore le préparer et votre connexion personnelle doit être vérifiée. Il ne fonctionne pas encore en arrière-plan."),
+      data.host ? el("div", {}, el("p", {}, "Autorisez explicitement l’appareil du serveur dans les connexions de ce profil. Cela n’est pas accordé par l’autorisation de demande. Revenez ensuite dans « Sur le serveur » et actualisez."), provisionProfileLink(owner, profile)) : null,
       data.host ? serverManagerSetup(data.host) : el("p", {}, "Liez un appareil à votre compte dans « Sur le serveur » pour commencer la préparation du gestionnaire."),
       btn("Voir mes instances serveur", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "hosted"; await agents(); }), "primary")));
   }
