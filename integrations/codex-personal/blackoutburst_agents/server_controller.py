@@ -187,7 +187,18 @@ class ServerController:
             if stale:
                 self._owned_call('supersede_managed_effect',effect['id']);continue
             # Retry the exact original request, not a new revision under its key.
-            self._effect(effect['id'],effect['method'],args)
+            try:self._effect(effect['id'],effect['method'],args)
+            except BoardReadError as error:
+                # A late RPC from the previous controller may have won this
+                # revision. First resolve our original idempotency key; only a
+                # confirmed rejection plus a newer fresh revision retires it.
+                # Timeouts remain pending and can never manufacture a receipt.
+                newer=(effect['method']=='report_instance_state'
+                    and i['observation_revision']>args['expected_observation_revision']) or (
+                    effect['method']=='ack_instance_command'
+                    and matches[0]['current_command']['revision']>args['expected_revision'])
+                if error.code!='tool_rejected' or not newer:raise
+                self._owned_call('supersede_managed_effect',effect['id'])
 
     def _report(self,instance,state,cleanup,reason=''):
         command=instance['current_command']

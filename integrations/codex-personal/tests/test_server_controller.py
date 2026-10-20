@@ -369,3 +369,25 @@ def test_budget_over_fixed_owner_limit_is_refused_without_losing_controller(env,
     command(env,key='corrected-budget');c.step()
     wait_for(lambda:env['journal'].managed_target('primary')['enabled'])
     c.step();assert current(env)['observed_state']=='ready'
+
+
+@pytest.mark.parametrize('boundary',['report_instance_state','ack_instance_command'])
+def test_late_previous_rpc_does_not_trap_a_losing_cas_outbox_forever(env,boundary):
+    c=env['control'];c.start_worker();c.step();command(env)
+    original=env['client'].call;injected=[]
+    def late_previous(name,args):
+        if name==boundary and not injected:
+            injected.append(True)
+            previous={**args,'idempotency_key':'previous-controller-late-rpc'}
+            original(name,previous)
+        return original(name,args)
+    env['client'].call=late_previous
+    before=len(env['client'].calls)
+    with pytest.raises(BoardReadError):c.step()
+    assert len(env['journal'].pending_managed_effects())==1
+    c.step();wait_for(lambda:env['journal'].managed_target('primary')['enabled'])
+    c.step();assert current(env)['observed_state']=='ready'
+    assert env['journal'].pending_managed_effects()==[]
+    assert env['journal'].managed_target('primary')['remaining']==1
+    attempts=[a for name,a in env['client'].calls[before:] if name==boundary and a['idempotency_key']!='previous-controller-late-rpc']
+    assert attempts[0]==attempts[1]
