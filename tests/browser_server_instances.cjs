@@ -30,7 +30,7 @@ const profiles = host.instances.map(item => ({ id: item.profile_id, owner_id: ow
   version: 1, status: 'active', presence: 'offline', role: 'Développement', preferred_provider: 'codex_chatgpt', preferred_model: 'Modèle de test', project_ids: [], bindings: [], active_work: [] }));
 const requests = [], commands = new Map(), grants = new Map();
 let grantCount = 0;
-let rejectNext = false, commandCount = 0, hostReads = 0;
+let rejectNext = false, rejectGrantStatus = 0, commandCount = 0, hostReads = 0;
 const json = (response, value, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
 const server = http.createServer(async (request, response) => {
   try {
@@ -54,6 +54,8 @@ const server = http.createServer(async (request, response) => {
       }
       if (target.pathname === '/api/server-hosts' && request.method === 'POST') {
         assert.equal(body.device_id, 'device-own'); assert.ok(body.idempotency_key);
+        assert.ok(body.name.length <= 100);
+        if (rejectGrantStatus) { const status = rejectGrantStatus; rejectGrantStatus = 0; return json(response, { detail: 'synthetic_terminal_refusal' }, status); }
         if (grants.has(body.idempotency_key)) { assert.deepEqual(grants.get(body.idempotency_key).body, body); return json(response, grants.get(body.idempotency_key).host); }
         grantCount++;
         const item = { id: 'new-host', owner_id: owner, device_id: body.device_id, name: body.name, version: 1, catalog_version: 0,
@@ -164,10 +166,31 @@ const server = http.createServer(async (request, response) => {
     hosts = [];await page.getByRole('button', { name: 'Actualiser', exact: true }).click();await page.getByRole('button', { name: 'Lier mon serveur', exact: true }).click();
     assert.equal(await dialog().getByLabel('Appareil connecté').locator('option').count(), 1);
     assert.equal(await dialog().getByLabel('Appareil connecté').inputValue(), 'device-own');
+    assert.equal(await dialog().getByLabel('Nom du serveur').getAttribute('maxlength'), '100');
+    const grantsBeforeValidation = requests.filter(item => item.path === '/api/server-hosts' && item.method === 'POST').length;
+    await dialog().getByLabel('Nom du serveur').evaluate(input => { input.value = 'x'.repeat(101); });
+    await dialog().locator('form').evaluate(form => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await dialog().getByText('Choisissez un nom de serveur entre 1 et 100 caractères, sans caractère de contrôle.', { exact: true }).waitFor();
+    assert.equal(requests.filter(item => item.path === '/api/server-hosts' && item.method === 'POST').length, grantsBeforeValidation);
+    await dialog().getByLabel('Nom du serveur').fill('x'.repeat(100));rejectGrantStatus = 422;
+    const listsBeforeRefusal = requests.filter(item => item.path === '/api/server-hosts' && item.method === 'GET').length;
+    await dialog().getByRole('button', { name: 'Autoriser cet appareil', exact: true }).click();
+    await page.locator('#notice').filter({ hasText: 'La demande a été refusée.' }).waitFor();
+    const refusedGrant = requests.filter(item => item.path === '/api/server-hosts' && item.method === 'POST').at(-1).body;
+    assert.equal(refusedGrant.name.length, 100);
+    assert.equal(requests.filter(item => item.path === '/api/server-hosts' && item.method === 'GET').length, listsBeforeRefusal);
+    await page.getByRole('button', { name: 'Lier mon serveur', exact: true }).click();
+    await dialog().getByRole('button', { name: 'Actualiser les instances', exact: true }).waitFor();
+    assert.equal(await dialog().getByRole('button', { name: 'Réessayer la liaison', exact: true }).count(), 0);
+    // Fresh human reload clears the terminal refusal for explicit correction.
+    await page.reload();await page.getByRole('button', { name: 'Sur le serveur', exact: true }).click();
+    await page.getByRole('button', { name: 'Lier mon serveur', exact: true }).click();
     await dialog().getByLabel('Nom du serveur').fill('Mon serveur lié');dropNextGrantReply = true;
     await dialog().getByRole('button', { name: 'Autoriser cet appareil', exact: true }).click();
     await page.locator('#notice').filter({ hasText: 'La réponse n’a pas été confirmée.' }).waitFor();
     const firstGrant = requests.filter(item => item.path === '/api/server-hosts' && item.method === 'POST').at(-1).body;
+    assert.notEqual(firstGrant.idempotency_key, refusedGrant.idempotency_key);
+    assert.equal(firstGrant.name, 'Mon serveur lié');
     await page.reload();await page.getByRole('button', { name: 'Sur le serveur', exact: true }).click();
     await page.locator('.server-pending-host').getByRole('button', { name: 'Réessayer la liaison', exact: true }).click();
     await page.locator('.server-pending-host').waitFor({ state: 'hidden' });
@@ -192,7 +215,7 @@ const server = http.createServer(async (request, response) => {
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ result: 'passed_synthetic_firefox_fixture',
       checks: ['owner_scope', 'text_rendering', 'observed_vs_requested', 'unknown_review_cleanup', 'queued_restart',
         'lost_response_same_key_body_budget', 'reload_persistence', 'CAS_requires_reload', 'budget_integer_bounds',
-        'host_grant_existing_device_only', 'host_grant_lost_reply_persisted', 'owner_switch_refuses_stale_control', 'storage_failure_disables_control', 'stop_supersedes_earlier_requests', 'no_runtime_release', 'desktop_mobile_no_overflow'], model_calls: 0,
+        'host_grant_existing_device_only', 'host_name_bounds_no_post', 'terminal_refusal_requires_fresh_read_and_new_key', 'host_grant_lost_reply_persisted', 'owner_switch_refuses_stale_control', 'storage_failure_disables_control', 'stop_supersedes_earlier_requests', 'no_runtime_release', 'desktop_mobile_no_overflow'], model_calls: 0,
       real_agent_processes: 0, production_calls: 0, page_errors: errors, posts: requests.filter(item => item.method === 'POST').length }, null, 2));
   } finally { await browser.close(); }
 })().then(() => server.close()).catch(error => { console.error(error); server.close(); process.exitCode = 1; });

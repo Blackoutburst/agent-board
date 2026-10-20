@@ -536,6 +536,8 @@ const Workspace = (() => {
   const serverButtons = label => el("div", { class: "button-row" }, btn("Annuler", closeModal, "quiet"), el("button", { type: "submit", class: "primary" }, label));
   const serverModal = (title, content) => { openModal(title, content); $("modal-content").querySelector(".modal-head button")?.setAttribute("aria-label", "Fermer la fenêtre"); };
   const serverOpaque = value => typeof value === "string" && value.length > 0 && value.length <= 200 && new TextEncoder().encode(value).length <= 800;
+  const serverHostName = value => typeof value === "string" && value.trim().length > 0 && value.length <= 100 && !/[\u0000-\u001f]/u.test(value);
+  const serverNeedsReload = status => ["conflict", "refused"].includes(status);
   const serverInteger = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum;
   const serverDate = value => {
     if (typeof value !== "number" || !Number.isFinite(value)) return "Pas encore reçu";
@@ -551,7 +553,7 @@ const Workspace = (() => {
     const keysSeen = new Set();
     for (const record of data.records) {
       if (!record || !["command", "host"].includes(record.kind) || !serverOpaque(record.target) || !serverOpaque(record.key)
-          || !["prepared", "uncertain", "submitted", "conflict", "settled", "reloaded"].includes(record.status)
+          || !["prepared", "uncertain", "submitted", "conflict", "refused", "settled", "reloaded"].includes(record.status)
           || !serverInteger(record.created_at) || keysSeen.has(record.key) || !(record.command_id === null || serverOpaque(record.command_id)) || !record.body || typeof record.body !== "object" || Array.isArray(record.body)) throw new Error("Le suivi de vos demandes est invalide. Aucun contrôle n’a été envoyé.");
       keysSeen.add(record.key);
       const keys = Object.keys(record.body).sort().join(",");
@@ -560,6 +562,8 @@ const Workspace = (() => {
             || !serverInteger(record.body.expected_version, 1) || !serverInteger(record.body.expected_generation)
             || typeof record.body.launchspec_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(record.body.launchspec_sha256) || !serverInteger(record.body.budget)
             || (record.body.action === "stop" ? record.body.budget !== 0 : record.body.budget < 1 || record.body.budget > 20)) throw new Error("Le suivi d’une commande est invalide. Aucun contrôle n’a été envoyé.");
+      // Retain old immutable names up to the previous UI bound so a stored
+      // response loss can still be resolved by its exact original request.
       } else if (keys !== "device_id,name" || !serverOpaque(record.body.device_id) || !serverOpaque(record.body.name) || record.body.device_id !== record.target) throw new Error("Le suivi de la liaison est invalide.");
     }
     return data;
@@ -575,7 +579,7 @@ const Workspace = (() => {
     let record = data.records.find(item => item.kind === kind && item.target === target && JSON.stringify(item.body) === encoded && ["prepared", "uncertain"].includes(item.status));
     if (!record) {
       const pending = [...data.records].reverse().find(item => item.kind === kind && (kind === "host" || item.target === target) && !["settled", "reloaded"].includes(item.status));
-      if (pending && !(kind === "command" && body.action === "stop" && pending.body.action !== "stop" && pending.status !== "conflict")) throw new Error("Une demande reste à confirmer. Réessayez-la à l’identique ou actualisez avant une nouvelle action.");
+      if (pending && !(kind === "command" && body.action === "stop" && pending.body.action !== "stop" && !serverNeedsReload(pending.status))) throw new Error("Une demande reste à confirmer. Réessayez-la à l’identique ou actualisez avant une nouvelle action.");
       data.records = data.records.filter(item => !["settled", "reloaded"].includes(item.status));
       if (data.records.length >= 64) throw new Error("Trop de demandes restent à confirmer. Actualisez et vérifiez leur état.");
       record = { kind, target, body, key: idempotencyKey(), status: "prepared", created_at: Date.now(), command_id: null };
@@ -636,13 +640,16 @@ const Workspace = (() => {
         closeRequestModal(); await agents(); notify("Demande enregistrée. L’état observé reste confirmé par le serveur.");
       }
     } catch (failure) {
+      const refused = [400, 404, 422].includes(failure.status);
       if (failure.status === 409) updateServerRecord(owner, record.key, { status: "conflict" });
+      else if (refused) updateServerRecord(owner, record.key, { status: "refused" });
       if (state.actor?.owner_id === owner) {
         const message = failure.status === 409 ? "L’état a changé. Actualisez les instances avant de choisir à nouveau une action."
-          : failure.status === 403 ? "Cette commande n’est plus autorisée. Actualisez les instances pour vérifier les droits."
+          : refused ? "La demande a été refusée. Actualisez les instances, puis corrigez votre saisie ou choisissez une nouvelle action."
+            : failure.status === 403 ? "Cette commande n’est plus autorisée. Actualisez les instances pour vérifier les droits."
             : "La réponse n’a pas été confirmée. Réessayez cette même demande ; son budget ne sera pas ajouté une seconde fois.";
         notify(message, true);
-        if (failure.status === 409 && state.view === "agents" && agentTab === "hosted") closeRequestModal();
+        if ((failure.status === 409 || refused) && state.view === "agents" && agentTab === "hosted") closeRequestModal();
         const note = document.querySelector(`[data-server-request="${CSS.escape(record.target)}"]`);
         if (note) { note.textContent = message; note.hidden = false; }
       }
@@ -668,6 +675,11 @@ const Workspace = (() => {
   }
   async function serverHostDialog(owner, devices) {
     if (state.actor?.owner_id !== owner) return;
+    if (serverStore(owner).records.some(item => item.kind === "host" && serverNeedsReload(item.status))) {
+      serverModal("Actualiser la liaison du serveur", el("div", {}, el("p", {}, "La demande précédente a été refusée ou l’état a changé. Actualisez avant de corriger la liaison."),
+        btn("Actualiser les instances", guard(async () => { if (state.actor?.owner_id === owner) { closeModal(); await agents(); } }), "primary")));
+      return;
+    }
     const existing = [...serverStore(owner).records].reverse().find(item => item.kind === "host" && ["prepared", "uncertain"].includes(item.status));
     if (existing) {
       serverModal("Confirmer la liaison du serveur", el("div", {}, el("p", {}, "Une liaison attend confirmation. Réessayez la même demande avant d’en créer une autre."),
@@ -676,12 +688,13 @@ const Workspace = (() => {
     }
     const available = devices.filter(item => (!item.owner_id || item.owner_id === owner) && item.revoked !== true && !item.revoked_at && serverOpaque(item.id));
     if (!available.length) { serverModal("Lier un serveur", el("div", {}, el("p", {}, "Connectez d’abord l’appareil à votre compte depuis Connexions."), btn("Ouvrir les connexions", guard(async () => { closeModal(); agentTab = "connections"; await agents(); })))); return; }
-    const name = field("Nom du serveur", "name", { value: "Mon serveur", required: true }); name.querySelector("input").maxLength = 200;
+    const name = field("Nom du serveur", "name", { value: "Mon serveur", required: true }); name.querySelector("input").maxLength = 100;
     const form = el("form", {}, el("p", {}, "Autorisez un appareil déjà connecté à héberger vos profils. Seuls vos profils et leurs droits actuels pourront être utilisés."),
       select("Appareil connecté", "device_id", available.map(item => [item.id, item.label || item.id])), name, serverButtons("Autoriser cet appareil"));
     bindForm(form, async values => {
       const device = String(values.get("device_id")), name = String(values.get("name") || "").trim();
-      if (state.actor?.owner_id !== owner || !available.some(item => item.id === device) || !serverOpaque(name)) throw new Error("Sélectionnez un appareil de votre compte et un nom valide.");
+      if (state.actor?.owner_id !== owner || !available.some(item => item.id === device)) throw new Error("Sélectionnez un appareil de votre compte.");
+      if (!serverHostName(name)) throw new Error("Choisissez un nom de serveur entre 1 et 100 caractères, sans caractère de contrôle.");
       await sendServerRecord(owner, serverRecord(owner, "host", device, { device_id: device, name }));
     });
     serverModal("Lier un serveur à mon compte", form);
@@ -689,7 +702,7 @@ const Workspace = (() => {
   function serverInstanceCard(owner, host, instance, profiles, data) {
     const profile = profiles.get(instance.profile_id), command = serverCommand(instance), pending = pendingServerRecord(data, instance);
     const activeCommand = command === undefined || command && ["queued", "accepted"].includes(command.status);
-    const locallyPending = pending && ["prepared", "uncertain", "submitted", "conflict"].includes(pending.status);
+    const locallyPending = pending && ["prepared", "uncertain", "submitted", "conflict", "refused"].includes(pending.status);
     const cleanStopped = instance.observed_state === "stopped" && instance.cleanup_confirmed === true;
     const uncertain = ["unknown", "needs_review"].includes(instance.observed_state);
     const authorized = host.enabled === true && host.revoked_at === null && instance.active === true && instance.can_start === true && profile?.version === instance.profile_version;
@@ -712,8 +725,8 @@ const Workspace = (() => {
     if (uncertain) card.append(el("p", { class: "small server-uncertain" }, instance.observed_state === "needs_review" ? "Le serveur doit vérifier cette instance. Un nettoyage confirmé ne suffit pas à autoriser une relance." : "Aucune observation fiable ne confirme son état. Vous pouvez demander l’arrêt."));
     if (instance.control_reason) card.append(el("p", { class: "small server-uncertain" }, serverReasons[instance.control_reason]));
     else if (!authorized) card.append(el("p", { class: "small muted" }, "Le démarrage n’est pas autorisé actuellement."));
-    const note = el("p", { class: pending?.status === "conflict" ? "form-error" : "server-request-note", role: "status", hidden: !locallyPending, "data-server-request": instance.id },
-      pending?.status === "conflict" ? "L’état a changé. Actualisez avant une nouvelle commande." : pending?.status === "submitted" ? "Demande enregistrée ; l’observation du serveur reste attendue." : "La réponse reste à confirmer. Réessayez la même demande.");
+    const note = el("p", { class: serverNeedsReload(pending?.status) ? "form-error" : "server-request-note", role: "status", hidden: !locallyPending, "data-server-request": instance.id },
+      pending?.status === "refused" ? "La demande a été refusée. Actualisez avant une nouvelle commande." : pending?.status === "conflict" ? "L’état a changé. Actualisez avant une nouvelle commande." : pending?.status === "submitted" ? "Demande enregistrée ; l’observation du serveur reste attendue." : "La réponse reste à confirmer. Réessayez la même demande.");
     const actions = el("div", { class: "server-instance-actions" },
       btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart }),
       btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && !activeCommand && !locallyPending }),
@@ -741,7 +754,7 @@ const Workspace = (() => {
             || !host.instances.every(instance => serverInstanceValid(instance, host)) || new Set(host.instances.map(instance => instance.id)).size !== host.instances.length) throw new Error("Données d’instance indisponibles.");
         for (const instance of host.instances) {
           const pending = pendingServerRecord(data, instance), command = serverCommand(instance);
-          if (pending?.status === "conflict") { pending.status = "reloaded"; changed = true; }
+          if (serverNeedsReload(pending?.status)) { pending.status = "reloaded"; changed = true; }
           else if (pending?.status === "submitted" && command && command.id === pending.command_id && ["complete", "superseded", "rejected"].includes(command.status)) { pending.status = "settled"; changed = true; }
           if (command?.action === "stop" && command.status === "complete" && instance.observed_state === "stopped" && instance.cleanup_confirmed === true) {
             const stopIndex = data.records.findIndex(item => item.kind === "command" && item.target === instance.id && item.command_id === command.id);
@@ -751,7 +764,7 @@ const Workspace = (() => {
           }
         }
       }
-      for (const record of data.records) if (record.kind === "host" && record.status === "conflict") { record.status = "reloaded"; changed = true; }
+      for (const record of data.records) if (record.status === "refused" || record.kind === "host" && record.status === "conflict") { record.status = "reloaded"; changed = true; }
       if (changed) saveServerStore(owner, data);
       // Probe persistence before rendering any enabled control.
       saveServerStore(owner, data);
