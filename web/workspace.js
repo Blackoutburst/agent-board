@@ -484,7 +484,7 @@ const Workspace = (() => {
     { online: "Online", idle: "Idle", offline: "Offline" }[p.presence] || "Unknown presence");
   async function refreshAgentPresence() {
     const inProject = state.view === "project" && projectTab === "agents";
-    if (!inProject && (state.view !== "agents" || agentTab === "runtime")) return;
+    if (!inProject && (state.view !== "agents" || ["runtime", "hosted"].includes(agentTab))) return;
     const request = state.request, entries = await api(inProject ? `/agents?project_id=${workPath(state.project.id)}` : "/agents");
     if (request !== state.request) return;
     const byId = new Map(entries.map(item => [item.id, item]));
@@ -529,13 +529,262 @@ const Workspace = (() => {
       btn(p.status === "archived" ? "Restore paused" : "Archive", () => changeProfileStatus(p, p.status === "archived" ? "paused" : "archived"), "quiet")));
     return card;
   }
+  const serverStates = { unknown: "État inconnu", stopped: "Arrêt confirmé", starting: "Démarrage en cours", ready: "Prêt", busy: "Au travail", stopping: "Arrêt en cours", needs_review: "À vérifier" };
+  const serverReasons = { host_revoked: "Cet hôte a été retiré. Vous pouvez encore demander l’arrêt.", configuration_changed: "La configuration a changé. Le serveur doit publier une configuration à jour.", authorization_changed: "Les autorisations ne permettent plus de démarrer ce profil." };
+  const serverActions = { start: "Démarrer", stop: "Arrêter", restart: "Redémarrer" };
+  const serverBusy = new Set();
+  const serverButtons = label => el("div", { class: "button-row" }, btn("Annuler", closeModal, "quiet"), el("button", { type: "submit", class: "primary" }, label));
+  const serverModal = (title, content) => { openModal(title, content); $("modal-content").querySelector(".modal-head button")?.setAttribute("aria-label", "Fermer la fenêtre"); };
+  const serverOpaque = value => typeof value === "string" && value.length > 0 && value.length <= 200 && new TextEncoder().encode(value).length <= 800;
+  const serverInteger = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum;
+  const serverDate = value => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "Pas encore reçu";
+    const stamp = new Date(value * 1000);
+    return Number.isFinite(stamp.getTime()) ? stamp.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "Date indisponible";
+  };
+  const serverStorageKey = owner => `board-server-requests-v1:${owner}`;
+  function serverStore(owner) {
+    const raw = sessionStorage.getItem(serverStorageKey(owner));
+    if (raw && raw.length > 65536) throw new Error("Le suivi de vos demandes dépasse la limite autorisée.");
+    const data = raw === null ? { schema: 1, owner, records: [] } : JSON.parse(raw);
+    if ((raw && raw.length > 65536) || data?.schema !== 1 || data.owner !== owner || !Array.isArray(data.records) || data.records.length > 64) throw new Error("Le suivi de vos demandes est indisponible. Actualisez cette page avant de continuer.");
+    const keysSeen = new Set();
+    for (const record of data.records) {
+      if (!record || !["command", "host"].includes(record.kind) || !serverOpaque(record.target) || !serverOpaque(record.key)
+          || !["prepared", "uncertain", "submitted", "conflict", "settled", "reloaded"].includes(record.status)
+          || !serverInteger(record.created_at) || keysSeen.has(record.key) || !(record.command_id === null || serverOpaque(record.command_id)) || !record.body || typeof record.body !== "object" || Array.isArray(record.body)) throw new Error("Le suivi de vos demandes est invalide. Aucun contrôle n’a été envoyé.");
+      keysSeen.add(record.key);
+      const keys = Object.keys(record.body).sort().join(",");
+      if (record.kind === "command") {
+        if (keys !== "action,budget,expected_generation,expected_version,launchspec_sha256" || !Object.hasOwn(serverActions, record.body.action)
+            || !serverInteger(record.body.expected_version, 1) || !serverInteger(record.body.expected_generation)
+            || typeof record.body.launchspec_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(record.body.launchspec_sha256) || !serverInteger(record.body.budget)
+            || (record.body.action === "stop" ? record.body.budget !== 0 : record.body.budget < 1 || record.body.budget > 20)) throw new Error("Le suivi d’une commande est invalide. Aucun contrôle n’a été envoyé.");
+      } else if (keys !== "device_id,name" || !serverOpaque(record.body.device_id) || !serverOpaque(record.body.name) || record.body.device_id !== record.target) throw new Error("Le suivi de la liaison est invalide.");
+    }
+    return data;
+  }
+  function saveServerStore(owner, data) {
+    const raw = JSON.stringify(data);
+    if (raw.length > 65536) throw new Error("Le suivi de vos demandes est plein. Aucun contrôle supplémentaire n’a été envoyé.");
+    sessionStorage.setItem(serverStorageKey(owner), raw);
+    if (sessionStorage.getItem(serverStorageKey(owner)) !== raw) throw new Error("La demande n’a pas pu être conservée. Aucun contrôle n’a été envoyé.");
+  }
+  function serverRecord(owner, kind, target, body) {
+    const data = serverStore(owner), encoded = JSON.stringify(body);
+    let record = data.records.find(item => item.kind === kind && item.target === target && JSON.stringify(item.body) === encoded && ["prepared", "uncertain"].includes(item.status));
+    if (!record) {
+      const pending = [...data.records].reverse().find(item => item.kind === kind && (kind === "host" || item.target === target) && !["settled", "reloaded"].includes(item.status));
+      if (pending && !(kind === "command" && body.action === "stop" && pending.body.action !== "stop" && pending.status !== "conflict")) throw new Error("Une demande reste à confirmer. Réessayez-la à l’identique ou actualisez avant une nouvelle action.");
+      data.records = data.records.filter(item => !["settled", "reloaded"].includes(item.status));
+      if (data.records.length >= 64) throw new Error("Trop de demandes restent à confirmer. Actualisez et vérifiez leur état.");
+      record = { kind, target, body, key: idempotencyKey(), status: "prepared", created_at: Date.now(), command_id: null };
+      data.records.push(record);
+    }
+    saveServerStore(owner, data);
+    return record;
+  }
+  function updateServerRecord(owner, key, changes) {
+    const data = serverStore(owner), record = data.records.find(item => item.key === key);
+    if (!record) throw new Error("Le suivi de cette demande est introuvable.");
+    Object.assign(record, changes); saveServerStore(owner, data); return record;
+  }
+  const pendingServerRecord = (data, instance) => [...data.records].reverse().find(item => item.kind === "command" && item.target === instance.id && !["settled", "reloaded"].includes(item.status));
+  function serverCommand(instance) {
+    const command = instance.current_command;
+    if (command === null && instance.command_id === null) return null;
+    if (!command || command.id !== instance.command_id || command.instance_id !== instance.id || !serverOpaque(command.id)
+        || !Object.hasOwn(serverActions, command.action) || !["queued", "accepted", "complete", "superseded", "rejected"].includes(command.status)
+        || !serverInteger(command.generation) || !serverInteger(command.instance_version, 1) || !serverInteger(command.budget)
+        || (command.action === "stop" ? command.budget !== 0 : command.budget < 1 || command.budget > 20)) return undefined;
+    return command;
+  }
+  function serverInstanceValid(instance, host) {
+    return instance && instance.host_id === host.id && serverOpaque(instance.id) && serverOpaque(instance.profile_id)
+      && serverInteger(instance.version, 1) && serverInteger(instance.generation) && serverInteger(instance.observation_revision)
+      && serverInteger(instance.profile_version, 1) && typeof instance.launchspec_sha256 === "string" && /^[a-f0-9]{64}$/.test(instance.launchspec_sha256)
+      && ["messages", "ticket_text"].includes(instance.mode) && ["running", "stopped"].includes(instance.desired_state)
+      && Object.hasOwn(serverStates, instance.observed_state) && typeof instance.cleanup_confirmed === "boolean"
+      && typeof instance.can_start === "boolean" && typeof instance.active === "boolean"
+      && (instance.control_reason === "" || Object.hasOwn(serverReasons, instance.control_reason));
+  }
+  async function sendServerRecord(owner, record) {
+    if (state.actor?.owner_id !== owner || serverBusy.has(record.key)) return;
+    const saved = serverStore(owner).records.find(item => item.key === record.key);
+    if (!saved || !["prepared", "uncertain"].includes(saved.status) || JSON.stringify(saved.body) !== JSON.stringify(record.body)) throw new Error("Actualisez avant de réutiliser cette demande.");
+    const modalSnapshot = $("modal").open ? $("modal-content").firstElementChild : null;
+    const closeRequestModal = () => { if (modalSnapshot && $("modal-content").firstElementChild === modalSnapshot) closeModal(); };
+    serverBusy.add(record.key);
+    try {
+      // Persist the same immutable body/key before fetch. A lost response never
+      // generates a fresh budget or a new key on retry, including after reload.
+      updateServerRecord(owner, record.key, { status: "uncertain" });
+      const route = record.kind === "host" ? "/server-hosts" : `/server-instances/${workPath(record.target)}/commands`;
+      const response = await api(route, { method: "POST", data: { ...record.body, idempotency_key: record.key } });
+      if (record.kind === "host") {
+        if (response?.owner_id !== owner || response.device_id !== record.body.device_id || !serverOpaque(response.id)) throw new Error("Confirmation de liaison indisponible.");
+        updateServerRecord(owner, record.key, { status: "settled" });
+      } else {
+        const expectedGeneration = record.body.expected_generation + (record.body.action === "stop" ? 0 : 1);
+        if (response?.instance_id !== record.target || !serverOpaque(response.id) || response.action !== record.body.action
+            || response.budget !== record.body.budget || response.generation !== expectedGeneration
+            || response.launchspec_sha256 !== record.body.launchspec_sha256 || response.instance_version !== record.body.expected_version + 1
+            || !["queued", "accepted", "complete", "superseded", "rejected"].includes(response.status)) throw new Error("Confirmation de commande indisponible.");
+        updateServerRecord(owner, record.key, { status: ["complete", "superseded", "rejected"].includes(response.status) ? "settled" : "submitted", command_id: response.id });
+      }
+      if (state.actor?.owner_id === owner && state.view === "agents" && agentTab === "hosted") {
+        closeRequestModal(); await agents(); notify("Demande enregistrée. L’état observé reste confirmé par le serveur.");
+      }
+    } catch (failure) {
+      if (failure.status === 409) updateServerRecord(owner, record.key, { status: "conflict" });
+      if (state.actor?.owner_id === owner) {
+        const message = failure.status === 409 ? "L’état a changé. Actualisez les instances avant de choisir à nouveau une action."
+          : failure.status === 403 ? "Cette commande n’est plus autorisée. Actualisez les instances pour vérifier les droits."
+            : "La réponse n’a pas été confirmée. Réessayez cette même demande ; son budget ne sera pas ajouté une seconde fois.";
+        notify(message, true);
+        if (failure.status === 409 && state.view === "agents" && agentTab === "hosted") closeRequestModal();
+        const note = document.querySelector(`[data-server-request="${CSS.escape(record.target)}"]`);
+        if (note) { note.textContent = message; note.hidden = false; }
+      }
+    } finally { serverBusy.delete(record.key); }
+  }
+  function serverActionDialog(owner, instance, action) {
+    if (state.actor?.owner_id !== owner) return;
+    const budget = field("Budget de travail (1 à 20 tours)", "budget", { type: "number", value: 1, required: true, hint: "Un tour correspond à une intervention du modèle. Ce budget vaut pour ce démarrage." });
+    Object.assign(budget.querySelector("input"), { min: "1", max: "20", step: "1" });
+    const message = action === "stop" ? "Demander l’arrêt de cette instance ? L’arrêt et le nettoyage restent à confirmer par le serveur."
+      : action === "restart" ? "Le serveur devra confirmer l’arrêt avant de relancer ce profil avec le nouveau budget."
+        : "Démarrer ce profil sur votre serveur avec un budget explicite ?";
+    const form = el("form", { class: "server-command-form" }, el("p", {}, message), action === "stop" ? null : budget, serverButtons(serverActions[action]));
+    bindForm(form, async values => {
+      if (state.actor?.owner_id !== owner) throw new Error("Le compte a changé. Rouvrez les instances.");
+      const maximum = action === "stop" ? 0 : Number(values.get("budget"));
+      if (!Number.isSafeInteger(maximum) || (action !== "stop" && (maximum < 1 || maximum > 20))) throw new Error("Choisissez un budget entier entre 1 et 20.");
+      const body = { action, expected_version: instance.version, expected_generation: instance.generation, launchspec_sha256: instance.launchspec_sha256, budget: maximum };
+      const record = serverRecord(owner, "command", instance.id, body);
+      await sendServerRecord(owner, record);
+    });
+    serverModal(`${serverActions[action]} le profil hébergé`, form);
+  }
+  async function serverHostDialog(owner, devices) {
+    if (state.actor?.owner_id !== owner) return;
+    const existing = [...serverStore(owner).records].reverse().find(item => item.kind === "host" && ["prepared", "uncertain"].includes(item.status));
+    if (existing) {
+      serverModal("Confirmer la liaison du serveur", el("div", {}, el("p", {}, "Une liaison attend confirmation. Réessayez la même demande avant d’en créer une autre."),
+        btn("Réessayer la liaison", guard(() => sendServerRecord(owner, existing)), "primary")));
+      return;
+    }
+    const available = devices.filter(item => (!item.owner_id || item.owner_id === owner) && item.revoked !== true && !item.revoked_at && serverOpaque(item.id));
+    if (!available.length) { serverModal("Lier un serveur", el("div", {}, el("p", {}, "Connectez d’abord l’appareil à votre compte depuis Connexions."), btn("Ouvrir les connexions", guard(async () => { closeModal(); agentTab = "connections"; await agents(); })))); return; }
+    const name = field("Nom du serveur", "name", { value: "Mon serveur", required: true }); name.querySelector("input").maxLength = 200;
+    const form = el("form", {}, el("p", {}, "Autorisez un appareil déjà connecté à héberger vos profils. Seuls vos profils et leurs droits actuels pourront être utilisés."),
+      select("Appareil connecté", "device_id", available.map(item => [item.id, item.label || item.id])), name, serverButtons("Autoriser cet appareil"));
+    bindForm(form, async values => {
+      const device = String(values.get("device_id")), name = String(values.get("name") || "").trim();
+      if (state.actor?.owner_id !== owner || !available.some(item => item.id === device) || !serverOpaque(name)) throw new Error("Sélectionnez un appareil de votre compte et un nom valide.");
+      await sendServerRecord(owner, serverRecord(owner, "host", device, { device_id: device, name }));
+    });
+    serverModal("Lier un serveur à mon compte", form);
+  }
+  function serverInstanceCard(owner, host, instance, profiles, data) {
+    const profile = profiles.get(instance.profile_id), command = serverCommand(instance), pending = pendingServerRecord(data, instance);
+    const activeCommand = command === undefined || command && ["queued", "accepted"].includes(command.status);
+    const locallyPending = pending && ["prepared", "uncertain", "submitted", "conflict"].includes(pending.status);
+    const cleanStopped = instance.observed_state === "stopped" && instance.cleanup_confirmed === true;
+    const uncertain = ["unknown", "needs_review"].includes(instance.observed_state);
+    const authorized = host.enabled === true && host.revoked_at === null && instance.active === true && instance.can_start === true && profile?.version === instance.profile_version;
+    const canStart = authorized && cleanStopped && !activeCommand && !locallyPending;
+    const canRestart = authorized && !uncertain && ["stopped", "ready", "busy"].includes(instance.observed_state)
+      && (instance.observed_state !== "stopped" || cleanStopped) && !activeCommand && !locallyPending;
+    const stopPending = command?.action === "stop" && ["queued", "accepted"].includes(command.status) || pending?.body.action === "stop" && locallyPending;
+    const label = instance.observed_state === "stopped" && !instance.cleanup_confirmed ? "Nettoyage à confirmer" : serverStates[instance.observed_state];
+    const card = el("article", { class: "server-instance", "data-server-instance": instance.id },
+      el("div", { class: "server-instance-heading" }, profileAvatar(profile || {}), el("div", {}, el("h3", {}, profile?.name || "Profil hébergé"),
+        el("p", { class: "small muted" }, profile?.role || (instance.mode === "messages" ? "Réponses aux messages" : "Travail sur les tickets"))),
+        badge(label, uncertain || !cleanStopped && instance.observed_state === "stopped" ? "status-blocked" : instance.observed_state === "busy" ? "status-running" : "")),
+      el("dl", { class: "server-instance-facts" }, el("dt", {}, "Profil"), el("dd", {}, `${profile?.name || instance.profile_id} · v${instance.profile_version}`),
+        el("dt", {}, "Modèle préféré"), el("dd", {}, [profile?.preferred_provider, profile?.preferred_model].filter(Boolean).join(" · ") || "Selon la configuration du serveur"),
+        el("dt", {}, "État demandé"), el("dd", {}, instance.desired_state === "running" ? "En fonctionnement" : "À l’arrêt"),
+        el("dt", {}, "État observé"), el("dd", {}, label),
+        el("dt", {}, "Dernier signal"), el("dd", {}, serverDate(instance.last_seen_at))));
+    if (command && command.action !== "stop") card.append(el("p", { class: "small muted" }, `Budget de ce démarrage : ${command.budget} tour${command.budget === 1 ? "" : "s"}.`));
+    if (activeCommand) card.append(el("p", { class: "server-pending callout" }, command ? `${serverActions[command.action]} demandé · ${command.status === "accepted" ? "pris en compte" : "en attente du serveur"}.` : "La commande courante reste à confirmer. Actualisez avant un nouveau démarrage."));
+    if (uncertain) card.append(el("p", { class: "small server-uncertain" }, instance.observed_state === "needs_review" ? "Le serveur doit vérifier cette instance. Un nettoyage confirmé ne suffit pas à autoriser une relance." : "Aucune observation fiable ne confirme son état. Vous pouvez demander l’arrêt."));
+    if (instance.control_reason) card.append(el("p", { class: "small server-uncertain" }, serverReasons[instance.control_reason]));
+    else if (!authorized) card.append(el("p", { class: "small muted" }, "Le démarrage n’est pas autorisé actuellement."));
+    const note = el("p", { class: pending?.status === "conflict" ? "form-error" : "server-request-note", role: "status", hidden: !locallyPending, "data-server-request": instance.id },
+      pending?.status === "conflict" ? "L’état a changé. Actualisez avant une nouvelle commande." : pending?.status === "submitted" ? "Demande enregistrée ; l’observation du serveur reste attendue." : "La réponse reste à confirmer. Réessayez la même demande.");
+    const actions = el("div", { class: "server-instance-actions" },
+      btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart }),
+      btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && !activeCommand && !locallyPending }),
+      btn("Redémarrer", () => serverActionDialog(owner, instance, "restart"), "quiet", { disabled: !canRestart }));
+    if (pending && ["prepared", "uncertain"].includes(pending.status)) actions.append(btn("Réessayer la même demande", guard(() => sendServerRecord(owner, pending)), "quiet"));
+    card.append(note, actions);
+    return card;
+  }
+  async function renderServerHosts(body, request) {
+    const owner = state.actor.owner_id, loading = empty("Chargement de vos instances…"); body.append(loading);
+    try {
+      const [summary, profiles, settings] = await Promise.all([api("/server-hosts"), api("/agent-profiles"), api("/settings")]);
+      if (request !== state.request || state.actor?.owner_id !== owner) return;
+      if (!Array.isArray(summary?.hosts) || summary.hosts.length > 64 || !Array.isArray(profiles) || !Array.isArray(settings?.devices)) throw new Error("Données indisponibles.");
+      const own = summary.hosts.filter(host => host?.owner_id === owner);
+      if (!own.every(host => serverOpaque(host.id)) || new Set(own.map(host => host.id)).size !== own.length) throw new Error("Liste des hôtes invalide.");
+      const hosts = await Promise.all(own.map(host => api(`/server-hosts/${workPath(host.id)}`)));
+      if (request !== state.request || state.actor?.owner_id !== owner) return;
+      const names = new Map(profiles.filter(profile => profile.owner_id === owner).map(profile => [profile.id, profile]));
+      const data = serverStore(owner);
+      let changed = false;
+      for (const host of hosts) {
+        if (host.owner_id !== owner || !serverOpaque(host.id) || !Array.isArray(host.instances) || host.instances.length > 16 || typeof host.enabled !== "boolean"
+            || !(host.revoked_at === null || typeof host.revoked_at === "number" && Number.isFinite(host.revoked_at) && host.revoked_at >= 0)
+            || !host.instances.every(instance => serverInstanceValid(instance, host)) || new Set(host.instances.map(instance => instance.id)).size !== host.instances.length) throw new Error("Données d’instance indisponibles.");
+        for (const instance of host.instances) {
+          const pending = pendingServerRecord(data, instance), command = serverCommand(instance);
+          if (pending?.status === "conflict") { pending.status = "reloaded"; changed = true; }
+          else if (pending?.status === "submitted" && command && command.id === pending.command_id && ["complete", "superseded", "rejected"].includes(command.status)) { pending.status = "settled"; changed = true; }
+          if (command?.action === "stop" && command.status === "complete" && instance.observed_state === "stopped" && instance.cleanup_confirmed === true) {
+            const stopIndex = data.records.findIndex(item => item.kind === "command" && item.target === instance.id && item.command_id === command.id);
+            if (stopIndex >= 0) data.records.forEach((item, index) => {
+              if (index <= stopIndex && item.kind === "command" && item.target === instance.id && item.status !== "settled") { item.status = "settled"; changed = true; }
+            });
+          }
+        }
+      }
+      for (const record of data.records) if (record.kind === "host" && record.status === "conflict") { record.status = "reloaded"; changed = true; }
+      if (changed) saveServerStore(owner, data);
+      // Probe persistence before rendering any enabled control.
+      saveServerStore(owner, data);
+      loading.remove();
+      const pendingHost = [...data.records].reverse().find(item => item.kind === "host" && ["prepared", "uncertain"].includes(item.status));
+      body.append(el("div", { class: "server-intro" }, el("h2", {}, "Mes profils sur le serveur"),
+        el("p", {}, "Jusqu’à 16 profils hébergés, dans la capacité d’exécution de votre compte. Chaque démarrage possède son propre budget."),
+        el("p", { class: "small muted" }, "Une commande est une demande. Seul le serveur confirme le démarrage, l’arrêt et le nettoyage."),
+        btn("Lier un serveur", guard(() => serverHostDialog(owner, settings.devices)), "", { disabled: hosts.some(host => host.revoked_at === null) })),
+        ...(pendingHost ? [el("div", { class: "callout server-pending-host" }, el("p", {}, "La liaison d’un appareil attend confirmation."), btn("Réessayer la liaison", guard(() => sendServerRecord(owner, pendingHost))))] : []),
+        el("div", { class: "server-hosts" }, hosts.length ? hosts.map(host => el("section", { class: "server-host", "data-server-host": host.id },
+          el("div", { class: "server-host-heading" }, el("div", {}, el("h2", {}, host.name || "Mon serveur"), el("p", { class: "small muted" }, ownerName(owner))),
+            badge(host.revoked_at !== null ? "Hôte retiré" : host.enabled ? "Hôte autorisé" : "Démarrages suspendus", host.enabled && host.revoked_at === null ? "status-ready" : "status-blocked")),
+          host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data)))
+            : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent.")))
+          : box("Aucun serveur lié", "Choisissez un appareil déjà connecté à votre compte pour héberger vos profils.", btn("Lier mon serveur", guard(() => serverHostDialog(owner, settings.devices)), "primary"))));
+    } catch (failure) {
+      if (request !== state.request || state.actor?.owner_id !== owner) return;
+      loading.replaceWith(el("div", { class: "callout", role: "alert" }, el("strong", {}, "Instances indisponibles"), el("p", {}, "Les commandes restent désactivées. Actualisez pour charger l’état et retrouver le suivi de vos demandes.")));
+    }
+  }
+
   async function agents() {
     const request = ++state.request; navigate("agents"); workRoute({ page: "agents" });
-    const body = frame("Agents", "Give each agent a purpose, then connect it to an executor on your own device.", [btn("Refresh", guard(agents)), btn("New profile", guard(() => profileEditor()), "primary")]);
+    const body = frame("Agents", "Un profil définit le rôle et les préférences ; une instance hébergée exécute ce profil sur votre serveur.", [btn(agentTab === "hosted" ? "Actualiser" : "Refresh", guard(agents)), btn(agentTab === "hosted" ? "Nouveau profil" : "New profile", guard(() => profileEditor()), "primary")]);
     const change = guard(async tab => { agentTab = tab; await agents(); });
-    const navigation = tabs([["profiles", "Profiles"], ["connections", "Connections"], ["runtime", "Runtime"]], agentTab, change);
+    const navigation = tabs([["profiles", "Profiles"], ["hosted", "Sur le serveur"], ["connections", "Connections"], ["runtime", "Runtime"]], agentTab, change);
     navigation.setAttribute("aria-label", "Agent sections");
     body.append(navigation);
+    if (agentTab === "hosted") {
+      await renderServerHosts(body, request);
+      return;
+    }
     if (agentTab === "runtime") {
       await renderRuntime(body, request);
       return;
