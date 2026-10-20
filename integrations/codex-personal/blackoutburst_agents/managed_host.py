@@ -334,8 +334,16 @@ class ManagedHostJournalMixin:
         if self.managed() and any(r['state']!='complete' for r in self.catalog_source_transitions()):
             raise HostError('catalog_transition_pending')
 
-    def _catalog_source_settled(self,*,except_ids=()):
+    def _catalog_source_settled(self,*,except_ids=(),allow_stops=False):
         self._require_lock()
+        if allow_stops:
+            # A v2 source intent may precede genuine Stop completion. The
+            # failed child is already disposed; only exact stopped controls
+            # may remain for the finite controller to finish after intent.
+            if except_ids:raise HostError('catalog_transition_unsettled')
+            from .message_stopped_controls import stopped_control_rows
+            stopped_control_rows(self)
+            return
         if self._db.execute("SELECT 1 FROM managed_commands WHERE state NOT IN ('applied','superseded') LIMIT 1").fetchone():
             raise HostError('catalog_transition_unsettled')
         rows=self._db.execute("SELECT id FROM managed_effects WHERE state NOT IN ('complete','superseded') LIMIT 65").fetchall()
@@ -403,7 +411,8 @@ class ManagedHostJournalMixin:
             if old is not None:
                 if old['method']!=LOCAL_METHOD or old['arguments']!=p:raise HostError('catalog_transition_conflict')
                 return old
-            self.require_no_catalog_source_transition();self._catalog_source_settled()
+            self.require_no_catalog_source_transition()
+            self._catalog_source_settled(allow_stops=p['schema']=='blackoutburst-catalog-source-transition-v2')
             if self.managed_settings()['catalog_sha256']!=digest(p['old_catalog']):raise HostError('catalog_transition_conflict')
             # Consume the complete four-journal Fresh closure inside this Host
             # transaction and BEFORE any schema/intent mutation. It is history
