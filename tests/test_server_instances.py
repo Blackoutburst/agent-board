@@ -7,6 +7,7 @@ import time
 import pytest
 
 from board import Board, BoardError
+from legacy_schema_fixtures import remove_provisioning_schema16_tables
 
 SHA = 'a' * 64
 
@@ -260,6 +261,7 @@ def test_schema13_to14_preserves_accounts_profiles_and_old_tables(env):
     before = b.get_agent_profile(human, profile['id'])
     # Genuine schema13 shape: remove only the new tables/indexes and rewind tag.
     with b._tx() as db:
+        remove_provisioning_schema16_tables(db)
         assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0] == 0
         db.execute('DROP TABLE runtime_admission_refusals')
         for name in ('server_control_receipts','server_instance_commands','server_instances','server_hosts'):
@@ -270,7 +272,7 @@ def test_schema13_to14_preserves_accounts_profiles_and_old_tables(env):
     assert reopened.authenticate(device['token']) == raw
     assert reopened.list_server_hosts(human) == {'hosts': []}
     with reopened._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 15
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 16
     assert Board(b.data_dir).list_server_hosts(human) == {'hosts': []}
 
 
@@ -456,6 +458,7 @@ def test_schema14_migration_failure_is_atomic_with_no_partial_role(env, monkeypa
     import board as board_module
     b, *_ = env
     with b._tx() as db:
+        remove_provisioning_schema16_tables(db)
         assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0] == 0
         db.execute('DROP TABLE runtime_admission_refusals')
         for name in ('server_control_receipts','server_instance_commands','server_instances','server_hosts'):
