@@ -11,6 +11,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import stat
@@ -199,7 +200,17 @@ class RunStore:
         if {r['name'] for r in rows}!=names:raise StoreError('state_schema_invalid')
         if any(tuple(r['name'] for r in db.execute('PRAGMA main.table_info('+table+')'))!=wanted for table,wanted in columns.items()):
             raise StoreError('state_schema_invalid')
-        normalize=lambda value:''.join(value.lower().split())
+        def normalize(value):
+            # Ignore only lexical whitespace/case of SQL keywords/identifiers.
+            # Quoted literals and token boundaries retain their semantics.
+            token=re.compile(r"\s+|'(?:''|[^'])*'|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|!=|[(),=]")
+            result=[];position=0
+            for match in token.finditer(value):
+                if match.start()!=position:raise StoreError('state_schema_invalid')
+                part=match.group();position=match.end()
+                if not part.isspace():result.append(part if part.startswith("'") else part.lower())
+            if position!=len(value):raise StoreError('state_schema_invalid')
+            return tuple(result)
         for name,sql in table_sql.items():
             row=next(r for r in rows if r['name']==name)
             if row['type']!='table' or normalize(row['sql'] or '')!=normalize(sql):
