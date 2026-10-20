@@ -149,13 +149,18 @@ class HostSupervisor:
         try:
             for target in targets:
                 if cancelled(): return self._receipt('disabled','stopped')
+                if not unfinished and not self.journal.target_selected(target['id']):
+                    continue
+                token = self.journal.target_token(target['id'])
+                def target_cancelled(target_id=target['id'], target_token=token):
+                    return cancelled() or self.journal.target_cancelled(target_id, target_token)
                 scope = scope_for(config,target)
-                with self.resource_factory(self.journal,target,scope,cancelled) as drainer:
+                with self.resource_factory(self.journal,target,scope,target_cancelled) as drainer:
                     options = {'scope':scope, **{key:target[key] for key in
                         ('instruction','workspace','executable','model','timeout','after')},
                         'max_pages':config['max_pages'], 'limit':config['page_limit'],
                         'human_owner_id':target.get('human_owner_id'), 'runtime_managed':True,
-                        'should_cancel':cancelled}
+                        'should_cancel':target_cancelled}
                     if 'routing' in target:
                         options.update(model_policy=target['routing']['policy'], task_class=target['routing']['task_class'])
                     old = unfinished[0] if unfinished else None

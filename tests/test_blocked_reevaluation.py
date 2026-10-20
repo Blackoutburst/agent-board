@@ -4,6 +4,8 @@ import time
 
 import pytest
 
+from legacy_schema_fixtures import remove_server_schema14_tables
+
 from board import Board
 
 from test_coordination import new, reject, space  # noqa: F401  (fixture)
@@ -185,6 +187,7 @@ def test_expired_agent_block_returns_to_the_agent_that_must_recheck_it(space):
 def schema12(board):
     """Store the database as releases before schema 13 left it: no block columns."""
     with sqlite3.connect(board.db_path) as db:
+        remove_server_schema14_tables(db)
         for column in ('blocked_reason', 'unblock_owner', 'recheck_at'):
             db.execute(f'ALTER TABLE tickets DROP COLUMN {column}')
         db.execute('PRAGMA user_version=12')
@@ -205,7 +208,7 @@ def test_upgrade_keeps_a_human_manual_block_from_before_schema_13(space):
     schema12(board)
     upgraded = Board(board.db_path.parent, base_url='https://board.test')
     with sqlite3.connect(upgraded.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 14
     ready = [item['id'] for item in upgraded.get_work(first, project['id'])['ready']]
     kept = upgraded.get_ticket(human, manual['id'])['ticket']
     assert kept['status'] == 'blocked' and manual['id'] not in ready

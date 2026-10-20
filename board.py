@@ -19,6 +19,7 @@ from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
 from message_feed import MessageFeedMixin, migrate_message_feed
 from delegation_families import DelegationFamiliesMixin, migrate_delegation_families
+from server_instances import ServerInstancesMixin, migrate_server_instances
 
 
 class BoardError(Exception):
@@ -49,7 +50,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -64,7 +65,7 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 13:
+            if version > 14:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -172,6 +173,9 @@ class Board(DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, R
                     if name not in columns:
                         db.execute(f"ALTER TABLE tickets ADD COLUMN {name} {kind}")
                 db.execute("PRAGMA user_version=13")
+            if version < 14:
+                migrate_server_instances(db)
+                db.execute("PRAGMA user_version=14")
 
     @contextmanager
     def _connection(self):

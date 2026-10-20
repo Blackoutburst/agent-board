@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from legacy_schema_fixtures import remove_server_schema14_tables
+
 from board import Board, BoardError
 from development_frames import (get_development_frame, wire_frame, encoded,
     MAX_DATA_BYTES, MAX_WIRE_BYTES)
@@ -359,13 +361,14 @@ def test_schema12_migration_preserves_live_family_and_frame_identities(frame_fix
     # Model a pre-schema13 store with real family/session/claim records. Reopen
     # through the production migration path, never by disabling access guards.
     with board._connection() as db:
+        remove_server_schema14_tables(db)
         for column in ('blocked_reason', 'unblock_owner', 'recheck_at'):
             db.execute('ALTER TABLE tickets DROP COLUMN ' + column)
         db.execute('PRAGMA user_version=12')
         db.commit()
     migrated = Board(board.data_dir)
     with migrated._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 14
         assert {'blocked_reason', 'unblock_owner', 'recheck_at'} <= {
             row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
     after = http_frame(frame_fixture)

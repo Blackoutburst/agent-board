@@ -7,6 +7,8 @@ import threading
 
 import pytest
 
+from legacy_schema_fixtures import remove_server_schema14_tables
+
 from board import Board, BoardError
 from backup import create_backup, restore_backup
 from test_conversation_followups import space
@@ -236,6 +238,7 @@ def test_schema_nine_migration_preserves_legacy_rows_indexes_foreign_keys_and_ro
     b._execution_view=lambda db,row:original_view(db,{**dict(row),'scope_kind':'ticket'})
     b.reserve_execution(actor,'old',project['id'],ticket['id'],'old-work','old-turn','codex_chatgpt','fixture')
     with b._tx() as db:
+        remove_server_schema14_tables(db)
         db.execute('DROP TABLE mcp_page_cursors')
         db.execute('ALTER TABLE message_feeds DROP COLUMN pending_view')
         db.execute('ALTER TABLE message_feeds DROP COLUMN pending_compact_json')
@@ -266,7 +269,7 @@ def test_schema_nine_migration_preserves_legacy_rows_indexes_foreign_keys_and_ro
 def test_schema_ten_backup_restores_message_capacity_and_exact_source(space,tmp_path):
     b,h,*_=space;actor=space[6][0];message=ping(space);execution=reserve(space,message)['execution']
     archive=tmp_path/'message-runtime.zip';manifest=create_backup(b.data_dir,archive)
-    assert manifest['schema']['user_version']==13
+    assert manifest['schema']['user_version']==14
     destination=tmp_path/'restored';restore_backup(archive,destination);restored=Board(destination)
     assert restored.lookup_execution(actor,'message-turn')['execution']==execution
     assert restored.get_message(actor,message['thread_id'],message['id'])==b.get_message(actor,message['thread_id'],message['id'])

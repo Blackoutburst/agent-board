@@ -8,17 +8,20 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import stat
 import sys
+import signal
+import threading
 
 if __package__:
     from .package import (OWNER_NAMES, PackageError, absolute, home, no_symlinks,
-                          protected, read_regular, verify_release)
+                          protected, read_regular, verify_release, manifest_id, RELEASES)
 else:
     # Installed here by root. -I does not put a script's directory on sys.path.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from package import (OWNER_NAMES, PackageError, absolute, home, no_symlinks,
-                         protected, read_regular, verify_release)
+                         protected, read_regular, verify_release, manifest_id, RELEASES)
 
 
 def owner_context(manifest, username):
@@ -70,6 +73,25 @@ def paths(username):
     return base, base / '.config/blackoutburst-agent-host/host.json', base / '.local/state/blackoutburst-agents/host'
 
 
+def _pinned_executable(value, manifest, release, verified):
+    if value==str(release/'tools/codex'):return
+    # A source update need not rewrite the owner's immutable private config.
+    # Reuse a previous installed tool ONLY when its complete protected release
+    # verifies and every execution/account/tool pin is identical.
+    path=absolute(value)
+    previous=path.parent.parent
+    if (path!=previous/'tools/codex' or previous.parent!=RELEASES
+            or re.fullmatch('[0-9a-f]{64}',previous.name) is None):
+        raise PackageError('unpinned_host_executable')
+    if str(path) in verified:return
+    old=verify_release(previous)
+    if (any(old.get(k)!=manifest.get(k) for k in ('architecture','python','owners','board_endpoint','codex_version'))
+            or any(old.get('files',{}).get(k)!=manifest.get('files',{}).get(k)
+                   or k not in manifest.get('files',{}) for k in ('tools/codex','tools/codex-resources/bwrap'))):
+        raise PackageError('unpinned_host_executable')
+    verified.add(str(path))
+
+
 def check_configuration(config, manifest, release, username):
     """Narrow the existing text-host contract to this installed Unix owner."""
     from blackoutburst_agents.board_reader import _connection_file
@@ -79,9 +101,11 @@ def check_configuration(config, manifest, release, username):
             or not isinstance(config.get('targets'), list) or not 1 <= len(config['targets']) <= 16):
         raise PackageError('host_owner_or_endpoint_mismatch')
     base = home(username)
+    verified=set()
     for target in config['targets']:
-        if not isinstance(target, dict) or target.get('executable') != str(release / 'tools/codex'):
+        if not isinstance(target, dict):
             raise PackageError('unpinned_host_executable')
+        _pinned_executable(target.get('executable'),manifest,release,verified)
         if (not isinstance(target.get('model'), str) or not target['model'].strip()
                 or 'routing' in target):
             raise PackageError('explicit_model_required')
@@ -122,6 +146,35 @@ def execute(args, manifest):
     """Text-host lifecycle, no-model doctor, and a separately requested nonce probe."""
     from blackoutburst_agents.cli import main as adapter_main
     base, configuration, journal = paths(args.owner)
+    if args.action in ('managed-prepare','managed-run'):
+        from blackoutburst_agents.host_journal import HostJournal
+        from blackoutburst_agents.server_controller import ServerController,launch_catalog
+        from blackoutburst_agents.server_control_client import ServerControlClient
+        config=_configuration(manifest,args.release,args.owner)
+        catalog=launch_catalog(config,manifest_id(manifest))
+        with HostJournal(journal) as state:
+            if args.action=='managed-prepare':
+                with state.owner_lock():state.prepare_managed(args.host_id,catalog)
+                print(json.dumps({'status':'managed_prepared','host_id':args.host_id,
+                    'targets':len(catalog),'activation_changed':False,'model_calls':0}))
+                return 0
+            # A role is explicitly granted to this device by its human owner.
+            # Publishing cannot create that grant or broaden any profile access.
+            with ServerControlClient.from_connection_file(config['targets'][0]['connection_file'],
+                    session_id='fixed-server-control',timeout=5) as client:
+                if client.endpoint!=config['board_endpoint']:raise PackageError('connection_endpoint_mismatch')
+                controller=ServerController(state,client)
+                cancelled=threading.Event();previous={}
+                try:
+                    controller.start_worker()
+                    controller.publish(catalog)
+                    for signum in (signal.SIGINT,signal.SIGTERM):
+                        previous[signum]=signal.signal(signum,lambda *_:cancelled.set())
+                    output=controller.run(should_cancel=cancelled.is_set)
+                finally:
+                    controller.shutdown()
+                    for signum,handler in previous.items():signal.signal(signum,handler)
+                print(json.dumps(output));return 2 if output['status']=='needs_review' else 0
     if args.action == 'doctor':
         return adapter_main(['doctor', '--codex', str(args.release / 'tools/codex')])
     if args.action == 'probe':
@@ -171,6 +224,8 @@ def main(argv=None):
     probe.add_argument('--timeout', type=int, default=120)
     actions.add_parser('enable').add_argument('--revision', type=int, required=True)
     actions.add_parser('reconcile').add_argument('--batch', required=True)
+    actions.add_parser('managed-prepare').add_argument('--host-id',required=True)
+    actions.add_parser('managed-run')
     args = parser.parse_args(argv)
     try:
         manifest = verify_release(args.release)

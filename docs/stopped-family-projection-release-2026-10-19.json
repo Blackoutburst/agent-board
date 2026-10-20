@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "kind": "stopped_family_projection_fix",
+  "date": "2026-10-19",
+  "ticket": "Board overhaul #44 (follow-up of #42, coordinated in #43)",
+  "board_version": "2.13.1",
+  "database_schema": 13,
+  "base_revision": "cb69175ef633f5dc837703c84c7549abf6d7bfce",
+  "defect": "Children of cancelled delegation families whose old block had no reason were released to todo by the #42 reevaluation and then projected ready=true with block_reasons=[]; claims were already refused by _delegation_claim_check",
+  "change": [
+    "_ticket computes durable execution block reasons for open tickets: unconfirmed Runtime cleanup, and a family cancelled, review_ready or past its deadline",
+    "An unclaimed todo ticket, or an in_progress one with an expired claim, carrying such a reason is projected work_state=blocked, ready=false with those block_reasons; stored status unchanged",
+    "_work_candidates skips tickets with block_reasons, so they appear in neither ready nor recovery",
+    "Policy or grant-dependent family stops are not projected on such tickets (they can be undone); blocked tickets keep the full execution reasons as before",
+    "Claim and Runtime guards unchanged; a human status edit does not resume a cancelled family"
+  ],
+  "verification": {
+    "board_tests": "1069 passed (1066 + 3 in tests/test_stopped_family_projection.py; the todo-child test fails on 3bfbb86)"
+  },
+  "limits": [
+    "Running claimed tickets keep work_state=running even if their family stops; the family control and Runtime guards stop them",
+    "Existing ticket status rows (#25/#29/#37/#38) are not rewritten; their explicit marking stays with their assignee profile"
+  ],
+  "rebased_from": "d74ea60e440933197fe445d00f046147a8d37d85 (Linux counter-review favorable on that SHA)"
+}
