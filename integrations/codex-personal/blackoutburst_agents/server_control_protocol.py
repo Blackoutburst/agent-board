@@ -1,11 +1,12 @@
 """Closed metadata protocol. It cannot carry a command, environment or prompt."""
 import json
 import math
+import hashlib
 
 from .host_config import HostError
 from .managed_host import _opaque,_sha
 
-TOOLS=frozenset({'publish_server_catalog','poll_instance_commands','ack_instance_command','report_instance_state'})
+TOOLS=frozenset({'publish_server_catalog','replace_server_catalog','poll_instance_commands','ack_instance_command','report_instance_state'})
 STATES=frozenset({'unknown','stopped','starting','ready','busy','stopping','needs_review'})
 REASONS=frozenset({'','stopped','not_started','launch_refused','configuration_changed','authorization_changed',
     'host_revoked','cleanup_unconfirmed','connection_lost','budget_exhausted','execution_failed',
@@ -64,20 +65,48 @@ def instance(value):
         if c['id']!=value['command_id'] or c['instance_id']!=value['id'] or c['generation']!=value['generation']:
             raise HostError('managed_protocol_invalid')
 
+def catalog_fence(instances):
+    """Hash only fixed source/CAS fields; timestamps and presence are excluded."""
+    if type(instances) is not list or not 1<=len(instances)<=16:
+        raise HostError('managed_protocol_invalid')
+    fields=('id','host_id','catalog_key','profile_id','profile_version','mode','active',
+        'launchspec_sha256','version','generation','desired_state','observed_state',
+        'observation_revision','cleanup_confirmed','command_id')
+    command_fields=('id','action','generation','launchspec_sha256','budget',
+        'instance_version','revision','status','stop_confirmed')
+    selected=[]
+    for value in instances:
+        instance(value)
+        row={key:value[key] for key in fields};cmd=value['current_command']
+        row['current_command']=None if cmd is None else {key:cmd[key] for key in command_fields}
+        selected.append(row)
+    if len({v['catalog_key'] for v in selected})!=len(selected) or len({v['id'] for v in selected})!=len(selected):
+        raise HostError('managed_protocol_invalid')
+    value={'schema':'blackoutburst-server-catalog-fence-v1',
+        'instances':sorted(selected,key=lambda v:v['catalog_key'])}
+    _bounded(value,65536)
+    return hashlib.sha256(json.dumps(value,ensure_ascii=True,sort_keys=True,
+        separators=(',',':'),allow_nan=False).encode('ascii')).hexdigest()
+
 def _arguments(name,args):
     if name not in TOOLS:raise HostError('managed_tool_forbidden')
-    _bounded(args,16384 if name=='publish_server_catalog' else 4096)
+    _bounded(args,16384 if name in ('publish_server_catalog','replace_server_catalog') else 4096)
     keys={
         'publish_server_catalog':'host_id expected_catalog_version entries idempotency_key',
+        'replace_server_catalog':'host_id expected_catalog_version expected_host_version expected_instances_sha256 entries idempotency_key',
         'poll_instance_commands':'host_id limit',
         'ack_instance_command':'host_id command_id expected_revision idempotency_key',
         'report_instance_state':'host_id instance_id expected_observation_revision generation launchspec_sha256 command_id state cleanup_confirmed reason idempotency_key'}
     _exact(args,keys[name]);_opaque(args['host_id'])
     if 'idempotency_key' in args:_opaque(args['idempotency_key'])
     if name=='poll_instance_commands':_int(args['limit'],1,20)
-    elif name=='publish_server_catalog':
-        _int(args['expected_catalog_version']);entries=args['entries']
+    elif name in ('publish_server_catalog','replace_server_catalog'):
+        _int(args['expected_catalog_version'],1 if name=='replace_server_catalog' else 0,
+            2**63-2 if name=='replace_server_catalog' else 2**63-1);entries=args['entries']
         if type(entries) is not list or len(entries)>16:raise HostError('managed_protocol_invalid')
+        if name=='replace_server_catalog':
+            if not entries:raise HostError('managed_protocol_invalid')
+            _int(args['expected_host_version'],1);_sha(args['expected_instances_sha256'])
         for e in entries:entry(e)
         if len({e['catalog_key'] for e in entries})!=len(entries) or len({e['profile_id'] for e in entries})!=len(entries):
             raise HostError('managed_protocol_invalid')
@@ -97,7 +126,7 @@ def _response(name,value):
         if type(value['commands']) is not list or len(value['commands'])>20:raise HostError('managed_protocol_invalid')
         for c in value['commands']:command(c)
         if len({c['id'] for c in value['commands']})!=len(value['commands']):raise HostError('managed_protocol_invalid')
-    elif name=='publish_server_catalog':
+    elif name in ('publish_server_catalog','replace_server_catalog'):
         _exact(value,'host_id catalog_version instances');_opaque(value['host_id']);_int(value['catalog_version'],1)
     elif name in ('ack_instance_command','report_instance_state'):
         _exact(value,'command instance');instance(value['instance'])

@@ -853,6 +853,14 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
             [entry.model_dump() for entry in entries], idempotency_key)
 
     @mcp.tool()
+    async def replace_server_catalog(host_id: ServerOpaque, expected_catalog_version: Version,
+                                      expected_host_version: Version, expected_instances_sha256: ServerHash,
+                                      entries: list[ServerCatalogEntry], idempotency_key: ServerOpaque) -> dict:
+        """Explicit source-only catalogue replacement for a human-granted manager. Requires exact host/catalog versions and the closed fresh instance/command fence, complete real human Stops, and unchanged identities/profiles/modes. Updates hashes only; no worker, feed, Runtime, budget or activation. A replayed receipt is historical delivery evidence, never current authority; poll again before local commit."""
+        return board.replace_server_catalog(device_actor(),host_id,expected_catalog_version,
+            expected_host_version,expected_instances_sha256,[entry.model_dump() for entry in entries],idempotency_key)
+
+    @mcp.tool()
     async def poll_instance_commands(host_id: ServerOpaque,
                                      limit: Annotated[int, Field(strict=True, ge=1, le=20)] = 20) -> dict:
         """Read current instance observations and durable queued/accepted commands for this human-granted manager device. Redelivers unresolved commands; reading is not acknowledgement or launch authority. Cleanup remains available after work permission withdrawal, never after device revocation."""

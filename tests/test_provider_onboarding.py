@@ -134,7 +134,7 @@ def test_no_model_tool_or_login_route_added_and_profile_creation_stays_idempoten
         'Accept': 'application/json, text/event-stream'},
         json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})
     names = {tool['name'] for tool in response.json()['result']['tools']}
-    assert len(names) == 63 and not any('provider' in name or 'login' in name for name in names)
+    assert len(names) == 64 and not any('provider' in name or 'login' in name for name in names)
     values = {'name': 'New prepared profile', 'preferred_provider': 'claude_code',
         'preferred_model': 'a-request-only', 'idempotency_key': 'create-prepared'}
     created = client.post('/api/agent-profiles', json=values)

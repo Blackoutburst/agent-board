@@ -11,14 +11,14 @@ import json
 import secrets
 import time
 
-from projects import _fail
+from projects import _fail, _json as _audit_json
 
 MODES = frozenset({'messages', 'ticket_text'})
 STATES = frozenset({'unknown', 'stopped', 'starting', 'ready', 'busy', 'stopping', 'needs_review'})
 REASONS = frozenset({'', 'stopped', 'not_started', 'launch_refused', 'configuration_changed',
     'authorization_changed', 'host_revoked', 'cleanup_unconfirmed', 'connection_lost',
     'budget_exhausted', 'execution_failed', 'authentication_required', 'quota_unavailable'})
-MANAGER_TOOLS = frozenset({'publish_server_catalog', 'poll_instance_commands',
+MANAGER_TOOLS = frozenset({'publish_server_catalog', 'replace_server_catalog', 'poll_instance_commands',
     'ack_instance_command', 'report_instance_state'})
 
 
@@ -65,10 +65,77 @@ def _wire(value):
     return _bound(value, 65536)
 
 
+CATALOG_FENCE_FIELDS = ('id','host_id','catalog_key','profile_id','profile_version','mode','active',
+    'launchspec_sha256','version','generation','desired_state','observed_state',
+    'observation_revision','cleanup_confirmed','command_id')
+CATALOG_COMMAND_FIELDS = ('id','action','generation','launchspec_sha256','budget',
+    'instance_version','revision','status','stop_confirmed')
+
+
+def catalog_fence(instances):
+    """Stable public CAS projection; no presence, reasons or timestamps."""
+    if type(instances) is not list or not 1<=len(instances)<=16:
+        _fail('invalid_server_catalog')
+    selected=[]
+    for value in instances:
+        row={key:value[key] for key in CATALOG_FENCE_FIELDS}
+        command=value['current_command']
+        row['current_command']=None if command is None else {key:command[key] for key in CATALOG_COMMAND_FIELDS}
+        selected.append(row)
+    if len({v['catalog_key'] for v in selected})!=len(selected) or len({v['id'] for v in selected})!=len(selected):
+        _fail('invalid_server_catalog')
+    value={'schema':'blackoutburst-server-catalog-fence-v1',
+        'instances':sorted(selected,key=lambda v:v['catalog_key'])}
+    return hashlib.sha256(_json(_wire(value)).encode('ascii')).hexdigest()
+
+
+def _replacement_receipt(value,host_id,version,entries):
+    """Reject unknown cached fields before returning a metadata-only receipt."""
+    _wire(value)
+    if (type(value) is not dict or set(value)!={'host_id','catalog_version','instances'}
+            or value['host_id']!=host_id or type(value['catalog_version']) is not int
+            or value['catalog_version']!=version+1 or type(value['instances']) is not list
+            or len(value['instances'])!=len(entries)):
+        _fail('invalid_server_receipt')
+    incoming={e['catalog_key']:e for e in entries};seen=set();seen_ids=set()
+    fields=set(CATALOG_FENCE_FIELDS)|{'reason','last_seen_at','can_start','control_reason','current_command'}
+    command_fields=set(CATALOG_COMMAND_FIELDS)|{'seq','instance_id','created_at','updated_at'}
+    for row in value['instances']:
+        if type(row) is not dict or set(row)!=fields:_fail('invalid_server_receipt')
+        _opaque(row['id']);_opaque(row['command_id'])
+        key=row['catalog_key'];entry=incoming.get(key) if type(key) is str else None
+        if (entry is None or key in seen or row['host_id']!=host_id
+                or any(type(row[k]) is not type(entry[k]) or row[k]!=entry[k] for k in entry)
+                or row['active'] is not True or row['cleanup_confirmed'] is not False
+                or row['desired_state']!='stopped' or row['observed_state']!='unknown'
+                or row['reason']!='configuration_changed' or row['can_start'] is not True or row['control_reason']!=''
+                or row['id'] in seen_ids):
+            _fail('invalid_server_receipt')
+        seen.add(key);seen_ids.add(row['id'])
+        _number(row['version'],2);_number(row['observation_revision'])
+        _number(row['generation'],0)
+        cmd=row['current_command']
+        if (type(cmd) is not dict or set(cmd)!=command_fields or cmd['id']!=row['command_id']
+                or cmd['instance_id']!=row['id'] or cmd['action']!='stop' or cmd['status']!='complete'
+                or type(cmd['budget']) is not int or cmd['budget']!=0 or type(cmd['stop_confirmed']) is not bool
+                or type(cmd['generation']) is not int or cmd['generation']!=row['generation']
+                or type(cmd['instance_version']) is not int or cmd['instance_version']!=row['version']-1
+                or cmd['launchspec_sha256']==row['launchspec_sha256']):
+            _fail('invalid_server_receipt')
+        for k in ('seq','revision'):_number(cmd[k])
+        _sha(cmd['launchspec_sha256'])
+        for stamp,optional in ((row['last_seen_at'],True),(cmd['created_at'],False),(cmd['updated_at'],False)):
+            if not (optional and stamp is None) and (type(stamp) not in (int,float) or not 0<=stamp<=2**63-1):
+                _fail('invalid_server_receipt')
+    return value
+
+
 def validate_manager_arguments(name, arguments):
     """Run before FastMCP can discard keys or coerce JSON strings/scalars."""
     fields = {
         'publish_server_catalog': {'host_id', 'expected_catalog_version', 'entries', 'idempotency_key'},
+        'replace_server_catalog': {'host_id', 'expected_catalog_version','expected_host_version',
+            'expected_instances_sha256','entries','idempotency_key'},
         'poll_instance_commands': {'host_id', 'limit'},
         'ack_instance_command': {'host_id', 'command_id', 'expected_revision', 'idempotency_key'},
         'report_instance_state': {'host_id', 'instance_id', 'expected_observation_revision', 'generation',
@@ -77,7 +144,7 @@ def validate_manager_arguments(name, arguments):
     required = fields[name] - ({'limit'} if name == 'poll_instance_commands' else set())
     if type(arguments) is not dict or not required <= arguments.keys() or arguments.keys() - fields[name]:
         _fail('invalid_server_payload')
-    _bound(arguments, 16384 if name == 'publish_server_catalog' else 4096)
+    _bound(arguments, 16384 if name in ('publish_server_catalog','replace_server_catalog') else 4096)
     for key in ('host_id', 'instance_id', 'command_id', 'idempotency_key'):
         if key in arguments and not (key == 'command_id' and arguments[key] is None):
             _opaque(arguments[key])
@@ -86,6 +153,11 @@ def validate_manager_arguments(name, arguments):
             _number(arguments[key], 0)
     if 'expected_revision' in arguments:
         _number(arguments['expected_revision'])
+    if name=='replace_server_catalog':
+        _number(arguments['expected_host_version'])
+        _number(arguments['expected_catalog_version'],1,2**63-2)
+        _sha(arguments['expected_instances_sha256'])
+        if not arguments['entries']:_fail('invalid_server_catalog')
     if 'limit' in arguments:
         _number(arguments['limit'], 1, 20)
     if 'cleanup_confirmed' in arguments and type(arguments['cleanup_confirmed']) is not bool:
@@ -339,6 +411,96 @@ class ServerInstancesMixin:
             result = {'host_id': host_id, 'catalog_version': host['catalog_version'],
                 'instances': self._server_host_view(db, host, instances=True)['instances']}
             return self._server_remember(db, host['owner_id'], 'catalog:' + host_id, idempotency_key, payload, result)
+
+    def replace_server_catalog(self,actor,host_id,expected_catalog_version,expected_host_version,
+                               expected_instances_sha256,entries,idempotency_key):
+        """Explicit source replacement; a real human Stop precedes every target."""
+        args=dict(host_id=host_id,expected_catalog_version=expected_catalog_version,
+            expected_host_version=expected_host_version,expected_instances_sha256=expected_instances_sha256,
+            entries=entries,idempotency_key=idempotency_key)
+        validate_manager_arguments('replace_server_catalog',args)
+        payload={k:v for k,v in args.items() if k!='idempotency_key'}
+        operation='catalog-replace:'+host_id
+        with self._tx() as db:
+            def authorized():
+                current=self._server_manager(db,actor,host_id)
+                if current['revoked_at'] is not None or not self._server_owner_enabled(db,current['owner_id']):
+                    _fail('server_catalog_not_authorized',403)
+                for entry in entries:
+                    if self._server_start_reason(db,current,{**entry,'active':1}):
+                        _fail('server_catalog_not_authorized',403)
+                return current
+            host=authorized()
+            # Authorization is fresh even for a historical delivery receipt.
+            receipt=db.execute('''SELECT payload_sha256,length(CAST(response AS BLOB)) AS size
+                FROM server_control_receipts WHERE owner_id=? AND operation=? AND key=?''',
+                (host['owner_id'],operation,idempotency_key)).fetchone()
+            if receipt is not None:
+                if receipt['payload_sha256']!=hashlib.sha256(_json(payload).encode('ascii')).hexdigest():
+                    _fail('server_idempotency_conflict',409)
+                if not 0<receipt['size']<=65536:_fail('invalid_server_receipt')
+                raw=db.execute('SELECT response FROM server_control_receipts WHERE owner_id=? AND operation=? AND key=?',
+                    (host['owner_id'],operation,idempotency_key)).fetchone()[0]
+                try:
+                    prior=json.loads(raw)
+                    if _json(prior)!=raw:raise ValueError()
+                except (ValueError,TypeError,RecursionError,UnicodeError):_fail('invalid_server_receipt')
+                return _replacement_receipt(prior,host_id,expected_catalog_version,entries)
+            if host['version']!=expected_host_version or host['catalog_version']!=expected_catalog_version:
+                _fail('server_catalog_changed',409)
+            old=[dict(r) for r in db.execute('SELECT * FROM server_instances WHERE host_id=? AND active=1 ORDER BY catalog_key LIMIT 17',(host_id,))]
+            if len(old)!=len(entries):_fail('server_catalog_identity_changed',409)
+            incoming={e['catalog_key']:e for e in entries};commands={};views=[]
+            for row in old:
+                entry=incoming.get(row['catalog_key'])
+                if entry is None or any(row[k]!=entry[k] for k in ('profile_id','profile_version','mode')):
+                    _fail('server_catalog_identity_changed',409)
+                if row['launchspec_sha256']==entry['launchspec_sha256']:
+                    _fail('server_catalog_source_unchanged',409)
+                _number(row['version'],1,2**63-2);_number(row['observation_revision'],0,2**63-2)
+                cmd=None if row['command_id'] is None else db.execute('SELECT * FROM server_instance_commands WHERE id=?',(row['command_id'],)).fetchone()
+                if (row['desired_state']!='stopped' or row['observed_state']!='stopped' or row['cleanup_confirmed']!=1
+                        or cmd is None or cmd['instance_id']!=row['id'] or cmd['action']!='stop' or cmd['status']!='complete'
+                        or cmd['generation']!=row['generation'] or cmd['launchspec_sha256']!=row['launchspec_sha256']
+                        or cmd['instance_version']!=row['version']):
+                    _fail('server_catalog_human_stop_required',409)
+                commands[cmd['id']]=dict(cmd)
+                views.append({**row,'active':True,'cleanup_confirmed':True,
+                    'current_command':self._server_command_view(cmd)})
+            if catalog_fence(views)!=expected_instances_sha256:_fail('server_catalog_changed',409)
+            expected_rows=[]
+            for row in old:
+                expected={**row,'launchspec_sha256':incoming[row['catalog_key']]['launchspec_sha256'],
+                    'version':row['version']+1,'observation_revision':row['observation_revision']+1,
+                    'observed_state':'unknown','cleanup_confirmed':0,'reason':'configuration_changed'}
+                db.execute("UPDATE server_instances SET launchspec_sha256=?,version=version+1,observation_revision=observation_revision+1,observed_state='unknown',cleanup_confirmed=0,reason='configuration_changed' WHERE id=?",
+                    (expected['launchspec_sha256'],row['id']))
+                expected_rows.append(expected)
+            now=time.time()
+            db.execute('UPDATE server_hosts SET catalog_version=catalog_version+1,last_seen_at=?,updated_at=? WHERE id=?',(now,now,host_id))
+            expected_host={**dict(host),'catalog_version':expected_catalog_version+1,'last_seen_at':now,'updated_at':now}
+            detail={'host_id':host_id,'catalog_version':expected_catalog_version+1,'count':len(entries)}
+            audit=self._audit(db,actor,'server_catalog_replaced',detail)
+            result={'host_id':host_id,'catalog_version':expected_catalog_version+1,
+                'instances':self._server_host_view(db,self._server_host(db,actor,host_id),instances=True)['instances']}
+            _replacement_receipt(result,host_id,expected_catalog_version,entries)
+            self._server_remember(db,host['owner_id'],operation,idempotency_key,payload,result)
+            # No write follows these checks. Existing triggers may not turn a
+            # committed replacement receipt into a different state or identity.
+            final_host=authorized()
+            final_rows=[dict(r) for r in db.execute('SELECT * FROM server_instances WHERE host_id=? AND active=1 ORDER BY catalog_key LIMIT 17',(host_id,))]
+            receipt=db.execute('SELECT * FROM server_control_receipts WHERE owner_id=? AND operation=? AND key=?',
+                (host['owner_id'],operation,idempotency_key)).fetchone()
+            expected_receipt=dict(owner_id=host['owner_id'],operation=operation,key=idempotency_key,
+                payload_sha256=hashlib.sha256(_json(payload).encode('ascii')).hexdigest(),response=_json(result))
+            event=db.execute('SELECT actor,event,detail FROM audit WHERE id=?',(audit,)).fetchone()
+            if (dict(final_host)!=expected_host or final_rows!=expected_rows or receipt is None
+                    or dict(receipt)!=expected_receipt or event is None
+                    or tuple(event)!=(_audit_json(actor),'server_catalog_replaced',_audit_json(detail))
+                    or any(dict(db.execute('SELECT * FROM server_instance_commands WHERE id=?',(key,)).fetchone() or {})!=value
+                        for key,value in commands.items())):
+                _fail('server_catalog_postcondition_failed',409)
+            return result
 
     def _server_instance(self, db, actor, instance_id):
         row = db.execute('''SELECT i.* FROM server_instances i JOIN server_hosts h ON h.id=i.host_id
