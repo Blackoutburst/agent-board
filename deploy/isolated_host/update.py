@@ -451,7 +451,9 @@ def update_existing(directory,*,expected_old_release,expected_new_release):
                 # committed new installation receipt.
                 receipt_attempted=True
                 installations.new(expected_new_release+'.json',encoded({**receipt,'bundle_id':expected_new_release}),0o600)
+                recheck(pins)
                 backup.new('result.json',encoded(result),0o400)
+                recheck(pins)
                 return result
             except BaseException:
                 if receipt_attempted:

@@ -335,3 +335,20 @@ def test_ambiguous_final_commit_preserves_new_units_for_review(case,monkeypatch,
     if boundary=='backup_result':
         receipt=pkg.decode((case.base/'installations'/(case.new_id+'.json')).read_bytes())
         assert receipt['bundle_id']==case.new_id and receipt['status']=='installed_disabled'
+
+
+@pytest.mark.parametrize('boundary',['installation_receipt','backup_result'])
+def test_service_drift_during_final_publication_returns_review_without_stopping_it(case,monkeypatch,boundary):
+    original=update.Directory.new
+    def concurrent_start(directory,name,data,mode=0o600):
+        result=original(directory,name,data,mode)
+        if ((boundary=='installation_receipt' and directory.path==case.base/'installations' and name==case.new_id+'.json')
+                or (boundary=='backup_result' and name=='result.json')):
+            case.state.update(active='active',sub='running')
+        return result
+    monkeypatch.setattr(update.Directory,'new',concurrent_start)
+    with pytest.raises(pkg.PackageError,match='update_commit_requires_review'):apply(case)
+    assert case.state['active']=='active' and case.state['sub']=='running'
+    assert all(' managed-run\n' in (case.units/pkg.unit_name(n)).read_text() for n in pkg.OWNER_NAMES)
+    assert (case.base/'installations'/(case.new_id+'.json')).exists()
+    assert all(argv[1] in ('show','daemon-reload') for argv in case.state['calls'])
