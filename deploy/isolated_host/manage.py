@@ -35,13 +35,15 @@ def git(source, *arguments):
 
 
 def prepare(source, output, *, codex, bwrap, codex_version, architecture,
-            python, python_sha256, board_endpoint, owners):
+            python, python_sha256, board_endpoint, owners, unit_mode='legacy'):
     """Only tracked public code and explicitly supplied ELF tools enter a bundle."""
     source, output = no_symlinks(source), no_symlinks(output)
     if output.exists():
         raise PackageError('output_exists')
     if codex is None or bwrap is None:
         raise PackageError('linux_tools_required')
+    if type(unit_mode) is not str or unit_mode not in ('legacy', 'managed'):
+        raise PackageError('invalid_unit_mode')
     if git(source, 'status', '--porcelain'):
         raise PackageError('clean_source_required')
     revision = git(source, 'rev-parse', 'HEAD').decode().strip()
@@ -51,7 +53,8 @@ def prepare(source, output, *, codex, bwrap, codex_version, architecture,
     selected.update({'connect.py': 'source/connect.py',
                      'deploy/isolated_host/package.py': 'package.py',
                      'deploy/isolated_host/owner_entry.py': 'owner_entry.py',
-                     'deploy/isolated_host/unit.service.in': 'unit.service.in'})
+                     'deploy/isolated_host/' + ('managed-unit.service.in' if unit_mode == 'managed'
+                                               else 'unit.service.in'): 'unit.service.in'})
     if not set(selected) <= set(tracked):
         raise PackageError('incomplete_source')
     toml = git(source, 'show', revision + ':integrations/codex-personal/pyproject.toml').decode()
@@ -84,7 +87,8 @@ def prepare(source, output, *, codex, bwrap, codex_version, architecture,
         if stage.exists():
             shutil.rmtree(stage)
     return {'status': 'prepared', 'bundle_id': manifest_id(manifest), 'revision': revision,
-            'adapter_version': versions[0], 'execution_qualified': False, 'activated': False}
+            'adapter_version': versions[0], 'unit_mode': unit_mode,
+            'execution_qualified': False, 'activated': False}
 
 
 def plan(directory):
@@ -250,9 +254,15 @@ def main(argv=None):
     for name in ('python-sha256', 'codex-version', 'board-endpoint', 'thescreamer-owner', 'blackout-owner'):
         build.add_argument('--' + name, required=True)
     build.add_argument('--architecture', choices=('x86_64', 'aarch64'), required=True)
+    build.add_argument('--unit-mode', choices=('legacy', 'managed'), default='legacy')
     setup = commands.add_parser('install', help='Print plan unless --apply is supplied.')
     setup.add_argument('--bundle', required=True, type=Path)
     setup.add_argument('--apply', action='store_true')
+    update = commands.add_parser('update', help='Existing disabled installation only; plan unless --apply.')
+    update.add_argument('--bundle', required=True, type=Path)
+    update.add_argument('--expected-old-release', required=True)
+    update.add_argument('--expected-new-release', required=True)
+    update.add_argument('--apply', action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.command == 'prepare':
@@ -260,7 +270,13 @@ def main(argv=None):
                              codex_version=args.codex_version, architecture=args.architecture,
                              python=args.python, python_sha256=args.python_sha256,
                              board_endpoint=args.board_endpoint, owners={
-                                 OWNER_NAMES[0]: args.thescreamer_owner, OWNER_NAMES[1]: args.blackout_owner})
+                                 OWNER_NAMES[0]: args.thescreamer_owner, OWNER_NAMES[1]: args.blackout_owner},
+                             unit_mode=args.unit_mode)
+        elif args.command == 'update':
+            from .update import update_existing, plan_update
+            function = update_existing if args.apply else plan_update
+            result = function(args.bundle, expected_old_release=args.expected_old_release,
+                              expected_new_release=args.expected_new_release)
         else:
             result = install(args.bundle) if args.apply else plan(args.bundle)
         print(json.dumps(result, sort_keys=True)); return 0
