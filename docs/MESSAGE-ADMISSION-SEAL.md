@@ -32,6 +32,15 @@ positive/negative contradiction is refused, never rewritten. Replay still
 requires fresh permissions and source; a lost response permits an **explicit**
 identical retry but is not itself evidence. The client never retries an RPC.
 
+After the final INSERT/audit and before returning from the transaction, both a
+new seal and a fresh capacity-v1 refusal verify the write postcondition: no
+matching Runtime exists and exactly one matching denial retains all expected
+identity/payload fields and its exact canonical response. A contradictory,
+deleted, modified or split denial introduced by a preexisting SQL trigger
+therefore rolls back the transaction and returns no negative proof. This is a
+check of the transaction's final state, not protection against an administrator
+rewriting the database later.
+
 The successful response has exactly this shape:
 
 ```json

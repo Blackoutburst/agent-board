@@ -252,6 +252,21 @@ class RuntimeMixin:
             (actor['owner_id'],actor['device_id'],actor['session_id'],values['idempotency_key'],
              values['work_id'],values['turn_id'])).fetchall()
 
+    def _runtime_confirm_denial(self,db,actor,values,profile,payload,response):
+        """Final write postcondition, including effects of preexisting triggers."""
+        if db.execute('''SELECT 1 FROM runtime_executions WHERE owner_id=? AND
+                ((device_id=? AND session_id=? AND idempotency_key=?) OR (work_id=? AND turn_id=?)) LIMIT 1''',
+                (actor['owner_id'],actor['device_id'],actor['session_id'],values['idempotency_key'],
+                 values['work_id'],values['turn_id'])).fetchone():
+            _fail('execution_admission_conflict',409)
+        expected={key:actor[key] for key in ('owner_id','device_id','session_id')} | {
+            key:values[key] for key in ('idempotency_key','work_id','turn_id')} | {
+            'agent_id':profile['id'],'profile_version':profile['version'],
+            'payload_sha256':hashlib.sha256(payload.encode()).hexdigest(),'response':_json(response)}
+        denied=self._runtime_denial(db,actor,values)
+        if len(denied)!=1 or dict(denied[0])!=expected:
+            _fail('execution_admission_conflict',409)
+
     def _runtime_review_prerequisites(self, db, ticket_id):
         """Bounded proof of each current prerequisite's latest status audit.
 
@@ -653,6 +668,7 @@ class RuntimeMixin:
                         work_id,turn_id,payload_sha256,response) VALUES(?,?,?,?,?,?,?,?,?,?)''',
                         (actor['owner_id'],actor['device_id'],actor['session_id'],profile['id'],profile['version'],
                          idempotency_key,work_id,turn_id,hashlib.sha256(payload.encode()).hexdigest(),_json(response)))
+                    self._runtime_confirm_denial(db,actor,values,profile,payload,response)
                     return response
                 _fail('capacity_exhausted',409)
             self._delegation_runtime_check(db,actor,linked['ticket_id'],provider,model)
@@ -708,6 +724,7 @@ class RuntimeMixin:
                 (actor['owner_id'],actor['device_id'],actor['session_id'],profile['id'],profile['version'],
                  idempotency_key,work_id,turn_id,exact['payload_sha256'],_json(response)))
             self._audit(db,actor,'message_admission_sealed',{'request_sha256':response['refusal']['request_sha256']})
+            self._runtime_confirm_denial(db,actor,values,profile,payload,response)
             return response
 
     def lookup_execution(self, actor, idempotency_key):
