@@ -1,6 +1,18 @@
-# Board interface contract — 2.14.0
+# Board interface contract — 2.14.1
 
-The browser REST API and MCP act on one database. Application version is `2.14.0`; schema version is `14`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.14.1`; schema version is `14`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Provider preparation (2.14.1, schema unchanged)
+
+`GET /api/provider-onboarding` is human-only and owner-scoped, with an optional
+single `profile_id`. It returns a closed provider descriptor list, this owner's
+active host and published targets, and the requested profile preferences.
+Connection, model catalogue and model access remain `not_attested`; no login,
+provisioning, credential read or model call is performed. There is no MCP
+counterpart. The interface reuses normal idempotent profile creation and shows
+the host identifier for initial manager setup. See
+[PROVIDER-ONBOARDING.md](docs/PROVIDER-ONBOARDING.md) for the delivered boundary
+and the separate durable login/provisioning work still required.
 
 ## Server instance controls (2.14, schema 14)
 
