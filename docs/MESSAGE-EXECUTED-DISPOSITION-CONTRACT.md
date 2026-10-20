@@ -47,6 +47,8 @@ to `closed`, turn.resolution to `abandon`, turn.resolution_reason to
 The original turn status, result bytes, PID, provider session, review flag, prompt
 hash, cancel flag and all identities remain exact. It does not accept its own
 successor as a fresh request: resume must recognize the exact recorded successor.
+Invalid or regressed timestamps refuse before mutation; the exact two-write
+postcondition includes the clock boundary and rolls back any unexpected write.
 RunStore schema2 and all historical resolution behavior remain unchanged.
 
 ## Durable coordinator and message terminal

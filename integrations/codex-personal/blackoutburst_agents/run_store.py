@@ -635,11 +635,13 @@ class RunStore:
                 raise StoreError('executed_disposition_predecessor_invalid')
             _uuid(turn['provider_session_id'])
             _executed_disposition_proof(proof, work, turn, expected_state_sha256, intent_id)
+            changes = db.total_changes
             now = time.time()
-            if type(now) not in (int, float) or not math.isfinite(now) or now <= 0:
+            if (type(now) not in (int, float) or not math.isfinite(now) or now <= 0
+                    or any(type(v) not in (int, float) or not math.isfinite(v) or now < v
+                           for v in (work['updated_at'], turn['updated_at']))):
                 raise StoreError('executed_disposition_clock_invalid')
             reason = 'message_executed_blocked_disposed:' + intent_id
-            changes = db.total_changes
             db.execute('UPDATE turns SET resolution=?,resolution_reason=?,updated_at=? WHERE id=?',
                        ('abandon', reason, now, turn['id']))
             db.execute('UPDATE works SET status=?,updated_at=? WHERE id=?', ('closed', now, work_id))

@@ -272,3 +272,31 @@ def test_other_historical_children_remain_exact(case):
         dispose(case)
     assert store._work(old['id']) == old_work
     assert store._turn(old_turn) == old_turn_row
+
+
+def test_clock_regression_refuses_before_creating_unrecognizable_successor(case, monkeypatch):
+    store = case['store']
+    before = case['database'].read_bytes()
+    monkeypatch.setattr('blackoutburst_agents.run_store.time.time', lambda: 1.0)
+    with store.work_lock(case['work']['id'], inspection_only=True):
+        with pytest.raises(StoreError, match='executed_disposition_clock_invalid'):
+            dispose(case)
+    assert case['database'].read_bytes() == before
+
+
+def test_write_set_includes_clock_boundary_and_rolls_back_foreign_child_change(case, monkeypatch):
+    store = case['store']
+    old = store.create_work(owner_id='owner', agent_id='historical-agent', project_id='old-thread',
+        ticket_id='old-message', workspace=store.state_dir, executable=sys.executable, model='old-model')
+    before = digest_rows(store)
+    before_bytes = case['database'].read_bytes()
+    def clock():
+        # A boundary fault must not hide a third write to an unrelated child.
+        store._db.execute("UPDATE works SET status='closed' WHERE id=?", (old['id'],))
+        return 2000000000.0
+    monkeypatch.setattr('blackoutburst_agents.run_store.time.time', clock)
+    with store.work_lock(case['work']['id'], inspection_only=True):
+        with pytest.raises(StoreError, match='executed_disposition_postcondition'):
+            dispose(case)
+    assert digest_rows(store) == before
+    assert case['database'].read_bytes() == before_bytes
