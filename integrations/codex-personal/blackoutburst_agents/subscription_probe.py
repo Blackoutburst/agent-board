@@ -297,6 +297,22 @@ def _probe_arguments(settings: ProbeSettings, executable: Path, nonce: str) -> l
     return arguments
 
 
+def _is_completed_error_item(event: dict[str, object]) -> bool:
+    """Recognize Codex's bounded diagnostic item, never a success/fatal event.
+
+    This shape can precede thread.started in Codex 0.163. Its private message is
+    neither interpreted as authorization nor retained by either text parser.
+    Session/terminal/output/exit and cleanup gates remain the caller's concern.
+    """
+    item = event.get("item")
+    return (
+        event.get("type") == "item.completed" and type(item) is dict
+        and set(item) == {"id", "type", "message"} and item["type"] == "error"
+        and type(item["id"]) is str and 1 <= len(item["id"]) <= 256
+        and type(item["message"]) is str and len(item["message"]) <= 16384
+    )
+
+
 def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
     import json
 
@@ -384,10 +400,7 @@ def _parse_probe(result: _ProcessResult, nonce: str) -> dict[str, object]:
                 # error. A known item does not establish any positive proof;
                 # all independent connectivity gates below must still pass.
                 # No message text, hash or preview leaves this parser.
-                if (event_type != "item.completed"
-                        or set(item) != {"id", "type", "message"}
-                        or type(item["id"]) is not str or not 1 <= len(item["id"]) <= 256
-                        or type(item["message"]) is not str or len(item["message"]) > 16384):
+                if not _is_completed_error_item(event):
                     protocol_error = True
                 else:
                     diagnostic_item = True
