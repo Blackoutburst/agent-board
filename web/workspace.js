@@ -537,6 +537,20 @@ const Workspace = (() => {
   const serverModal = (title, content) => { openModal(title, content); $("modal-content").querySelector(".modal-head button")?.setAttribute("aria-label", "Fermer la fenêtre"); };
   const serverOpaque = value => typeof value === "string" && value.length > 0 && value.length <= 200 && new TextEncoder().encode(value).length <= 800;
   const serverHostName = value => typeof value === "string" && value.trim().length > 0 && value.length <= 100 && !/[\u0000-\u001f]/u.test(value);
+  function serverManagerSetup(host) {
+    const identifier = field("Identifiant de l’hôte pour le gestionnaire", "manager_host_id", { value: host.id });
+    const input = identifier.querySelector("input"); input.readOnly = true;
+    const copy = btn("Copier l’identifiant de l’hôte", guard(async () => {
+      if (state.actor?.owner_id !== host.owner_id) return;
+      input.select();
+      try { await navigator.clipboard.writeText(host.id); notify("Identifiant de l’hôte copié."); }
+      catch (_) { notify("L’identifiant est sélectionné. Copiez-le pour la configuration initiale."); }
+    }));
+    return el("details", { class: "profile-section" }, el("summary", {}, "Configurer le gestionnaire initial"),
+      el("p", {}, "Après avoir lié votre appareil, remettez cet identifiant à l’administrateur qui prépare votre gestionnaire personnel. Il le renseignera dans la configuration de votre compte serveur personnel."),
+      identifier, copy,
+      el("p", { class: "small muted" }, "Cet identifiant n’est pas une clé de connexion. N’envoyez aucun mot de passe, code de connexion fournisseur ou jeton dans une discussion. Le gestionnaire doit encore publier ses profils avant leur premier démarrage."));
+  }
   const serverNeedsReload = status => ["conflict", "refused"].includes(status);
   const serverInteger = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum;
   const serverDate = value => {
@@ -778,6 +792,7 @@ const Workspace = (() => {
         el("div", { class: "server-hosts" }, hosts.length ? hosts.map(host => el("section", { class: "server-host", "data-server-host": host.id },
           el("div", { class: "server-host-heading" }, el("div", {}, el("h2", {}, host.name || "Mon serveur"), el("p", { class: "small muted" }, ownerName(owner))),
             badge(host.revoked_at !== null ? "Hôte retiré" : host.enabled ? "Hôte autorisé" : "Démarrages suspendus", host.enabled && host.revoked_at === null ? "status-ready" : "status-blocked")),
+          host.revoked_at === null ? serverManagerSetup(host) : null,
           host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data)))
             : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent.")))
           : box("Aucun serveur lié", "Choisissez un appareil déjà connecté à votre compte pour héberger vos profils.", btn("Lier mon serveur", guard(() => serverHostDialog(owner, settings.devices)), "primary"))));
@@ -789,7 +804,7 @@ const Workspace = (() => {
 
   async function agents() {
     const request = ++state.request; navigate("agents"); workRoute({ page: "agents" });
-    const body = frame("Agents", "Un profil définit le rôle et les préférences ; une instance hébergée exécute ce profil sur votre serveur.", [btn(agentTab === "hosted" ? "Actualiser" : "Refresh", guard(agents)), btn(agentTab === "hosted" ? "Nouveau profil" : "New profile", guard(() => profileEditor()), "primary")]);
+    const body = frame("Agents", "Un profil définit le rôle et les préférences ; une instance hébergée exécute ce profil sur votre serveur.", [btn(agentTab === "hosted" ? "Actualiser" : "Refresh", guard(agents)), btn(agentTab === "hosted" ? "Préparer un agent serveur" : "New profile", guard(() => agentTab === "hosted" ? providerWizard() : profileEditor()), "primary")]);
     const change = guard(async tab => { agentTab = tab; await agents(); });
     const navigation = tabs([["profiles", "Profiles"], ["hosted", "Sur le serveur"], ["connections", "Connections"], ["runtime", "Runtime"]], agentTab, change);
     navigation.setAttribute("aria-label", "Agent sections");
@@ -994,15 +1009,85 @@ const Workspace = (() => {
       loading.replaceWith(el("div", { class: "callout", role: "alert" }, el("strong", {}, "Runtime unavailable"), el("p", {}, failure.message || "Could not load runtime data. Use Refresh to try again.")));
     }
   }
-  async function profileEditor(id = null) {
+  function providerOverviewValid(data, owner) {
+    const known = { codex_chatgpt: "https://learn.chatgpt.com/docs/auth", claude_code: "https://code.claude.com/docs/en/authentication" };
+    return data && data.schema_version === 1 && data.owner_id === owner
+      && Array.isArray(data.providers) && data.providers.length === 2 && new Set(data.providers.map(p => p?.id)).size === 2
+      && data.providers.every(p => p && Object.hasOwn(known, p.id) && p.documentation_url === known[p.id]
+        && typeof p.name === "string" && p.name.length <= 100 && typeof p.text_adapter_implemented === "boolean"
+        && p.board_login_implemented === false && p.connection_status === "not_attested"
+        && p.model_catalog_status === "not_attested" && Array.isArray(p.confirmed_models) && p.confirmed_models.length === 0
+        && p.billing === "personal_subscription" && p.personal_login === "official_owner_cli")
+      && data.connection?.status === "not_attested" && data.connection.provider_id === null && data.connection.observed_at === null
+      && data.models?.catalog_status === "not_attested" && data.models.access_status === "not_attested" && Array.isArray(data.models.models) && data.models.models.length === 0
+      && data.provisioning?.board_provisioning_implemented === false && data.provisioning.board_login_implemented === false
+      && data.provisioning.isolated_owner_required === true && data.provisioning.api_fallback === false
+      && (data.host === null || data.host && data.host.owner_id === owner && serverOpaque(data.host.id)
+        && typeof data.host.name === "string" && typeof data.host.enabled === "boolean"
+        && Array.isArray(data.host.published_targets) && data.host.published_targets.length <= 16
+        && data.host.published_targets.every(t => t && serverOpaque(t.id) && serverOpaque(t.profile_id)
+          && serverInteger(t.profile_version, 1) && ["messages", "ticket_text"].includes(t.mode)
+          && Object.hasOwn(serverStates, t.observed_state)));
+  }
+  async function providerWizard() {
+    const owner = state.actor?.owner_id, request = state.request;
+    const data = await api("/provider-onboarding");
+    if (state.actor?.owner_id !== owner || request !== state.request || state.view !== "agents" || agentTab !== "hosted") return;
+    if (!providerOverviewValid(data, owner)) throw new Error("Les informations de préparation sont indisponibles. Actualisez avant de continuer.");
+    const name = profileField("Nom de l’agent", "name", 200, { required: true, placeholder: "Mon relecteur" });
+    const provider = select("Fournisseur demandé", "provider", data.providers.map(p => [p.id, p.name]), "codex_chatgpt");
+    const model = profileField("Modèle demandé (facultatif)", "model", 200, { hint: "Aucune liste de modèles ni preuve d’accès n’a encore été publiée pour ce compte." });
+    const details = el("div", { class: "callout", role: "status" });
+    const describe = () => {
+      const selected = data.providers.find(p => p.id === provider.querySelector("select").value);
+      details.replaceChildren(el("p", {}, selected.text_adapter_implemented ? "Codex est pris en charge pour les échanges de texte. La connexion de votre compte et l’accès au modèle restent à vérifier." : "Claude Code ne peut pas encore être utilisé pour ces agents serveur."),
+        el("p", {}, "Abonnement personnel demandé. Aucun remplacement par une API payante n’est activé."),
+        el("a", { href: selected.documentation_url, target: "_blank", rel: "noopener noreferrer" }, "Connexion officielle du fournisseur"));
+    };
+    provider.querySelector("select").addEventListener("change", describe); describe();
+    const form = el("form", { class: "work-form" },
+      el("p", {}, "Préparez votre profil et ses préférences. Cette étape ne connecte pas un fournisseur et ne démarre aucun processus."),
+      name, provider, model, details,
+      data.host ? el("section", {}, el("h3", {}, "Hôte lié : " + data.host.name),
+        el("p", {}, `${data.host.published_targets.length} profil(s) déclaré(s) par ce serveur. Le nouveau profil devra être préparé séparément.`), serverManagerSetup(data.host))
+        : el("p", { class: "callout" }, "Aucun hôte lié à votre compte. Après la création du profil, utilisez « Lier un serveur », puis configurez votre gestionnaire personnel."),
+      el("p", { class: "small muted" }, "Pour le moment, un administrateur doit préparer le nouvel agent sur votre serveur. La connexion depuis cette page sera ajoutée ensuite. Chaque personne conserve sa propre connexion."),
+      serverButtons("Personnaliser le profil"));
+    bindForm(form, async values => {
+      if (state.actor?.owner_id !== owner) return;
+      const selected = data.providers.find(p => p.id === values.get("provider"));
+      if (!selected) throw new Error("Sélectionnez un fournisseur proposé.");
+      await profileEditor(null, { name: String(values.get("name") || ""), preferred_provider: selected.id,
+        preferred_model: String(values.get("model") || ""), owner_id: owner });
+    });
+    serverModal("Préparer un agent serveur", form);
+  }
+  async function providerPreparationSummary(profile) {
+    const owner = state.actor?.owner_id;
+    const data = await api(`/provider-onboarding?profile_id=${workPath(profile.id)}`);
+    if (state.actor?.owner_id !== owner) return;
+    if (!providerOverviewValid(data, owner) || data.requested?.profile_id !== profile.id) throw new Error("Le profil a été créé. Actualisez pour vérifier sa préparation.");
+    const requested = data.requested;
+    serverModal("Profil créé · préparation à poursuivre", el("div", {},
+      el("h3", {}, requested.name),
+      el("dl", {}, el("dt", {}, "Fournisseur demandé"), el("dd", {}, data.providers.find(p => p.id === requested.provider)?.name || requested.provider || "Non choisi"),
+        el("dt", {}, "Modèle demandé"), el("dd", {}, requested.model || "À choisir")),
+      el("p", {}, "Connexion fournisseur : non vérifiée. Accès au modèle : non vérifié."),
+      el("p", {}, "Votre profil est enregistré. Le serveur doit encore le préparer et votre connexion personnelle doit être vérifiée. Il ne fonctionne pas encore en arrière-plan."),
+      data.host ? serverManagerSetup(data.host) : el("p", {}, "Liez un appareil à votre compte dans « Sur le serveur » pour commencer la préparation du gestionnaire."),
+      btn("Voir mes instances serveur", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "hosted"; await agents(); }), "primary")));
+  }
+  async function profileEditor(id = null, preparation = null) {
+    const owner = state.actor?.owner_id;
     const [p, projects] = await Promise.all([id ? api(`/agent-profiles/${workPath(id)}`) : Promise.resolve(null), api("/projects?include_archived=true")]);
+    if (state.actor?.owner_id !== owner || preparation && preparation.owner_id !== owner) return;
     if (p && p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can edit this profile.");
     const key = idempotencyKey();
     const policy = p?.policy || { allow_read: false, allow_messages: false, allow_requests: false, actions: [], resources: [], autonomy: "responses" };
     const form = el("form", { class: "work-form profile-form" });
     const preview = el("aside", { class: "profile-preview", "aria-label": "Profile preview" });
     const basics = el("section", { class: "profile-fields" },
-      profileField("Profile name", "name", 200, { value: p?.name || "", required: true, placeholder: "Release reviewer" }),
+      profileField("Profile name", "name", 200, { value: p?.name || preparation?.name || "", required: true, placeholder: "Release reviewer" }),
       el("div", { class: "form-row" }, profileField("Avatar text or emoji", "avatar", 32, { value: p?.avatar || "", placeholder: "🔎", hint: "Plain text only. Images and URLs are not used." }), profileField("Role", "role", 200, { value: p?.role || "", placeholder: "Code review" })),
       profileField("Description", "description", 4000, { type: "textarea", rows: 2, value: p?.description || "", placeholder: "What should this agent focus on?" }));
     const appearance = el("div", { class: "profile-editor-top" }, basics, preview);
@@ -1012,7 +1097,7 @@ const Workspace = (() => {
       profileField("Instructions", "instructions", 12000, { type: "textarea", rows: 6, value: p?.instructions || "", hint: "Private to your account and authorized executor. Do not include passwords or connection keys." }),
       el("div", { class: "form-row" }, select("Response language", "language", [["auto", "Follow the task"], ["en", "English"], ["fr", "French"], ["de", "German"], ["nl", "Dutch"]], p?.language || "auto"), profileField("Response style", "response_style", 2000, { type: "textarea", rows: 2, value: p?.response_style || "", placeholder: "Concise, with concrete evidence" })),
       el("fieldset", { class: "profile-section" }, el("legend", {}, "Execution preferences"),
-        el("div", { class: "form-row" }, profileField("Preferred provider", "preferred_provider", 100, { value: p?.preferred_provider || "", placeholder: "Leave empty to use the executor default" }), profileField("Preferred model", "preferred_model", 200, { value: p?.preferred_model || "", placeholder: "Leave empty to use the executor default" })),
+        el("div", { class: "form-row" }, profileField("Preferred provider", "preferred_provider", 100, { value: p?.preferred_provider || preparation?.preferred_provider || "", placeholder: "Leave empty to use the executor default" }), profileField("Preferred model", "preferred_model", 200, { value: p?.preferred_model || preparation?.preferred_model || "", placeholder: "Leave empty to use the executor default" })),
         el("p", { class: "small muted" }, "These are preferences for a compatible executor. Saving them does not connect a provider, make a model available, or enable automatic fallback.")));
     const projectPicker = el("fieldset", { class: "profile-section" }, el("legend", {}, "Followed projects"), el("p", { class: "small muted" }, "Choose this profile’s work scope. With no project selected, it has no project scope."),
       el("div", { class: "profile-project-picker" }, projects.length ? projects.map(project => check(`${project.name}${project.archived ? " (archived)" : ""}`, "project_ids", p?.project_ids?.includes(project.id), project.id)) : el("p", { class: "muted" }, "Create a project first to give this profile a work scope.")));
@@ -1052,13 +1137,18 @@ const Workspace = (() => {
     });
     form.addEventListener("input", refreshPreview);
     bindForm(form, async values => {
+      if (state.actor?.owner_id !== owner) return;
       const fields = Object.fromEntries(["name", "avatar", "description", "role", "instructions", "language", "response_style", "preferred_provider", "preferred_model"].map(name => [name, String(values.get(name) || "")]));
       if (!values.has("keep_legacy_scope")) fields.project_ids = values.getAll("project_ids");
       fields.policy = { allow_read: values.has("allow_read"), allow_messages: values.has("allow_messages"), allow_requests: values.has("allow_requests"), autonomy: values.get("autonomy"), actions: lines(String(values.get("actions") || "")), resources: lines(String(values.get("resources") || "")) };
       if (Object.hasOwn(policy, "allow_create_projects") || createProjectsTouched) fields.policy.allow_create_projects = values.has("allow_create_projects");
       if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
-      await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
-      closeModal(); agentTab = "profiles"; await agents(); notify(p ? "Profile saved for future work." : "Profile created. Connect an executor when you are ready.");
+      const saved = await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
+      if (state.actor?.owner_id !== owner) return;
+      closeModal(); agentTab = "profiles"; await agents();
+      if (state.actor?.owner_id !== owner) return;
+      notify(p ? "Profile saved for future work." : "Profile created. Connect an executor when you are ready.");
+      if (preparation) await providerPreparationSummary(saved);
     });
     openModal(p ? "Edit agent profile" : "Create agent profile", form); refreshPreview();
   }

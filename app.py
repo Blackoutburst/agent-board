@@ -33,6 +33,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from board import Board, BoardError
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
+from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
 from development_frames import (get_development_frame as development_frame, wire_frame,
                                 validate_arguments as development_frame_arguments)
@@ -1031,7 +1032,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, error):
-        if request.url.path.startswith(('/api/server-hosts', '/api/server-instances')):
+        if request.url.path.startswith(('/api/server-hosts', '/api/server-instances', '/api/provider-onboarding')):
             return JSONResponse({'detail': 'invalid_server_payload'}, status_code=422)
         return await request_validation_exception_handler(request, error)
 
@@ -1277,6 +1278,13 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/agent-profiles/{profile_id}/bindings')
     async def bind_agent_profile(profile_id: str, values: ProfileBinding, actor=Depends(human)):
         return board.bind_agent_profile(actor, profile_id, **values.model_dump())
+
+    @app.get('/api/provider-onboarding')
+    async def provider_onboarding(request: Request, actor=Depends(human)):
+        if (set(request.query_params) - {'profile_id'}
+                or len(request.query_params.getlist('profile_id')) > 1):
+            raise BoardError('invalid_provider_onboarding_request')
+        return provider_onboarding_overview(board, actor, request.query_params.get('profile_id'))
 
     @app.get('/api/server-hosts')
     async def server_hosts(actor=Depends(human)):
