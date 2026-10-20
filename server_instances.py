@@ -479,7 +479,7 @@ class ServerInstancesMixin:
                 observation_revision=observation_revision+1,last_seen_at=? WHERE id=?''',
                 (state, int(cleanup_confirmed), reason, now, instance_id))
             if cmd is not None and (state in ('unknown', 'needs_review')
-                    or (cmd['status'] == 'complete' and state == 'stopped' and cleanup_confirmed)):
+                    or (cmd['status'] == 'complete' and state in ('stopped', 'stopping'))):
                 # A later observation must never resurrect an ended/uncertain
                 # activation. A new human command is required after settlement.
                 db.execute('UPDATE server_instance_commands SET retired=1 WHERE id=?', (command_id,))
