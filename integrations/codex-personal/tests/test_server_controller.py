@@ -264,13 +264,18 @@ def test_late_shutdown_of_old_object_never_stops_its_successor(env):
         finally:second.shutdown()
 
 
-@pytest.mark.parametrize('boundary',['publish_server_catalog','poll_instance_commands','ack_instance_command','report_instance_state'])
+@pytest.mark.parametrize('boundary',['publish_server_catalog','bound_catalog','poll_instance_commands','ack_instance_command','report_instance_state'])
 def test_old_rpc_completion_cannot_mutate_the_successor_after_handoff(env,boundary):
     old=env['control'];old.start_worker();old.step();command(env)
     original=env['client'].call;successors=[];captured=[]
+    if boundary=='publish_server_catalog':
+        # This case exercises the actual bootstrap path; an already-bound
+        # catalogue now uses a fresh poll instead of replaying publish(CAS0).
+        env['journal']._db.execute("UPDATE managed_targets SET instance_id=''")
+    rpc_boundary='poll_instance_commands' if boundary=='bound_catalog' else boundary
     def handoff(name,args):
         result=original(name,args)
-        if name==boundary and not captured:
+        if name==rpc_boundary and not captured:
             captured.append(result);assert old.shutdown()
             state=HostJournal(env['journal'].directory)
             new=ServerController(state,BoardControl(env['board'],env['actor']),
@@ -284,7 +289,7 @@ def test_old_rpc_completion_cannot_mutate_the_successor_after_handoff(env,bounda
     env['client'].call=handoff
     try:
         with pytest.raises(HostError,match='managed_worker_not_owned'):
-            if boundary=='publish_server_catalog':old.publish(env['catalog'])
+            if boundary in ('publish_server_catalog','bound_catalog'):old.publish(env['catalog'])
             else:old.step()
         assert captured and env['journal'].target_selected('primary')
         assert env['journal'].managed_target('primary')['generation']==2

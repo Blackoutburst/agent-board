@@ -88,7 +88,7 @@ class RuntimeGuard:
             receipt if receipt is not None else self.operation.get('receipt'),start_confirmed=start_confirmed)
 
     def review(self):
-        if self.operation and self.operation['phase'] not in ('finished','not_admitted'):
+        if self.operation and self.operation['phase'] not in ('finished','not_admitted','abandoned_never_started'):
             try:self.save('needs_review')
             except Exception:pass
 
@@ -146,7 +146,7 @@ class RuntimeGuard:
         config=self.configuration(work,turn_id)
         if self.operation is None or self.operation['configuration']!=config:
             raise RuntimeControlError('runtime_scope_mismatch')
-        if self.operation['phase']=='not_admitted':
+        if self.operation['phase'] in ('not_admitted','abandoned_never_started'):
             raise RuntimeControlError('runtime_not_admitted')
         try:
             found=self.client.call('lookup_execution',{'idempotency_key':self.operation['key']})

@@ -46,7 +46,7 @@ def test_family_tools_schema_and_open_get_lookup_roundtrip(family_api):
     response=client.post('/mcp',headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'},
         json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
     tools={tool['name']:tool for tool in response.json()['result']['tools']}
-    assert TOOLS<=set(tools) and len(tools)==63
+    assert TOOLS<=set(tools) and len(tools)==64
     schema=tools['open_delegation_family']['inputSchema']
     assert schema['properties']['children']['minItems']==2
     assert schema['properties']['children']['maxItems']==2
@@ -59,7 +59,7 @@ def test_family_tools_schema_and_open_get_lookup_roundtrip(family_api):
         'idempotency_key':args['idempotency_key']})=={'found':True,'family':value}
     assert client.get('/api/delegation-families/'+value['id']).json()==value
     health=client.get('/health').json()
-    assert health['version']=='2.15.1' and health['schema_version']==15
+    assert health['version']=='2.15.2' and health['schema_version']==15
     assert 'get_development_frame' in health['features']
     assert 'delegation_families' in health['features']
     assert board.get_runtime(human)['active_count']==0

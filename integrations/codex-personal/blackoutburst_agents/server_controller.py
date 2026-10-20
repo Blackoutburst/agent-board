@@ -77,6 +77,15 @@ class ServerController:
         expected=self.host.managed_settings()['catalog_sha256']
         if digest(sorted(catalog,key=lambda e:e['catalog_key']))!=expected:
             raise HostError('managed_catalog_conflict')
+        locals_=[self.host.managed_target(t['id']) for t in self.host.control()['configuration']['targets']]
+        if all(t['instance_id'] for t in locals_):
+            self.host.require_no_catalog_source_transition()
+            result=self.client.call('poll_instance_commands',{'host_id':self.host_id,'limit':20})
+            self._owned_call('managed_settings');response('poll_instance_commands',result)
+            if result['host_id']!=self.host_id or result['catalog_version']<1:raise HostError('managed_catalog_conflict')
+            self._instances(result['instances'])
+            return {k:result[k] for k in ('host_id','catalog_version','instances')}
+        if any(t['instance_id'] for t in locals_):raise HostError('managed_catalog_conflict')
         result=self._effect('catalog-'+expected,'publish_server_catalog',{
             'host_id':self.host_id,'expected_catalog_version':0,'entries':catalog,
             'idempotency_key':'managed-catalog-'+expected})
@@ -97,6 +106,7 @@ class ServerController:
                 raise HostError('managed_catalog_conflict')
 
     def start_worker(self):
+        self.host.require_no_catalog_source_transition()
         if self._thread is not None:raise HostError('managed_worker_already_started')
         self._thread=threading.Thread(target=self._worker,name='fixed-owner-worker',daemon=False)
         self._thread.start()
@@ -112,6 +122,7 @@ class ServerController:
                     try:
                         # Only the successful owner may alter startup state.
                         # A restart never resumes/reset an old activation.
+                        worker.require_no_catalog_source_transition()
                         worker.stop()
                         supervisor=self.factory(worker)
                         supervisor.message_feed_ready=self._message_feed_ready
@@ -187,7 +198,8 @@ class ServerController:
     def _remote_pending(self,instances):
         by_id={i['id']:i for i in instances}
         for effect in self.host.pending_managed_effects():
-            if effect['method']=='publish_server_catalog':continue
+            if effect['method']=='catalog_source_transition':raise HostError('catalog_transition_pending')
+            if effect['method'] in ('publish_server_catalog','replace_server_catalog'):continue
             args=effect['arguments']
             if effect['method']=='ack_instance_command':
                 matches=[i for i in instances if i['command_id']==args['command_id']]

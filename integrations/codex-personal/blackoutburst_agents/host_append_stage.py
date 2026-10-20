@@ -103,6 +103,7 @@ class HostAppendStageMixin:
 
     def _append_guard(self, db, config_sha, catalog_sha):
         self._require_lock()
+        self._require_no_unsettled_abandonment()
         if not self.managed():
             raise HostError('host_append_managed_required')
         if db.execute("SELECT 1 FROM control WHERE typeof(config)!='text' OR length(CAST(config AS BLOB))>262144").fetchone():
