@@ -68,7 +68,7 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Source release: `2.15.1`; database schema: `15` (check `/health` for the installed version)
+- Source release: `2.15.2`; database schema: `15` (check `/health` for the installed version)
 
 Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12. Source supporting only schema 12 cannot run against schema 13. Source supporting only schema 13 cannot run against schema 14. Source supporting only schema 14 cannot run against schema 15; never discard refusal tombstones during rollback. Code rollback must retain the schema-15 database and use compatible source; never restore a pre-15 database to roll back this release.
 

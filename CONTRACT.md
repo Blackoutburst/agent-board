@@ -1,6 +1,21 @@
-# Board interface contract — 2.15.1
+# Board interface contract — 2.15.2
 
-The browser REST API and MCP act on one database. Application version is `2.15.1`; schema version is `15`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.15.2`; schema version is `15`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Explicit source catalogue replacement (2.15.2, schema unchanged)
+
+`replace_server_catalog` is a separate manager tool. It requires a confirmed
+human Stop for every existing instance, exact host/catalogue versions and a
+closed instance/command fence. Only launch hashes may change; instance IDs,
+profiles, generations and stopped intent are retained. A replayed receipt is
+historical delivery evidence; the operator must poll fresh before committing
+its local binding. See [SERVER-CATALOG-REPLACEMENT.md](docs/SERVER-CATALOG-REPLACEMENT.md).
+
+Adapter 0.30.2 also provides a finite explicit owner recovery entry for a sealed
+legacy message attempt. Private Host3, Runtime4 and Message2 transitions occur
+only through that reviewed operation, after installing compatible protected
+source. Deploying the Board does not upgrade, start or enable an owner service.
+See [MESSAGE-RECOVERY.md](deploy/isolated_host/MESSAGE-RECOVERY.md).
 
 ## Explicit pretransport admission seal (2.15.1, schema unchanged)
 

@@ -70,6 +70,36 @@ reviewed catalogue transition must confirm actual human Stop commands and fence
 all concurrent instance changes before replacing launch hashes. Neither
 `managed-prepare` nor starting `managed-run` is a recovery shortcut.
 
+`managed-catalog-source` performs this second, finite operation. It requires
+the same original release/configuration/host/target/batch/worker/device pins,
+the completed abandonment request key (`--abandon-request-key`), and a separate
+stable catalogue request key (`--request-key`). Both services must still be
+inactive and disabled. The original owner and target connection remain in use.
+
+- `plan` validates the completed abandonment and public release chain without
+  polling the Board or changing any journal. It prints only a proposal SHA256.
+- `apply` requires that reviewed hash and initial revision zero. It durably
+  records the source transition before processing an already requested human
+  Stop. It never creates a Stop, Start, Restart or provider turn. After the
+  actual Stop is confirmed, the Board replaces launch hashes using exact host,
+  catalogue and instance fences. A fresh read must confirm the result before
+  the local catalogue is committed.
+- `status` and `resume` use the derived source intent ID, exact proposal hash
+  and current revision. A lost reply keeps the original immutable request;
+  explicit resume retries that same request and then checks current state.
+
+The source intent blocks normal worker admission until complete. At every
+boundary, the procedure verifies the original abandoned children independently
+of legitimate changes to the Host catalogue or generation. The older complete
+abandonment proof is retained; its whole-Host checkpoint is never rewritten to
+pretend that a later Host epoch was the original one. Any new child, changed
+configuration, unexpected command or contradictory remote state stops recovery.
+
+Completion leaves the instances stopped and preserves their IDs, profiles,
+sessions, configuration, activation history and consumed budget. Starting the
+service, granting a new bounded Start and posting a new human message are
+separate decisions. The abandoned historical message is never replayed.
+
 Once the private journals contain Host3, Runtime4 or Message2 state, do not start
 an older adapter or restore pre-recovery journals. Keep the compatible protected
 release and permanent Board admission seal. The old release is retained for
