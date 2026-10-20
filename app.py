@@ -488,7 +488,9 @@ class RequestLimits:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        maximum = 4096 if scope.get("path", "").startswith(("/api/server-hosts", "/api/server-instances")) else MAX_BODY
+        path = scope.get("path", "")
+        provisioning = path.startswith('/api/server-hosts/') and '/provisioning-' in path
+        maximum = 8192 if provisioning else (4096 if path.startswith(("/api/server-hosts", "/api/server-instances")) else MAX_BODY)
         headers = dict(scope.get("headers", []))
         try:
             length = int(headers.get(b"content-length", b"0"))
@@ -1320,6 +1322,69 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.get('/api/server-hosts/{host_id}')
     async def server_host(host_id: ServerOpaque, actor=Depends(human)):
         return board.get_server_host(actor, host_id)
+
+    async def provisioning_body(request):
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError()
+                result[key] = value
+            return result
+        def constant(value):
+            raise ValueError()
+        try:
+            if request.query_params:
+                raise ValueError()
+            raw = await request.body()
+            if len(raw) > 8192:
+                raise ValueError()
+            value = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=constant)
+            if type(value) is not dict:
+                raise ValueError()
+            return value
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            raise BoardError('invalid_server_provisioning_payload', 422) from None
+
+    @app.get('/api/server-hosts/{host_id}/provisioning-grant')
+    async def provisioning_grant(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if request.query_params:
+            raise BoardError('invalid_server_provisioning_payload', 422)
+        return board.get_server_provisioning_grant(actor, host_id)
+
+    @app.put('/api/server-hosts/{host_id}/provisioning-grant')
+    async def set_provisioning_grant(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.set_server_provisioning_grant(actor, host_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/provisioning-context')
+    async def provisioning_context(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if set(request.query_params) != {'profile_id'} or len(request.query_params.getlist('profile_id')) != 1:
+            raise BoardError('invalid_server_provisioning_payload', 422)
+        return board.get_server_provisioning_context(actor, host_id, request.query_params['profile_id'])
+
+    @app.get('/api/server-hosts/{host_id}/provisioning-requests')
+    async def provisioning_requests(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        params = request.query_params
+        if set(params) - {'before', 'limit'} or any(len(params.getlist(key)) != 1 for key in params):
+            raise BoardError('invalid_server_provisioning_payload', 422)
+        limit = params.get('limit', '16')
+        if limit not in {str(v) for v in range(1, 17)}:
+            raise BoardError('invalid_server_provisioning_payload', 422)
+        return board.list_server_provisioning_requests(actor, host_id, before=params.get('before'), limit=int(limit))
+
+    @app.post('/api/server-hosts/{host_id}/provisioning-requests')
+    async def create_provisioning_request(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.create_server_provisioning_request(actor, host_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/provisioning-requests/{request_id}')
+    async def provisioning_request(host_id: ServerOpaque, request_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if request.query_params:
+            raise BoardError('invalid_server_provisioning_payload', 422)
+        return board.get_server_provisioning_request(actor, host_id, request_id)
+
+    @app.post('/api/server-hosts/{host_id}/provisioning-requests/{request_id}/cancel')
+    async def cancel_provisioning_request(host_id: ServerOpaque, request_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.cancel_server_provisioning_request(actor, host_id, request_id, **await provisioning_body(request))
 
     @app.post('/api/server-hosts/{host_id}/revoke')
     async def revoke_server_host(host_id: ServerOpaque, values: ServerHostRevoke, actor=Depends(human)):

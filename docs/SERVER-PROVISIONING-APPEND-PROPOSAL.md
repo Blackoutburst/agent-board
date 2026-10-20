@@ -1,12 +1,12 @@
 # Ticket 46 — contrat A : demande durable et barrière inactive
 
-**Proposition à revoir avant implémentation.** Base `400438a150054117d2a28fa646c45fd21d6b78b0`, arbre `dc626c1c590b132ae25199ea1bdefe9f5b59b4b8`. Ce lot ne modifie actuellement aucun produit, schéma ou numéro de version.
+**Contrat approuvé pour implémentation source uniquement.** Base `400438a150054117d2a28fa646c45fd21d6b78b0`, arbre `dc626c1c590b132ae25199ea1bdefe9f5b59b4b8`. Le candidat backend apporte le schéma Board16 atomique ; aucune version de distribution/SDK ni déploiement n'est réalisé ici. La revue indépendante et la composition finale restent distinctes.
 
 ## Périmètre fermé
 
 A ajoute un grant humain distinct et une demande durable de préparation d’**une** cible messages, sur un hôte existant de 1 à 15 cibles. La demande bloque Start/Restart jusqu’à son annulation explicite. **A n’a aucun consommateur manager, ACK d’effet, append, fichier privé, pairage, login, nouvelle instance, processus ou modèle.** La préparation effective B sera un contrat ultérieur ; A ne doit pas être silencieusement converti en ordre exécutable par un futur binaire.
 
-À la base, `provider_onboarding.py` et le wizard créent seulement un profil/préférences ; `host_append_stage.py` produit seulement un stage privé inerte. `server_provisioning.py` n’existe pas : c’est le nouveau module proposé. `replace_server_catalog` garde son contrat source-only, à identités constantes. Aucun élargissement de cette API, des outils MCP ou de `ServerControlClient.call()`.
+À la base, `provider_onboarding.py` et le wizard créent seulement un profil/préférences ; `host_append_stage.py` produit seulement un stage privé inerte. `server_provisioning.py` est le nouveau module A. `replace_server_catalog` garde son contrat source-only, à identités constantes. Aucun élargissement de cette API, des outils MCP ou de `ServerControlClient.call()`.
 
 ## Autorité et formes proposées
 
@@ -16,7 +16,9 @@ Routes **proposées**, session humaine/origine vérifiées et `no-store` :
 
 | Route | Corps exact / résultat |
 | --- | --- |
+| `GET /api/server-hosts/{host}/provisioning-grant` | Grant view fermé ; absent = version0/enabledfalse |
 | `PUT /api/server-hosts/{host}/provisioning-grant` | `schema, expected_host_version, expected_grant_version, enabled, idempotency_key` ; purpose/device issus du contrat et du vrai hôte |
+| `GET …/provisioning-context?profile_id=…` | Pins publics calculés serveur ; aucune autorité d'écriture |
 | `POST /api/server-hosts/{host}/provisioning-requests` | `schema, expected_host_version, expected_catalog_version, expected_instances_sha256, grant_version, profile_id, profile_version, profile_sha256, provider_id, requested_model, idempotency_key` |
 | `GET …/provisioning-requests` et `GET …/provisioning-requests/{id}` | Résumés propriétaires fermés ; liste paginée <=16 |
 | `POST …/provisioning-requests/{id}/cancel` | `schema, expected_revision, idempotency_key` |
@@ -24,6 +26,8 @@ Routes **proposées**, session humaine/origine vérifiées et `no-store` :
 Schémas littéraux séparés : `server-provision-draft-grant-v1`, `server-provision-draft-request-v1`, `server-provision-draft-cancel-v1`. Les réponses ne transportent pas les clés d’idempotence. owner/device/host viennent des identités authentifiées, jamais du corps. Fournisseur/modèle doivent reproduire exactement les préférences de la version du profil, sans attestation. `requested_model` est null ou 1..200 caractères/800 octets sans contrôles. Identifiants : bornes opaques actuelles 1..200 caractères/800 octets. SHA : 64 hex minuscules. Entiers exacts, jamais bool ; versions positives, grant absent attendu 0, catalogue 1..2^63-2. JSON ASCII canonique trié, nombres finis, doublons/extra keys/coercitions refusés ; corps <=8 Kio, réponse <=16 Kio. Pas de path/shell/UID/env/template libre/endpoint/challenge/credential/instruction dans ces formes.
 
 Réponse grant fermée : `schema, owner_id, host_id, device_id, purpose, version, enabled` ; aucun token. Le digest de demande lie contrat, corps complet y compris key, identités authentifiées et purpose. Une clé est unique pour **owner+purpose+opération**, pas hôte seulement : la réutiliser sur un autre host/corps est un conflit. Le même key chez un autre owner est indépendant. Pas de normalisation tardive qui changerait le premier corps.
+
+Le contexte fermé `server-provision-draft-context-v1` contient `owner_id,host_id,device_id,expected_host_version,expected_catalog_version,expected_instances_sha256,grant_version,profile_id,profile_version,profile_sha256,provider_id,requested_model` plus `schema`. Le serveur calcule le SHA de la snapshot immuable du profil (JSON ASCII canonique), évitant la divergence JS/Python des floats ; il calcule aussi catalog_fence v1. Préférence modèle stockée `''` => contexte `null` ; toute autre chaîne reste exacte. La mutation compare ce corps original sans le normaliser après idempotence. La liste `server-provision-draft-list-v1` contient `requests,next_before` et peut réduire la page sous16 pour rester <=16Kio. Les reçus POST historiques exigent une relecture GET fraîche en UI.
 
 ## Transaction, conservation et compatibilité
 
@@ -33,7 +37,7 @@ Pendant la barrière, vérifier au même point transactionnel : commande Start/R
 
 **Compat SDK0.30.2 :** `poll_instance_commands` reste byte-shape compatible, sans nouveau champ/enum. Pendant la barrière, `can_start=false`, `control_reason=authorization_changed` : l’autorisation de lancer est effectivement suspendue. Le motif précis est seulement dans la nouvelle projection REST humaine. Pas de `provisioning_pending` ajouté à l’ancien wire fermé. Le contrôleur legacy peut continuer Stop/cleanup ; la barrière ne prétend pas arrêter un processus ou révoquer rétroactivement un lease. **Ne pas déployer A avant clôture de la récupération 47**, dont le coordinateur source exige actuellement `can_start=true`.
 
-A ne modifie aucune instance/commande/Runtime ni état privé. Le write-set est grant/demande/barrière/reçus/audit seulement. Revocation du grant/host/device bloque toute nouvelle autorité, mais ne supprime pas la demande ni sa barrière. Une erreur ou un timeout ne lève rien. Après audit/reçu, postconditions : demande unique/corps canonique exact/barrière correspondante, rows du contrôle serveur et pins conservés ; refus/rollback si side effect inattendu. Schémas/triggers/views/main-temp shadows du write-set sont fermés et validés avant transactions sensibles ; la migration sera atomique, avec un marqueur nouveau qu’un ancien Board refuse avant toute mutation. Aucun numéro n’est fixé par ce document.
+A ne modifie aucune instance/commande/Runtime ni état privé. Le write-set est grant/demande/barrière/reçus/audit seulement. Revocation du grant/host/device bloque toute nouvelle autorité, mais ne supprime pas la demande ni sa barrière. Une erreur ou un timeout ne lève rien. Après audit/reçu, postconditions : demande unique/corps canonique exact/barrière correspondante, rows du contrôle serveur et pins conservés ; refus/rollback si side effect inattendu. Schémas/triggers/views/main-temp shadows du write-set sont fermés et validés avant transactions sensibles ; la migration vers16 est atomique, l'ancien Board15 refuse avant toute mutation.
 
 ## États et reprise
 
