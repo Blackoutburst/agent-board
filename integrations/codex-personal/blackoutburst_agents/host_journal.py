@@ -14,6 +14,7 @@ import urllib.parse
 import ipaddress
 
 from .host_config import HostError, digest, private_directory, validate
+from .managed_host import ManagedHostJournalMixin
 from .work_journal import _private_file, _encode
 
 _APPLICATION_ID = 0x4242484A
@@ -24,7 +25,7 @@ def canonical_directory():
     return Path(pwd.getpwuid(os.geteuid()).pw_dir) / '.local' / 'state' / 'blackoutburst-agents' / 'hosts'
 
 
-class HostJournal:
+class HostJournal(ManagedHostJournalMixin):
     def __init__(self, directory):
         self._db = None
         self._held = False
@@ -39,11 +40,11 @@ class HostJournal:
             self._db = sqlite3.connect(database, isolation_level=None, timeout=5)
             self._db.row_factory = sqlite3.Row
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise HostError('unsupported_host_version')
             if version == 0 and self._db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                 raise HostError('host_corrupt')
-            if version == 1 and self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID:
+            if version in (1,2) and self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID:
                 raise HostError('host_corrupt')
             self._db.execute('PRAGMA journal_mode=DELETE')
             self._db.execute('PRAGMA synchronous=FULL')
@@ -69,6 +70,7 @@ class HostJournal:
         for table, columns in expected.items():
             if tuple(row['name'] for row in self._db.execute(f'PRAGMA table_info({table})')) != columns:
                 raise HostError('host_corrupt')
+        self._check_managed()
 
     def __enter__(self): return self
     def __exit__(self, *_): self.close()
@@ -152,6 +154,7 @@ class HostJournal:
 
     def enable(self, expected_revision):
         self._require_lock()
+        if self.managed():raise HostError('managed_target_control_required')
         with self._tx() as db:
             value = self.control()
             if type(expected_revision) is not int or value['revision'] != expected_revision:
@@ -171,6 +174,7 @@ class HostJournal:
             value = self.control()
             if value['reason'] == 'needs_review' and any(row['state'] != 'complete' for row in self.dispatches()):
                 reason = 'needs_review'
+            self._managed_stop_all(db,reason)
             db.execute('UPDATE control SET enabled=0,revision=revision+1,reason=? WHERE enabled=1 OR reason!=?', (reason,reason))
         return self.status()
 
@@ -223,6 +227,7 @@ class HostJournal:
                 return old
             if any(row['state'] != 'complete' for row in self.dispatches()): raise HostError('host_work_pending')
             if value['remaining'] < 1: raise HostError('host_budget_exhausted')
+            self._charge_managed_dispatch(db,target_id)
             # Choose the child ID before creating any child row. Recovery can
             # prove ownership even if all later refusal/stop writes fail.
             db.execute('INSERT INTO dispatches VALUES(?,?,?,?,?,\'pending\',\'{}\',?)',
