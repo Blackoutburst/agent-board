@@ -125,12 +125,15 @@ const server = http.createServer(async (req, res) => {
     malformed = false; host = null; await go(); await page.getByRole('button', { name: 'Préparer un agent serveur', exact: true }).click();
     await dialog().getByText('Aucun hôte lié à votre compte.', { exact: false }).waitFor();
     assert.deepEqual(errors, []);
-    assert.ok(!requests.some(r => /login|probe|commands|runtime/.test(r.path)));
+    assert.deepEqual(requests.filter(r => /login|probe|commands/.test(r.path)
+      || (/runtime/.test(r.path) && !(r.method === 'GET' && r.path === '/api/runtime'))), []);
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ result: 'passed_synthetic_firefox_fixture', checks: [
       'host_id_visible_readonly', 'two_closed_providers', 'no_invented_model_list', 'requested_not_connected',
       'claude_adapter_unavailable', 'existing_profile_editor', 'lost_response_same_key_body', 'profile_no_permissions',
       'text_no_xss', 'desktop_mobile_no_overflow', 'owner_switch_no_write', 'malformed_attestation_refused',
-      'missing_host_guidance', 'no_login_or_runtime_or_start'], posts: posts.length, model_calls: 0, real_agent_processes: 0,
+      'missing_host_guidance', 'no_login_runtime_mutation_or_start'], posts: posts.length,
+      capacity_reads: requests.filter(r => r.method === 'GET' && r.path === '/api/runtime').length,
+      model_calls: 0, real_agent_processes: 0,
       provider_calls: 0, production_calls: 0, page_errors: errors }, null, 2));
   } finally { await browser.close(); }
 })().then(() => server.close()).catch(error => { console.error(error); server.close(); process.exitCode = 1; });
