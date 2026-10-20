@@ -186,8 +186,8 @@ def _recovery_installed_units(manifest, release):
 def _recovery_existing_paths(username):
     """Reject missing authorities before any journal constructor can create them."""
     base, _, journal = paths(username)
-    databases = [(journal, 'host.sqlite3', 0x4242484A, (2, 3)),
-                 (journal / 'messages', 'messages.sqlite3', 0x42424D46, (1, 2)),
+    databases = [(journal, 'host.sqlite3', 0x4242484A, (2, 3, 4)),
+                 (journal / 'messages', 'messages.sqlite3', 0x42424D46, (1, 2, 3)),
                  (journal / 'message-runs', 'runs.sqlite3', 0, (2,)),
                  (journal / 'message-runtime', 'runtime.sqlite3', 0x42425254, (1, 3, 4))]
     for directory, name, application_id, versions in databases:
@@ -336,6 +336,130 @@ def _message_abandon(args, manifest):
         return 0
 
 
+def _message_executed_disposition(args, manifest):
+    """Explicit disposal of one executed blocked message; no retry, publication or ACK."""
+    from blackoutburst_agents.host_config import digest, connection_digest
+    from blackoutburst_agents.host_journal import HostJournal
+    from blackoutburst_agents.message_executed_disposition import MessageExecutedDisposition
+    from blackoutburst_agents.message_execution_observer import MessageExecutionObservationClient
+    from blackoutburst_agents.message_journal import MessageJournal
+    from blackoutburst_agents.run_store import RunStore
+    from blackoutburst_agents.runtime_journal import RuntimeJournal
+    from blackoutburst_agents.server_controller import launch_catalog
+
+    for value in (args.old_release_id, args.config_sha256):
+        if type(value) is not str or re.fullmatch('[0-9a-f]{64}', value) is None:
+            raise PackageError('recovery_invalid_pin')
+    if args.operation in ('apply', 'resume'):
+        if (type(args.proposal_sha256) is not str
+                or re.fullmatch('[0-9a-f]{64}', args.proposal_sha256) is None
+                or type(args.expected_revision) is not int or args.expected_revision < 0):
+            raise PackageError('recovery_expected_proposal_and_revision_required')
+    if args.retry_observation and args.operation != 'resume':
+        raise PackageError('recovery_retry_requires_explicit_resume')
+    if args.operation == 'resume' and not args.intent_id:
+        raise PackageError('recovery_intent_required')
+    old = verify_release(RELEASES / args.old_release_id)
+    if (manifest_id(manifest) == args.old_release_id
+            or any(old.get(key) != manifest.get(key) for key in
+                   ('architecture', 'python', 'owners', 'board_endpoint', 'codex_version'))
+            or any(old['files'].get(key) != manifest['files'].get(key) for key in
+                   ('tools/codex', 'tools/codex-resources/bwrap'))):
+        raise PackageError('recovery_source_chain_changed')
+    journal = _recovery_existing_paths(args.owner)
+    _recovery_installed_units(manifest, args.release)
+    _recovery_services_stopped()
+    with ExitStack() as resources:
+        host = resources.enter_context(HostJournal(journal))
+        resources.enter_context(host.owner_lock())
+        _recovery_installed_units(manifest, args.release)
+        _recovery_services_stopped()
+        control = host.control()
+        config = check_configuration(control['configuration'], manifest, args.release, args.owner)
+        settings = host.managed_settings()
+        if (config['schema_version'] != 2 or control['hash'] != args.config_sha256
+                or control['instance_id'] != args.host_instance
+                or settings['catalog_sha256'] != digest(sorted(
+                    launch_catalog(config, args.old_release_id), key=lambda row: row['catalog_key']))):
+            raise PackageError('recovery_host_or_catalog_changed')
+        targets = [target for target in config['targets'] if target['id'] == args.target_id]
+        if len(targets) != 1:
+            raise PackageError('recovery_target_changed')
+        target = targets[0]
+        if connection_digest(target['connection_file']) != target['connection_sha256']:
+            raise PackageError('recovery_connection_changed')
+        # Recheck paths after acquiring the owner lock, before child constructors.
+        _recovery_existing_paths(args.owner)
+        messages = resources.enter_context(MessageJournal(journal / 'messages'))
+        runs = RunStore(journal / 'message-runs', existing_only=True); resources.callback(runs.close)
+        runtime = resources.enter_context(RuntimeJournal(journal / 'message-runtime'))
+        client = resources.enter_context(MessageExecutionObservationClient.from_connection_file(
+            target['connection_file'], session_id=target['board_session_id'], timeout=5))
+        if client.endpoint != config['board_endpoint']:
+            raise PackageError('connection_endpoint_mismatch')
+        coordinator = MessageExecutedDisposition(host, messages, runs, runtime, observer=client)
+        identity = {'owner_id': config['owner_id'], 'agent_id': target['agent_id'],
+                    'device_id': args.device_id, 'profile_version': target['profile_version'],
+                    'session_id': target['board_session_id']}
+        if args.operation == 'status':
+            result = coordinator.status(request_key=args.request_key)
+        elif args.operation == 'resume':
+            proposal = coordinator.proposal(args.request_key)
+            if (proposal['proposal_sha256'] != args.proposal_sha256
+                    or proposal['request_key'] != args.request_key or proposal['identity'] != identity
+                    or proposal['host']['target_id'] != args.target_id
+                    or proposal['host']['configuration_sha256'] != args.config_sha256
+                    or proposal['host']['instance_id'] != args.host_instance
+                    or proposal['dispatch']['target_id'] != args.target_id
+                    or proposal['dispatch']['batch_id'] != args.batch_id
+                    or proposal['dispatch']['worker_id'] != args.worker_id
+                    or proposal['work']['id'] != args.work_id or proposal['turn']['id'] != args.turn_id):
+                raise PackageError('recovery_proposal_changed')
+            status = coordinator.status(request_key=args.request_key)
+            if status['intent_id'] != args.intent_id:
+                raise PackageError('recovery_intent_changed')
+            coordinator.resume(args.intent_id, expected_revision=args.expected_revision,
+                               retry_observation=args.retry_observation)
+            result = coordinator.status(intent_id=args.intent_id)
+        else:
+            proposal = coordinator.propose(request_key=args.request_key, target_id=args.target_id,
+                batch_id=args.batch_id, worker_id=args.worker_id,
+                work_id=args.work_id, turn_id=args.turn_id,
+                identity=identity,
+                expected_config_sha256=args.config_sha256, expected_host_instance=args.host_instance)
+            if args.operation == 'plan':
+                if (type(proposal['proposal_sha256']) is not str
+                        or re.fullmatch('[0-9a-f]{64}', proposal['proposal_sha256']) is None):
+                    raise PackageError('recovery_invalid_proposal')
+                result = {'status': 'planned', 'proposal_sha256': proposal['proposal_sha256']}
+            else:
+                if proposal['proposal_sha256'] != args.proposal_sha256:
+                    raise PackageError('recovery_proposal_changed')
+                coordinator.apply(proposal, expected_revision=args.expected_revision)
+                result = coordinator.status(request_key=args.request_key)
+        if args.operation != 'plan':
+            phases = ('intent', 'runtime_verified', 'work_disposed', 'message_disposed', 'complete')
+            if (type(result) is not dict or set(result) != {'intent_id', 'revision', 'phase', 'reason'}
+                    or type(result['intent_id']) is not str
+                    or type(result['revision']) is not int or not 1 <= result['revision'] < 2**63
+                    or type(result['phase']) is not str or result['phase'] not in phases
+                    or result['reason'] != 'message_executed_' + result['phase']
+                    or result['revision'] != phases.index(result['phase']) + 1):
+                raise PackageError('recovery_invalid_status')
+            try:
+                if str(uuid.UUID(result['intent_id'])) != result['intent_id']:
+                    raise ValueError
+            except ValueError:
+                raise PackageError('recovery_invalid_status') from None
+        _recovery_services_stopped()
+        _recovery_installed_units(manifest, args.release)
+        public = json.dumps({**result, 'activation_changed': False, 'model_calls': 0}, allow_nan=False)
+        if len(public.encode()) > 8192:
+            raise PackageError('recovery_invalid_status')
+        print(public)
+        return 0
+
+
 def _catalog_source(args, manifest):
     """Finite source-only transition for the diagnosed, closed message host."""
     from blackoutburst_agents.host_config import digest, connection_digest
@@ -442,8 +566,49 @@ def _catalog_source(args, manifest):
                 raise PackageError('recovery_children_unconfirmed')
             return True
 
+        executed_disposition = None
+        executed_key = getattr(args, 'executed_request_key', None)
+        if executed_key is not None:
+            from blackoutburst_agents.message_executed_disposition import MessageExecutedDisposition
+            from blackoutburst_agents.message_execution_observer import MessageExecutionObservationClient
+            from blackoutburst_agents.message_disposed_children import verify_disposed_message_children
+            executed = host._executed_record(request_key=executed_key)
+            if executed is None or executed['phase'] != 'complete':
+                raise PackageError('recovery_completed_executed_disposition_required')
+            ep = executed['proposal']
+            if (ep['identity'] != identity or ep['host']['target_id'] != args.target_id
+                    or ep['host']['instance_id'] != args.host_instance
+                    or ep['host']['configuration_sha256'] != args.config_sha256):
+                raise PackageError('recovery_proposal_changed')
+            observer = resources.enter_context(MessageExecutionObservationClient.from_connection_file(
+                target['connection_file'], session_id=target['board_session_id'], timeout=5))
+            if observer.endpoint != config['board_endpoint']:
+                raise PackageError('connection_endpoint_mismatch')
+            executed_disposition = MessageExecutedDisposition(host, messages, runs, runtime, observer=observer)
+
+            def disposed_children():
+                _recovery_services_stopped()
+                if connection_digest(target['connection_file']) != target['connection_sha256']:
+                    raise PackageError('recovery_connection_changed')
+                value = verify_disposed_message_children(host, messages, runs, runtime,
+                    abandonment_intent_id=closed['id'], executed_intent_id=executed['id'])
+                if (type(value) is not dict or set(value) != {'schema', 'roster_sha256'}
+                        or value['schema'] != 'message-disposed-children-v1'
+                        or type(value['roster_sha256']) is not str
+                        or re.fullmatch('[0-9a-f]{64}', value['roster_sha256']) is None):
+                    raise PackageError('recovery_children_unconfirmed')
+                return value
+
+            expected_roster = disposed_children()
+
+            def stopped_guard():
+                if disposed_children() != expected_roster:
+                    raise PackageError('recovery_children_unconfirmed')
+                return True
+
         coordinator = CatalogSourceTransition(host, client, source_guard=source_guard,
-            stopped_guard=stopped_guard, abandonment=abandonment)
+            stopped_guard=stopped_guard, abandonment=abandonment,
+            executed_disposition=executed_disposition)
         intent_id = 'source-' + digest(args.request_key)
         if args.intent_id is not None and args.intent_id != intent_id:
             raise PackageError('recovery_intent_changed')
@@ -492,6 +657,8 @@ def execute(args, manifest):
     """Text-host lifecycle, no-model doctor, and a separately requested nonce probe."""
     from blackoutburst_agents.cli import main as adapter_main
     base, configuration, journal = paths(args.owner)
+    if args.action == 'managed-message-dispose-executed':
+        return _message_executed_disposition(args, manifest)
     if args.action == 'managed-message-abandon':
         return _message_abandon(args, manifest)
     if args.action == 'managed-catalog-source':
@@ -586,6 +753,16 @@ def main(argv=None):
     recovery.add_argument('--expected-revision', type=int)
     recovery.add_argument('--intent-id')
     recovery.add_argument('--retry-seal', action='store_true')
+    disposition = actions.add_parser('managed-message-dispose-executed',
+        help='Explicit finite disposition of a blocked executed message; no model retry or publication.')
+    disposition.add_argument('operation', choices=('plan', 'apply', 'status', 'resume'))
+    for name in ('old-release-id', 'config-sha256', 'host-instance', 'target-id',
+                 'batch-id', 'worker-id', 'work-id', 'turn-id', 'device-id', 'request-key'):
+        disposition.add_argument('--' + name, required=True)
+    disposition.add_argument('--proposal-sha256')
+    disposition.add_argument('--expected-revision', type=int)
+    disposition.add_argument('--intent-id')
+    disposition.add_argument('--retry-observation', action='store_true')
     catalog = actions.add_parser('managed-catalog-source',
         help='Explicit source catalogue change after confirmed Stops; no activation.')
     catalog.add_argument('operation', choices=('plan', 'apply', 'status', 'resume'))
@@ -595,9 +772,10 @@ def main(argv=None):
     catalog.add_argument('--proposal-sha256')
     catalog.add_argument('--expected-revision', type=int)
     catalog.add_argument('--intent-id')
+    catalog.add_argument('--executed-request-key')
     args = parser.parse_args(argv)
     try:
-        if (args.action in ('managed-message-abandon', 'managed-catalog-source')
+        if (args.action in ('managed-message-abandon', 'managed-message-dispose-executed', 'managed-catalog-source')
                 and Path(__file__).absolute() != args.release / 'owner_entry.py'):
             raise PackageError('recovery_entry_release_mismatch')
         manifest = verify_release(args.release)

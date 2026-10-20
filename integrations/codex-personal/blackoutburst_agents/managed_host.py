@@ -39,7 +39,7 @@ def _sha(value):
 
 class ManagedHostJournalMixin:
     def managed(self):
-        return self._db.execute('PRAGMA user_version').fetchone()[0] in (2,3)
+        return self._db.execute('PRAGMA user_version').fetchone()[0] in (2,3,4)
 
     def _check_managed(self):
         if not self.managed():return
@@ -330,6 +330,7 @@ class ManagedHostJournalMixin:
         return [self.managed_effect(r[0]) for r in rows]
 
     def require_no_catalog_source_transition(self):
+        self._require_no_unsettled_executed_disposition()
         if self.managed() and any(r['state']!='complete' for r in self.catalog_source_transitions()):
             raise HostError('catalog_transition_pending')
 
@@ -349,7 +350,8 @@ class ManagedHostJournalMixin:
         tables={r[0] for r in self._db.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
         version=self._db.execute('PRAGMA user_version').fetchone()[0]
         expected=set(HOST_TABLES)-({TABLE} if version==2 else set())
-        if version not in (2,3) or tables!=expected:raise HostError('catalog_transition_schema')
+        if version==4:expected.add('host_message_dispositions')
+        if version not in (2,3,4) or tables!=expected:raise HostError('catalog_transition_schema')
         c=self.control();targets=[self.managed_target(t['id']) for t in c['configuration']['targets']]
         if c['enabled'] or any(t['enabled'] or not t['instance_id'] for t in targets):
             raise HostError('catalog_transition_requires_stopped')
@@ -364,12 +366,17 @@ class ManagedHostJournalMixin:
         return digest({'control':self.control(),'targets':[self.target(t['id']) for t in self.control()['configuration']['targets']],
             'managed_targets':targets,'dispatches':self.dispatches(),'host_id':self.managed_settings()['host_id'],
             'abandonments':([] if self._db.execute('PRAGMA user_version').fetchone()[0]==2 else
-                [dict(r) for r in self._db.execute('SELECT * FROM host_message_abandonments ORDER BY rowid LIMIT 33')])})
+                [dict(r) for r in self._db.execute('SELECT * FROM host_message_abandonments ORDER BY rowid LIMIT 33')]),
+            **({'executed_dispositions':[dict(r) for r in self._db.execute(
+                'SELECT * FROM host_message_dispositions ORDER BY rowid LIMIT 33')]}
+                if self._db.execute('PRAGMA user_version').fetchone()[0]==4 else {})})
 
     def _catalog_source_validate(self,p):
         from .catalog_source_transition import proposal
         from .server_controller import launch_catalog
         p=proposal(p);self._catalog_source_clean();c=self.control()
+        if self._db.execute('PRAGMA user_version').fetchone()[0]==4 and p['schema']!='blackoutburst-catalog-source-transition-v2':
+            raise HostError('catalog_transition_schema')
         if (c['hash']!=p['configuration_sha256'] or c['instance_id']!=p['host_instance']
                 or self.managed_settings()['host_id']!=p['host_id'] or self._catalog_source_preserved()!=p['preserved_sha256']):
             raise HostError('catalog_transition_conflict')
@@ -401,12 +408,14 @@ class ManagedHostJournalMixin:
             # Consume the complete four-journal Fresh closure inside this Host
             # transaction and BEFORE any schema/intent mutation. It is history
             # after this point, not a false future Host checkpoint.
-            if consume_closures()!=p['closures']:raise HostError('catalog_transition_closure_invalid')
+            expected_closures=({'closures':p['closures'],'executed_closures':p['executed_closures']}
+                if p['schema']=='blackoutburst-catalog-source-transition-v2' else p['closures'])
+            if consume_closures()!=expected_closures:raise HostError('catalog_transition_closure_invalid')
             version=db.execute('PRAGMA user_version').fetchone()[0]
             self._abandon_schema(db,create=version==2)
             if version==2 and db.execute('SELECT 1 FROM '+TABLE+' LIMIT 1').fetchone():raise HostError('catalog_transition_schema')
             if len(self.catalog_source_transitions())>=32:raise HostError('catalog_transition_full')
-            db.execute('PRAGMA user_version=3')
+            if version<3:db.execute('PRAGMA user_version=3')
             db.execute("INSERT INTO managed_effects VALUES(?,?,?,?,'pending','{}')",
                 (identifier,LOCAL_METHOD,encoded(p),digest(p)))
             self._catalog_source_validate(p)

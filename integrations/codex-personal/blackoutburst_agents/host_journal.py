@@ -17,6 +17,7 @@ from .host_config import HostError, digest, private_directory, validate
 from .managed_host import ManagedHostJournalMixin
 from .host_append_stage import HostAppendStageMixin
 from .message_abandon_journal import HostMessageAbandonMixin
+from .message_executed_disposition import HostExecutedDispositionMixin
 from .work_journal import _private_file, _encode
 
 _APPLICATION_ID = 0x4242484A
@@ -27,7 +28,7 @@ def canonical_directory():
     return Path(pwd.getpwuid(os.geteuid()).pw_dir) / '.local' / 'state' / 'blackoutburst-agents' / 'hosts'
 
 
-class HostJournal(HostMessageAbandonMixin, HostAppendStageMixin, ManagedHostJournalMixin):
+class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostAppendStageMixin, ManagedHostJournalMixin):
     def __init__(self, directory):
         self._db = None
         self._held = False
@@ -44,11 +45,11 @@ class HostJournal(HostMessageAbandonMixin, HostAppendStageMixin, ManagedHostJour
             self._db = sqlite3.connect(database, isolation_level=None, timeout=5)
             self._db.row_factory = sqlite3.Row
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4):
                 raise HostError('unsupported_host_version')
             if version == 0 and self._db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                 raise HostError('host_corrupt')
-            if version in (1,2,3) and self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID:
+            if version in (1,2,3,4) and self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID:
                 raise HostError('host_corrupt')
             self._db.execute('PRAGMA journal_mode=DELETE')
             self._db.execute('PRAGMA synchronous=FULL')
@@ -76,6 +77,7 @@ class HostJournal(HostMessageAbandonMixin, HostAppendStageMixin, ManagedHostJour
                 raise HostError('host_corrupt')
         self._check_managed()
         self._check_abandonments()
+        self._check_executed_dispositions()
 
     def __enter__(self): return self
     def __exit__(self, *_): self.close()

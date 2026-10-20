@@ -16,6 +16,7 @@ from .server_control_protocol import arguments,response,entry,catalog_fence
 
 LOCAL_METHOD='catalog_source_transition'
 SCHEMA='blackoutburst-catalog-source-transition-v1'
+EXECUTED_SCHEMA='blackoutburst-catalog-source-transition-v2'
 
 
 def encoded(value,limit=32768):
@@ -29,7 +30,8 @@ def encoded(value,limit=32768):
 def proposal(value):
     keys={'schema','request_key','host_id','host_instance','configuration_sha256','old_release_sha256',
         'new_release_sha256','old_catalog','new_catalog','preserved_sha256','closures','proposal_sha256'}
-    if type(value) is not dict or set(value)!=keys or value['schema']!=SCHEMA:
+    if type(value) is dict and value.get('schema')==EXECUTED_SCHEMA:keys.add('executed_closures')
+    if type(value) is not dict or set(value)!=keys or value['schema'] not in (SCHEMA,EXECUTED_SCHEMA):
         raise HostError('catalog_transition_invalid')
     encoded(value)
     for k in ('request_key','host_id','host_instance'):_opaque(value[k])
@@ -52,6 +54,15 @@ def proposal(value):
                 or type(row['revision']) is not int or row['revision']!=6):raise HostError('catalog_transition_invalid')
         _opaque(row['intent_id']);_opaque(row['request_key']);_sha(row['proposal_sha256'])
     if len({r['intent_id'] for r in closures})!=len(closures):raise HostError('catalog_transition_invalid')
+    executed=value.get('executed_closures',[])
+    if type(executed) is not list or len(executed)>32:raise HostError('catalog_transition_invalid')
+    for row in executed:
+        if (type(row) is not dict or set(row)!={'intent_id','request_key','revision','proposal_sha256'}
+                or type(row['revision']) is not int or row['revision']!=5):raise HostError('catalog_transition_invalid')
+        _opaque(row['intent_id']);_opaque(row['request_key']);_sha(row['proposal_sha256'])
+    if (len({r['intent_id'] for r in executed})!=len(executed)
+            or {r['intent_id'] for r in executed}&{r['intent_id'] for r in closures}):
+        raise HostError('catalog_transition_invalid')
     if digest({k:v for k,v in value.items() if k!='proposal_sha256'})!=value['proposal_sha256']:
         raise HostError('catalog_transition_invalid')
     return deepcopy(value)
@@ -68,10 +79,15 @@ def receipt(p,value):
 
 
 class CatalogSourceTransition:
-    def __init__(self,host,client,*,source_guard,stopped_guard,abandonment=None):
+    def __init__(self,host,client,*,source_guard,stopped_guard,abandonment=None,executed_disposition=None):
         if not callable(source_guard) or not callable(stopped_guard):raise HostError('catalog_transition_guard_required')
         self.host,self.client=host,client
         self.source_guard,self.stopped_guard,self.abandonment=source_guard,stopped_guard,abandonment
+        self.executed_disposition=executed_disposition
+        if executed_disposition is not None:
+            from .message_executed_disposition import MessageExecutedDisposition
+            if not isinstance(executed_disposition,MessageExecutedDisposition) or executed_disposition.host is not host:
+                raise HostError('catalog_transition_closure_invalid')
         if abandonment is not None:
             from .message_admission_abandonment import MessageAdmissionAbandonment
             if not isinstance(abandonment,MessageAdmissionAbandonment) or abandonment.host is not host:
@@ -89,7 +105,7 @@ class CatalogSourceTransition:
 
     def _closure_rows(self):
         self.host._check_abandonments()
-        if self.host._db.execute('PRAGMA user_version').fetchone()[0]!=3:return []
+        if self.host._db.execute('PRAGMA user_version').fetchone()[0] not in (3,4):return []
         historical=set()
         for row in self.host.catalog_source_transitions():
             if row['state']=='complete':historical.update(c['intent_id'] for c in row['arguments']['closures'])
@@ -108,6 +124,30 @@ class CatalogSourceTransition:
             result.append({'intent_id':r['id'],'request_key':r['request_key'],'revision':6,'proposal_sha256':p['proposal_sha256']})
         return result
 
+    def _executed_closure_rows(self):
+        self.host._check_executed_dispositions()
+        if self.host._db.execute('PRAGMA user_version').fetchone()[0]!=4:return []
+        historical=set()
+        for row in self.host.catalog_source_transitions():
+            if row['state']=='complete':
+                historical.update(c['intent_id'] for c in row['arguments'].get('executed_closures',[]))
+        rows=self.host._db.execute('SELECT id FROM host_message_dispositions ORDER BY rowid LIMIT 33').fetchall()
+        if len(rows)>32:raise HostError('catalog_transition_closure_invalid')
+        result=[]
+        for raw in rows:
+            record=self.host._executed_record(intent_id=raw[0])
+            if record['phase']!='complete':raise HostError('catalog_transition_closure_invalid')
+            if record['id'] in historical:continue
+            if self.executed_disposition is None:raise HostError('catalog_transition_closure_required')
+            status=self.executed_disposition.status(intent_id=record['id'])
+            saved=self.executed_disposition.proposal(record['request_key'])
+            if (status.get('intent_id')!=record['id'] or status.get('revision')!=5
+                    or status.get('phase')!='complete' or saved!=record['proposal']):
+                raise HostError('catalog_transition_closure_invalid')
+            result.append({'intent_id':record['id'],'request_key':record['request_key'],
+                'revision':5,'proposal_sha256':saved['proposal_sha256']})
+        return result
+
     def plan(self,*,old_release_sha256,new_release_sha256,request_key):
         self.host.require_no_catalog_source_transition()
         self._guard();_sha(old_release_sha256);_sha(new_release_sha256);_opaque(request_key)
@@ -118,6 +158,9 @@ class CatalogSourceTransition:
             'old_catalog':sorted(launch_catalog(cfg,old_release_sha256),key=lambda r:r['catalog_key']),
             'new_catalog':sorted(launch_catalog(cfg,new_release_sha256),key=lambda r:r['catalog_key']),
             'preserved_sha256':self.host._catalog_source_preserved(),'closures':self._closure_rows()}
+        if self.host._db.execute('PRAGMA user_version').fetchone()[0]==4:
+            value['schema']=EXECUTED_SCHEMA
+            value['executed_closures']=self._executed_closure_rows()
         value['proposal_sha256']=digest(value);p=proposal(value);self._guard(p)
         return p
 
@@ -225,7 +268,10 @@ class CatalogSourceTransition:
         # Fresh.status below verifies the original closure in this Host TX.
         # The post-closure child helper is separately checked before the TX.
         self._guard(p,children=False)
-        return self._closure_rows()
+        closures=self._closure_rows()
+        if p['schema']==EXECUTED_SCHEMA:
+            return {'closures':closures,'executed_closures':self._executed_closure_rows()}
+        return closures
 
     def resolve(self,value,*,expected_revision=0):
         p=proposal(value);self._guard(p)
