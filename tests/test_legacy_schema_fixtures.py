@@ -34,3 +34,19 @@ def test_nonempty_table_refuses_before_any_drop(nonempty):
         with pytest.raises(AssertionError, match='cannot discard server state'):
             remove_server_schema14_tables(db)
         assert tuple(db.iterdump()) == before
+
+
+@pytest.mark.parametrize('nonempty', (False, True))
+def test_later_admission_refusals_are_dropped_only_when_empty(nonempty):
+    with sqlite3.connect(':memory:') as db:
+        for name in (*SERVER_SCHEMA14_TABLES, 'runtime_admission_refusals'):
+            db.execute('CREATE TABLE ' + name + '(id TEXT PRIMARY KEY)')
+        if nonempty:
+            db.execute("INSERT INTO runtime_admission_refusals VALUES('retained-refusal')")
+            before = tuple(db.iterdump())
+            with pytest.raises(AssertionError, match='cannot discard server state'):
+                remove_server_schema14_tables(db)
+            assert tuple(db.iterdump()) == before
+        else:
+            remove_server_schema14_tables(db)
+            assert not db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
