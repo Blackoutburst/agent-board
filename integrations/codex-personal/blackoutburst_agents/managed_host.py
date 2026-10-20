@@ -136,7 +136,7 @@ class ManagedHostJournalMixin:
     def begin_managed_effect(self, identity, method, arguments):
         """Preserve the FIRST CAS and key, even if a reply is lost."""
         _opaque(identity)
-        if method not in ('publish_server_catalog','ack_instance_command','report_instance_state'):
+        if method not in ('publish_server_catalog','replace_server_catalog','ack_instance_command','report_instance_state'):
             raise HostError('managed_effect_invalid')
         from .server_control_protocol import arguments as validate_arguments
         validate_arguments(method,arguments)
@@ -154,17 +154,30 @@ class ManagedHostJournalMixin:
             return self.managed_effect(identity)
 
     def managed_effect(self, identity):
+        _opaque(identity)
+        sizes=self._db.execute('''SELECT typeof(arguments),length(CAST(arguments AS BLOB)),
+            typeof(result),length(CAST(result AS BLOB)),length(CAST(method AS BLOB))
+            FROM managed_effects WHERE id=?''',(identity,)).fetchone()
+        if sizes is not None and (sizes[0]!='text' or not 0<sizes[1]<=32768
+                or sizes[2]!='text' or not 0<sizes[3]<=65536 or not 0<sizes[4]<=200):
+            raise HostError('host_corrupt')
         row=self._db.execute('SELECT * FROM managed_effects WHERE id=?',(identity,)).fetchone()
         if row is None:return None
         try:
             value=dict(row)
-            if len(value['arguments'].encode())>16384 or len(value['result'].encode())>65536:raise ValueError()
+            if len(value['arguments'].encode())>32768 or len(value['result'].encode())>65536:raise ValueError()
             value['arguments']=json.loads(value['arguments']);value['result']=json.loads(value['result'])
             from .server_control_protocol import arguments,response
-            arguments(value['method'],value['arguments'])
+            if value['method']=='catalog_source_transition':
+                from .catalog_source_transition import proposal,receipt
+                proposal(value['arguments'])
+                if value['state'] not in ('pending','complete'):raise ValueError()
+                if value['state']=='complete':receipt(value['arguments'],value['result'])
+                elif value['result']!={}:raise ValueError()
+            else:arguments(value['method'],value['arguments'])
             if value['payload_sha256']!=digest(value['arguments']) or value['state'] not in ('pending','complete','superseded'):
                 raise ValueError()
-            if value['state']=='complete':response(value['method'],value['result'])
+            if value['state']=='complete' and value['method']!='catalog_source_transition':response(value['method'],value['result'])
             return value
         except (ValueError,TypeError,KeyError,RecursionError,UnicodeError):raise HostError('host_corrupt') from None
 
@@ -188,6 +201,8 @@ class ManagedHostJournalMixin:
 
     def supersede_managed_effect(self, identity):
         with self._tx() as db:
+            row=self.managed_effect(identity)
+            if row is not None and row['method']=='catalog_source_transition':raise HostError('catalog_transition_pending')
             db.execute("UPDATE managed_effects SET state='superseded' WHERE id=? AND state='pending'",(identity,))
 
     def target_token(self, target_id):
@@ -277,6 +292,7 @@ class ManagedHostJournalMixin:
             pending=[d for d in self.dispatches() if d['state']!='complete']
             if pending:raise HostError('host_work_pending')
             if command['action'] in ('start','restart'):
+                self.require_no_catalog_source_transition()
                 self._require_no_unsettled_abandonment()
                 if target['enabled']:raise HostError('host_target_active')
                 control=self.control()
@@ -306,3 +322,137 @@ class ManagedHostJournalMixin:
             'SELECT target_id FROM managed_targets WHERE enabled=1 AND remaining=0')]
         for target in targets:
             if target not in pending:self.stop_target(target,'budget_exhausted')
+
+
+    def catalog_source_transitions(self):
+        rows=self._db.execute("SELECT id FROM managed_effects WHERE method='catalog_source_transition' ORDER BY rowid LIMIT 33").fetchall()
+        if len(rows)>32:raise HostError('catalog_transition_full')
+        return [self.managed_effect(r[0]) for r in rows]
+
+    def require_no_catalog_source_transition(self):
+        if self.managed() and any(r['state']!='complete' for r in self.catalog_source_transitions()):
+            raise HostError('catalog_transition_pending')
+
+    def _catalog_source_settled(self,*,except_ids=()):
+        self._require_lock()
+        if self._db.execute("SELECT 1 FROM managed_commands WHERE state NOT IN ('applied','superseded') LIMIT 1").fetchone():
+            raise HostError('catalog_transition_unsettled')
+        rows=self._db.execute("SELECT id FROM managed_effects WHERE state NOT IN ('complete','superseded') LIMIT 65").fetchall()
+        if len(rows)>64 or any(r[0] not in except_ids for r in rows):raise HostError('catalog_transition_unsettled')
+
+    def _catalog_source_clean(self):
+        from .message_abandon_protocol import guard_sql
+        from .message_abandon_journal import HOST_TABLES,TABLE
+        self._require_lock()
+        if not self.managed():raise HostError('catalog_transition_managed_required')
+        guard_sql(self._db,HOST_TABLES);self._check();self._require_no_unsettled_abandonment()
+        tables={r[0] for r in self._db.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        version=self._db.execute('PRAGMA user_version').fetchone()[0]
+        expected=set(HOST_TABLES)-({TABLE} if version==2 else set())
+        if version not in (2,3) or tables!=expected:raise HostError('catalog_transition_schema')
+        c=self.control();targets=[self.managed_target(t['id']) for t in c['configuration']['targets']]
+        if c['enabled'] or any(t['enabled'] or not t['instance_id'] for t in targets):
+            raise HostError('catalog_transition_requires_stopped')
+        if any(d['state']!='complete' for d in self.dispatches()):raise HostError('catalog_transition_unsettled')
+
+    def _catalog_source_preserved(self):
+        self._catalog_source_clean()
+        # Only genuine Stop processing may advance generation/reason. Budgets,
+        # activations, configuration, receipts, subscriptions and IDs are fixed.
+        targets=[{k:v for k,v in self.managed_target(t['id']).items()
+                  if k not in ('launchspec_sha256','generation','reason')} for t in self.control()['configuration']['targets']]
+        return digest({'control':self.control(),'targets':[self.target(t['id']) for t in self.control()['configuration']['targets']],
+            'managed_targets':targets,'dispatches':self.dispatches(),'host_id':self.managed_settings()['host_id'],
+            'abandonments':([] if self._db.execute('PRAGMA user_version').fetchone()[0]==2 else
+                [dict(r) for r in self._db.execute('SELECT * FROM host_message_abandonments ORDER BY rowid LIMIT 33')])})
+
+    def _catalog_source_validate(self,p):
+        from .catalog_source_transition import proposal
+        from .server_controller import launch_catalog
+        p=proposal(p);self._catalog_source_clean();c=self.control()
+        if (c['hash']!=p['configuration_sha256'] or c['instance_id']!=p['host_instance']
+                or self.managed_settings()['host_id']!=p['host_id'] or self._catalog_source_preserved()!=p['preserved_sha256']):
+            raise HostError('catalog_transition_conflict')
+        for side in ('old','new'):
+            if sorted(launch_catalog(c['configuration'],p[side+'_release_sha256']),key=lambda r:r['catalog_key'])!=p[side+'_catalog']:
+                raise HostError('catalog_transition_conflict')
+        stored=self.managed_settings()['catalog_sha256']
+        record=self.managed_effect('source-'+digest(p['request_key']))
+        committed=record is not None and record['method']=='catalog_source_transition' and record['arguments']==p and record['state']=='complete'
+        if stored!=digest(p['new_catalog'] if committed else p['old_catalog']):raise HostError('catalog_transition_conflict')
+        expected=p['new_catalog'] if stored==digest(p['new_catalog']) else p['old_catalog']
+        for e in expected:
+            if self.managed_target(e['catalog_key'])['launchspec_sha256']!=e['launchspec_sha256']:
+                raise HostError('catalog_transition_conflict')
+
+    def begin_catalog_source_transition(self,p,*,consume_closures):
+        from .catalog_source_transition import proposal,encoded,LOCAL_METHOD
+        from .message_abandon_journal import TABLE
+        p=proposal(p);self._require_lock()
+        identifier='source-'+digest(p['request_key'])
+        with self._tx() as db:
+            self._catalog_source_validate(p)
+            old=self.managed_effect(identifier)
+            if old is not None:
+                if old['method']!=LOCAL_METHOD or old['arguments']!=p:raise HostError('catalog_transition_conflict')
+                return old
+            self.require_no_catalog_source_transition();self._catalog_source_settled()
+            if self.managed_settings()['catalog_sha256']!=digest(p['old_catalog']):raise HostError('catalog_transition_conflict')
+            # Consume the complete four-journal Fresh closure inside this Host
+            # transaction and BEFORE any schema/intent mutation. It is history
+            # after this point, not a false future Host checkpoint.
+            if consume_closures()!=p['closures']:raise HostError('catalog_transition_closure_invalid')
+            version=db.execute('PRAGMA user_version').fetchone()[0]
+            self._abandon_schema(db,create=version==2)
+            if version==2 and db.execute('SELECT 1 FROM '+TABLE+' LIMIT 1').fetchone():raise HostError('catalog_transition_schema')
+            if len(self.catalog_source_transitions())>=32:raise HostError('catalog_transition_full')
+            db.execute('PRAGMA user_version=3')
+            db.execute("INSERT INTO managed_effects VALUES(?,?,?,?,'pending','{}')",
+                (identifier,LOCAL_METHOD,encoded(p),digest(p)))
+            self._catalog_source_validate(p)
+            result=self.managed_effect(identifier)
+            if result['arguments']!=p or result['state']!='pending':raise HostError('catalog_transition_conflict')
+        return self.managed_effect(identifier)
+
+    def commit_catalog_source_transition(self,intent_id,remote_id,result,snapshot,*,recheck):
+        from .catalog_source_transition import receipt,encoded,LOCAL_METHOD
+        from .server_control_protocol import response,catalog_fence
+        self._require_lock()
+        if not callable(recheck):raise HostError('catalog_transition_guard_required')
+        with self._tx() as db:
+            recheck()
+            row=self.managed_effect(intent_id)
+            if row is None or row['method']!=LOCAL_METHOD:raise HostError('catalog_transition_absent')
+            p=row['arguments'];self._catalog_source_validate(p);receipt(p,result)
+            if row['state']=='complete':
+                if row['result']!=result:raise HostError('catalog_transition_conflict')
+                return row
+            self._catalog_source_settled(except_ids=(intent_id,))
+            remote=self.managed_effect(remote_id);response('poll_instance_commands',snapshot)
+            if (remote is None or remote['method']!='replace_server_catalog' or remote['state']!='complete'
+                    or remote_id!='replace-'+p['proposal_sha256'] or remote['arguments']['entries']!=p['new_catalog']
+                    or remote['arguments']['host_id']!=p['host_id'] or snapshot['host_id']!=p['host_id']
+                    or snapshot['enabled'] is not True or result['catalog_version']!=snapshot['catalog_version']
+                    or snapshot['host_version']!=remote['arguments']['expected_host_version']
+                    or snapshot['catalog_version']!=remote['arguments']['expected_catalog_version']+1
+                    or result['instances_sha256']!=catalog_fence(snapshot['instances'])
+                    or remote['result']['catalog_version']!=snapshot['catalog_version']
+                    or catalog_fence(remote['result']['instances'])!=catalog_fence(snapshot['instances'])):
+                raise HostError('catalog_transition_conflict')
+            by_key={i['catalog_key']:i for i in snapshot['instances']}
+            if set(by_key)!={e['catalog_key'] for e in p['new_catalog']}:raise HostError('catalog_transition_conflict')
+            for e in p['new_catalog']:
+                i=by_key[e['catalog_key']];t=self.managed_target(e['catalog_key']);c=i['current_command']
+                if (i['id']!=t['instance_id'] or i['generation']!=t['generation'] or any(i[k]!=v for k,v in e.items())
+                        or not i['active'] or not i['can_start'] or i['control_reason']!=''
+                        or i['desired_state']!='stopped' or i['observed_state']!='unknown' or i['cleanup_confirmed']
+                        or c is None or c['action']!='stop' or c['status']!='complete'):
+                    raise HostError('catalog_transition_conflict')
+            for e in p['new_catalog']:
+                db.execute('UPDATE managed_targets SET launchspec_sha256=? WHERE target_id=?',(e['launchspec_sha256'],e['catalog_key']))
+            db.execute('UPDATE managed_settings SET catalog_sha256=? WHERE id=1',(digest(p['new_catalog']),))
+            db.execute("UPDATE managed_effects SET state='complete',result=? WHERE id=?",(encoded(result,4096),intent_id))
+            self._catalog_source_validate(p)
+            if self.managed_effect(intent_id)['result']!=result:raise HostError('catalog_transition_conflict')
+            recheck()
+        return self.managed_effect(intent_id)
