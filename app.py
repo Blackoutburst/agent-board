@@ -33,6 +33,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from board import Board, BoardError
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
+from runtime import validate_message_admission_seal_arguments
 from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
 from development_frames import (get_development_frame as development_frame, wire_frame,
@@ -46,17 +47,20 @@ MAX_BODY = 15 * 1024 * 1024
 class BoardMCP(FastMCP):
     async def call_tool(self, name, arguments):
         # FastMCP's generic argument model otherwise discards unknown fields
-        # and pre-parses JSON strings. This one fixed protocol accepts neither.
+        # and pre-parses JSON strings. These closed protocols accept neither.
         if name == 'get_development_frame':
             development_frame_arguments(arguments)
         elif name in MANAGER_TOOLS:
             validate_manager_arguments(name, arguments)
+        elif name == 'seal_message_execution_admission':
+            validate_message_admission_seal_arguments(arguments)
         return await super().call_tool(name, arguments)
 
     async def list_tools(self):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
-                if tool.name == 'get_development_frame' or tool.name in MANAGER_TOOLS else tool for tool in tools]
+                if tool.name in {'get_development_frame', 'seal_message_execution_admission'}
+                or tool.name in MANAGER_TOOLS else tool for tool in tools]
 
 
 class Body(BaseModel):
@@ -894,6 +898,16 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         """Reserve shared owner capacity for one reply to an exact addressed human message, without a ticket claim. Requires current read/reply access and get_message's source_sha256. Retain the same retry key after uncertainty. This grants no ticket work, shell, publication or automatic launch permission."""
         return board.reserve_message_execution(execution_actor(session_id),idempotency_key,thread_id,
             message_id,source_sha256,work_id,turn_id,provider,model,refusal_mode=refusal_mode)
+
+    @mcp.tool()
+    async def seal_message_execution_admission(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque,
+                                               thread_id: RuntimeOpaque, message_id: RuntimeOpaque,
+                                               source_sha256: Annotated[str, Field(strict=True, pattern=r'^[0-9a-f]{64}$')],
+                                               work_id: RuntimeOpaque, turn_id: RuntimeOpaque,
+                                               provider: RuntimeModel, model: RuntimeModel) -> dict:
+        """Only for explicitly requested recovery: permanently deny the exact original message reservation key/turn before any execution exists. Rechecks current message/source/identity access. Refuses if any real execution won the race. This is not process cleanup, a completed Runtime, a capacity release, a local recovery or permission to launch. Keep the original IDs and key; never invoke automatically for cached uncertainty."""
+        return board.seal_message_execution_admission(execution_actor(session_id),idempotency_key,
+            thread_id,message_id,source_sha256,work_id,turn_id,provider,model)
 
     @mcp.tool()
     async def lookup_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque) -> dict:
