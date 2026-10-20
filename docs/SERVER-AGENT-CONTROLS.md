@@ -79,3 +79,9 @@ existants. La création d’un nouveau profil, sa configuration locale et le
 parcours officiel de connexion au fournisseur sont traités séparément. Ce lot
 ne qualifie pas l’exécution de développement Linux et n’active aucun accès API
 payant de substitution.
+
+Une cible de messages reste en démarrage jusqu’à la confirmation de son flux
+pour l’activation courante. « Prêt » confirme ainsi que la frontière initiale
+de `start_at=now` est établie ; un message envoyé avant cette confirmation peut
+être antérieur au flux. Une lecture vide, même en cours, reste prête après cette
+confirmation et ne devient occupée que lorsqu’un travail est réservé.

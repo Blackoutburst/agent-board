@@ -8,6 +8,7 @@ import time
 import pytest
 
 from board import Board, BoardError
+from legacy_schema_fixtures import remove_server_schema14_tables
 
 
 @pytest.fixture
@@ -69,7 +70,7 @@ def test_migration_default_is_read_only_and_persists(runtime):
                      'active_count': 0, 'quota': {'status': 'unavailable'}, 'usage_observations': [], 'executions': []}
     assert snapshot(board) == before
     with sqlite3.connect(board.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 14
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 15
     assert Board(board.data_dir).get_runtime(human) == value
 
 
@@ -341,8 +342,7 @@ def test_schema_five_upgrade_preserves_existing_data_and_migrates_once(runtime):
         db.execute('DROP TABLE usage_observations')
         db.execute('DROP TABLE runtime_executions')
         db.execute('DROP TABLE owner_execution_limits')
-        for table in ('server_control_receipts', 'server_instance_commands', 'server_instances', 'server_hosts'):
-            db.execute('DROP TABLE ' + table)
+        remove_server_schema14_tables(db)
         db.execute('PRAGMA user_version=5')
     upgraded = Board(board.data_dir)
     assert upgraded.get_ticket(human, ticket['id'])['ticket'] == ticket
@@ -388,8 +388,7 @@ def test_runtime_migration_failure_is_atomic(runtime, monkeypatch):
         db.execute('DROP TABLE usage_observations')
         db.execute('DROP TABLE runtime_executions')
         db.execute('DROP TABLE owner_execution_limits')
-        for table in ('server_control_receipts', 'server_instance_commands', 'server_instances', 'server_hosts'):
-            db.execute('DROP TABLE ' + table)
+        remove_server_schema14_tables(db)
         db.execute('PRAGMA user_version=5')
     before = snapshot(board)
     original = board_module.migrate_runtime

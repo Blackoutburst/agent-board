@@ -80,7 +80,7 @@ def test_real_rest_and_sdk_complete_roundtrip_without_session_or_process(browser
         cleanup_confirmed=False, idempotency_key='ready'))
     assert ready['command']['status'] == 'complete'
     assert b.get_runtime(human)['active_count'] == 0
-    assert client.get('/health').json()['schema_version'] == 14
+    assert client.get('/health').json()['schema_version'] == 15
 
 
 def test_manager_roles_not_given_to_ordinary_agent_or_foreign_owner(browser):

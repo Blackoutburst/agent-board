@@ -15,7 +15,7 @@ from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
 from profiles import ProfilesMixin, migrate_profiles
 from communication import CommunicationMixin, migrate_communication
-from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime
+from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime, migrate_runtime_admission_refusals
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
 from message_feed import MessageFeedMixin, migrate_message_feed
 from delegation_families import DelegationFamiliesMixin, migrate_delegation_families
@@ -65,7 +65,7 @@ class Board(ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, Usa
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 14:
+            if version > 15:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -176,6 +176,9 @@ class Board(ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, Usa
             if version < 14:
                 migrate_server_instances(db)
                 db.execute("PRAGMA user_version=14")
+            if version < 15:
+                migrate_runtime_admission_refusals(db)
+                db.execute("PRAGMA user_version=15")
 
     @contextmanager
     def _connection(self):

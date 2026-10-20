@@ -7,7 +7,7 @@ from .message_client import MAX_REPLY_BYTES
 from .message_context import exact_source, prepare_context, registration_profile, revalidate_context
 from .message_scope import local_agent, validate_scope
 from .runner import PersonalRunner
-from .runtime_guard import RuntimeControlError
+from .runtime_guard import RuntimeControlError, RuntimeAdmissionRefused
 from .message_runtime import MessageRuntimeGuard
 from .run_store import StoreError
 
@@ -69,9 +69,11 @@ class MessageWorker:
                         or work['project_id']!=scope['thread_id'] or work['ticket_id']!=scope['message_id']
                         or work['model']!=target['model'] or work['workspace']!=target['workspace']
                         or work['executable']!=target['executable']):raise HostError('message_foreign_work')
-                self._fresh(op,target,owner)
+                registration=self._fresh(op,target,owner)
                 guard=self.runtime_guard_factory(scope)
                 if not isinstance(guard,MessageRuntimeGuard):raise HostError('message_runtime_required')
+                guard.admission_identity={'device_id':registration['identity']['device_id'],
+                    'profile_version':registration['profile_version']}
                 def before_transport():
                     if should_cancel():raise HostError('host_stopped')
                     self._fresh(op,target,owner)
@@ -99,6 +101,9 @@ class MessageWorker:
                     result=runner.run(work['id'],'host-message-'+op['worker_id'],op['payload']['prompt'],
                         timeout=target['timeout'],should_cancel=cancelled)
                 except RuntimeControlError as error:
+                    if isinstance(error,RuntimeAdmissionRefused):
+                        op=self._save(op,'needs_review',reason='message_runtime_capacity_exhausted')
+                        return self.receipt(op)
                     if str(error) in ('message_context_changed','message_context_guard_required'):
                         op=self._save(op,'needs_review',reason='message_context_requires_review')
                         return self.receipt(op)

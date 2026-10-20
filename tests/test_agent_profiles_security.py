@@ -301,7 +301,7 @@ def test_backup_restore_keeps_scope_pause_bindings_and_non_escalation(guarded, t
     revise(s, status='paused')
     archive = tmp_path / 'profiles.zip'
     manifest = create_backup(s['board'].data_dir, archive)
-    assert manifest['schema']['user_version'] == 14
+    assert manifest['schema']['user_version'] == 15
     restore_backup(archive, tmp_path / 'restored')
     restored = Board(tmp_path / 'restored')
     profile = restored.get_agent_profile(s['alice'], s['profile']['id'])
@@ -413,7 +413,7 @@ def test_schema_three_migration_keeps_claim_identity_cursor_and_effect_deduplica
     actor, human = schema_three_fixture(path)
     b = Board(path)
     with sqlite3.connect(b.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 14
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 15
         assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
     old = b.get_ticket(actor, 'old-ticket')['ticket']

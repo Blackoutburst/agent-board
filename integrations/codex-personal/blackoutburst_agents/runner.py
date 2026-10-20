@@ -7,6 +7,7 @@ from typing import Callable
 from .codex_turn import execute_turn
 from .run_store import RunStore
 from .subscription_probe import ProbeSettings
+from .runtime_guard import RuntimeAdmissionRefused
 
 
 class PersonalRunner:
@@ -40,6 +41,10 @@ class PersonalRunner:
             if self.runtime_guard is not None:
                 try:
                     self.runtime_guard.before(work, turn_id)
+                except RuntimeAdmissionRefused:
+                    self.store.finish_turn(turn_id, {'status':'blocked','reason':'runtime_capacity_exhausted',
+                        'text':'','uncertain':False,'verification':{'runtime_not_admitted':True}})
+                    raise
                 except Exception:
                     self.store.finish_turn(turn_id, {'status': 'blocked', 'reason': 'runtime_start_requires_review',
                         'text': '', 'uncertain': True, 'verification': {'cleanup_confirmed': True}})
