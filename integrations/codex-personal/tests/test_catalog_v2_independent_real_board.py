@@ -48,6 +48,9 @@ class Fixture(unittest.TestCase):
         return self.board.command_server_instance(self.human,i['id'],action,i['version'],i['generation'],
             i['launchspec_sha256'],0 if action=='stop' else 1,key)
 
+    def before_disposition(self):
+        """Extension point for real Stop metadata preceding the closure."""
+
     def setUp(self):
         message_fixture.MessageHostTests.setUp(self)
         self.messages.close();self.message_runs.close();self.message_runtime.close();self.host.close()
@@ -86,6 +89,7 @@ class Fixture(unittest.TestCase):
             'session_id':self.client.session_id}
         self.observer=executed_fixture.MemoryObserver(self)
         self.admin=MessageExecutedDisposition(self.host,self.messages,self.message_runs,self.message_runtime,observer=self.observer)
+        self.before_disposition()
         with self.locked():
             self.disposition_proposal=self.plan();self.closed=self.admin.apply(self.disposition_proposal)
             self.disposition_record=self.host._executed_record(intent_id=self.closed['intent_id'])

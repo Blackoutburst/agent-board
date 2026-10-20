@@ -15,6 +15,7 @@ from functools import wraps
 from .host_config import HostError,digest
 from .message_abandon_protocol import (ROW_FIELDS,identity,uuid_id,opaque,sha,guard_sql)
 from .message_abandon_journal import HOST_TABLES as LEGACY_HOST_TABLES
+from .message_stopped_controls import stopped_control_rows
 from .message_admission_abandonment import MessageAdmissionAbandonment
 from .message_scope import validate_scope,local_agent
 from .runtime_journal import RuntimeJournal
@@ -240,8 +241,28 @@ class HostExecutedDispositionMixin:
         return value
 
     def _executed_fingerprint(self,target_id,batch_id):
-        # Existing exact Host fingerprint deliberately excludes the intent table.
-        return self._abandon_host_fingerprint(target_id,batch_id)
+        # A genuine Stop can already be queued/ACKed while the child still needs
+        # disposition. Pin its exact local metadata; do not apply or replay it.
+        # The legacy pretransport fingerprint deliberately remains stricter.
+        self._require_lock();guard_sql(self._db,HOST_TABLES)
+        if not self.managed():raise HostError('message_executed_managed_required')
+        self._check_managed()
+        control=self.control();targets=[self.managed_target(t['id']) for t in control['configuration']['targets']]
+        if control['enabled'] or any(t['enabled'] for t in targets):
+            raise HostError('message_executed_requires_stopped')
+        stopped=stopped_control_rows(self)
+        dispatches=self.dispatches()
+        if any(d['state']!='complete' and d['batch_id']!=batch_id for d in dispatches):
+            raise HostError('message_executed_unsettled')
+        chosen=next((d for d in dispatches if d['batch_id']==batch_id),None)
+        if chosen is None or chosen['target_id']!=target_id:raise HostError('message_executed_identity')
+        value={'control':control,'target':self.target(target_id),'managed_targets':targets,
+            'settings':self.managed_settings(),'dispatch':chosen}
+        # Preserve already-created empty-control closure fingerprints byte for
+        # byte. Any nonempty Stop snapshot is separately bound and cannot vanish
+        # or change between proposal, child commits and final Host checkpoint.
+        if stopped['commands'] or stopped['effects']:value['stopped_controls']=stopped
+        return hashed(value)
 
     def _executed_create(self,p):
         self._require_lock();p=proposal(p)
