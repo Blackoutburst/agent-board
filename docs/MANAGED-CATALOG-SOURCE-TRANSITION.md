@@ -9,7 +9,7 @@ the handles. The first operational wrapper is scoped to the known schema-2
 message host; this library does not qualify universal ticket/family cleanup.
 
 The constructor takes `(host, client, *, source_guard, stopped_guard,
-abandonment=None)`. Guards are trusted code supplied by the protected entry,
+abandonment=None, executed_disposition=None)`. Guards are trusted code supplied by the protected entry,
 not serialized attestations. `source_guard(old_release, new_release, config_sha)`
 must verify both exact protected public manifests and their source/tool/runtime
 pins and the inactive unit observations, and return literal `True`. `stopped_guard()` must verify both owner units
@@ -51,7 +51,12 @@ neither be sent by ordinary outbox recovery nor superseded.
 ## Durable boundaries
 
 Before the first Host mutation all targets/control must be off, all dispatches
-complete and commands/effects settled. An explicit abandonment is a completed
+complete. V1 requires all commands/effects settled. V2 may first bind only exact
+pending human Stop commands and their permitted ACK/stopped-cleanup effects, using
+the read-only stopped-control validator. Its executed child closure has already
+pinned those rows. No Stop is applied or acknowledged before the source intent,
+and the final source commit remains strict about settled commands/effects.
+An explicit abandonment is a completed
 historical disposition with its exact receipt; it is not fake Runtime cleanup.
 The proposal retains all dispatches, configuration, subscription/target receipts,
 activation IDs and remaining budgets. Only genuine Stop settlement can advance

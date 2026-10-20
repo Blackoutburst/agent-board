@@ -75,3 +75,20 @@ complete bounded delivery/reader history. No orphan, extra child or pending effe
 is ignored. The existing singleton seal47 verifier remains unchanged. Historical
 cleanup is not current source authority; current source/owner/configuration CAS
 and explicit stopped-unit checks remain separate requirements.
+
+## Pending human Stop controls
+
+A human Stop may already be queued locally and accepted remotely while the failed
+message prevents its local application. The executed-disposition fingerprint
+therefore validates and binds the complete bounded pending Stop-control rows.
+Only canonical zero-budget Stop commands for the exact host, configured target,
+instance, launch hash and non-regressed generation are eligible. Pending effects
+must be exact acknowledgements for those Stops or their stopped/cleanup reports;
+Start/Restart, needs-review reports and every other unsettled effect refuse.
+This inspection performs no write or RPC and derives no cleanup evidence.
+
+The recorded controls must remain identical through disposition. Once the child
+closure is consumed by a v2 source intent, the separate finite controller may
+complete the genuine Stop. The source commit still requires all commands and
+effects settled and a fresh stopped/cleanup fence. The old pretransport seal and
+v1 source-transition requirements remain unchanged.

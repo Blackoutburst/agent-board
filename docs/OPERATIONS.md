@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.16.2/schema 16 with adapter 0.30.4. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema16, its draft barriers and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
+Current source is Board 2.16.2/schema 16 with adapter 0.30.5. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema16, its draft barriers and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures
@@ -8,6 +8,16 @@ only. Historical native receipts are not adopted by adapter 0.30.
 Older qualification receipts remain tied to their exact source and private pins;
 they do not qualify this integrated source or authorize a deployment.
 
+
+Adapter 0.30.5 closes the recovery dependency between an already queued human
+Stop and an executed-message disposition. The disposition pins the exact bounded
+Stop commands and permitted Stop effects without applying or acknowledging them.
+Only a v2 source intent may precede their completion; its finite controller then
+settles the actual Stop before catalogue replacement. Start/Restart, review/error
+reports, changed fences and the older recovery path remain refused. This is an
+adapter-only source change: Board 2.16.2, schema16 and the 64-tool API are unchanged.
+A new protected owner release still requires exact-source qualification and an
+explicit operator action; a prepared older bundle must not be used for this fix.
 
 Adapter 0.30.4 adds an explicit, owner-only disposition of one already executed
 message blocked by the text protocol. It requires the original transport cleanup
