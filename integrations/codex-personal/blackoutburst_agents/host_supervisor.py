@@ -98,6 +98,7 @@ class HostSupervisor:
     def __init__(self, journal, *, resource_factory=default_resources, clock=time.monotonic):
         self.journal, self.resource_factory, self.clock = journal, resource_factory, clock
         self.message_resource_factory = None
+        self.message_feed_ready = None
 
     def _receipt(self, status, reason, **values):
         return {'status':status, 'reason':reason, **values,
@@ -126,7 +127,8 @@ class HostSupervisor:
             return self._receipt('disabled', value['reason'])
         if value['configuration']['schema_version']==2:
             from .message_host import MessageHostSupervisor, default_message_resources
-            return MessageHostSupervisor(self.journal,resource_factory=self.message_resource_factory or default_message_resources).tick(should_cancel=should_cancel)
+            return MessageHostSupervisor(self.journal,resource_factory=self.message_resource_factory or default_message_resources,
+                on_feed_ready=self.message_feed_ready).tick(should_cancel=should_cancel)
         activation, config = value['activation'], value['configuration']
 
         def cancelled():

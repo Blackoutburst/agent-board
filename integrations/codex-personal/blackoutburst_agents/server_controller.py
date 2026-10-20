@@ -41,6 +41,7 @@ class ServerController:
         self._ready=threading.Event();self._thread=None
         self._owns_worker=False
         self._last_tick={}
+        self._message_feeds={}
         self._known_pending=set()
         self._remote_seen_at=None
 
@@ -112,7 +113,9 @@ class ServerController:
                         # Only the successful owner may alter startup state.
                         # A restart never resumes/reset an old activation.
                         worker.stop()
-                        supervisor=self.factory(worker);self._ready.set();next_tick=0.
+                        supervisor=self.factory(worker)
+                        supervisor.message_feed_ready=self._message_feed_ready
+                        self._ready.set();next_tick=0.
                         while not self._quit.is_set():
                             self._wake.wait(.1);self._wake.clear()
                             if self._cancelled():
@@ -161,6 +164,14 @@ class ServerController:
             self._until=0.;self._commands={}
             if self._owns_worker:self.host.stop('authorization_changed')
         self._wake.set()
+
+    def _message_feed_ready(self,target_id,token):
+        # The worker checked cancellation after the confirmed binding. Do not
+        # use the control thread's SQLite connection here. step() rechecks this
+        # observation against the target's exact current activation token.
+        with self._mutex:
+            if self._owns_worker and not self._cancelled():
+                self._message_feeds[target_id]=token
 
     @staticmethod
     def _normalized(instance,c):
@@ -283,6 +294,8 @@ class ServerController:
                     pending=bool(unfinished)
                     uncertain=any(not self._continuable_pending(self.host,d) for d in unfinished)
                     target_busy=busy and any(d['target_id']==target for d in unfinished)
+                    feed_ready=(self.host.control()['configuration']['schema_version']!=2
+                        or self._message_feeds.get(target)==self.host.target_token(target))
                     row=None if c is None else self.host.managed_command(c['id'])
                 allowed=(snapshot['enabled'] and i['can_start'] and c is not None
                     and c['status'] in ('accepted','complete') and c['action']!='stop'
@@ -300,7 +313,7 @@ class ServerController:
                     i=self._report(i,'starting',False)
                     admissions[target]=self._normalized(i,c)
                 elif local['enabled'] and allowed:
-                    self._report(i,'busy' if target_busy else 'ready',False)
+                    self._report(i,'busy' if target_busy else 'ready' if feed_ready else 'starting',False)
                 elif busy:
                     self._report(i,'stopping',False,'stopped')
                 else:

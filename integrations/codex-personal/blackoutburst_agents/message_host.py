@@ -58,8 +58,9 @@ def default_message_resources(host,target,config,cancelled):
 
 
 class MessageHostSupervisor:
-    def __init__(self,host,*,resource_factory=default_message_resources):
+    def __init__(self,host,*,resource_factory=default_message_resources,on_feed_ready=None):
         self.host,self.resource_factory=host,resource_factory
+        self.on_feed_ready=on_feed_ready
 
     def receipt(self,status,reason,**values):
         return {'status':status,'reason':reason,'remaining_dispatches':self.host.control()['remaining'],**values}
@@ -117,6 +118,8 @@ class MessageHostSupervisor:
                     if not reader['feed_id']:
                         reader=journal.bind_feed(reader['id'],client.call('open_message_feed',{
                             'idempotency_key':reader['opening_key'],'start_at':reader['start_at'],'limit':reader['page_limit']}))
+                    if target_cancelled():return self.receipt('disabled','stopped')
+                    if self.on_feed_ready is not None:self.on_feed_ready(target['id'],token)
                     for page in range(config['max_pages']):
                         delivery=journal.pending(reader['id'])
                         if delivery is None:
