@@ -193,7 +193,39 @@ def migrate_message_runtime(db):
         db.execute(statement)
 
 
+def migrate_runtime_admission_refusals(db):
+    """Schema 15: immutable non-admission tombstones, never executions."""
+    db.execute('''CREATE TABLE runtime_admission_refusals(
+        owner_id TEXT NOT NULL REFERENCES owners(id),
+        device_id TEXT NOT NULL REFERENCES devices(id),
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        agent_id TEXT NOT NULL REFERENCES agent_profiles(id),
+        profile_version INTEGER NOT NULL CHECK(profile_version>0),
+        idempotency_key TEXT NOT NULL, work_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256)=64),
+        response TEXT NOT NULL CHECK(length(CAST(response AS BLOB))<=4096),
+        PRIMARY KEY(owner_id,device_id,session_id,idempotency_key),
+        UNIQUE(owner_id,work_id,turn_id))''')
+
+
+def _message_capacity_refusal(actor,profile,arguments):
+    request={'method':'reserve_message_execution','arguments':arguments}
+    return {'reserved':False,'refusal':{
+        'schema':'message-runtime-admission-refusal-v1','reason':'capacity_exhausted',
+        'request_sha256':hashlib.sha256(_json(request).encode()).hexdigest(),
+        'owner_id':actor['owner_id'],'agent_id':profile['id'],
+        'device_id':actor['device_id'],'profile_version':profile['version'],
+        'session_id':actor['session_id']}}
+
+
 class RuntimeMixin:
+    @staticmethod
+    def _runtime_denial(db,actor,values):
+        return db.execute('''SELECT * FROM runtime_admission_refusals WHERE owner_id=? AND
+            ((device_id=? AND session_id=? AND idempotency_key=?) OR (work_id=? AND turn_id=?)) LIMIT 2''',
+            (actor['owner_id'],actor['device_id'],actor['session_id'],values['idempotency_key'],
+             values['work_id'],values['turn_id'])).fetchall()
+
     def _runtime_review_prerequisites(self, db, ticket_id):
         """Bounded proof of each current prerequisite's latest status audit.
 
@@ -484,6 +516,8 @@ class RuntimeMixin:
                 actor, profile, review = self._runtime_review_authorize(db, actor, project_id, ticket_id)
             else:
                 actor, profile = self._runtime_authorize(db, actor, project_id, ticket_id)
+            if self._runtime_denial(db,actor,values):
+                _fail('execution_admission_refused',409)
             payload = _json(values | {'agent_id': profile['id'], 'profile_version': profile['version']}
                             | ({'review_scope': review} if review is not None else {}))
             existing = db.execute('''SELECT * FROM runtime_executions
@@ -528,7 +562,9 @@ class RuntimeMixin:
             return {'reserved': True, 'execution': self._execution_view(db, row), 'retried': False}
 
     def reserve_message_execution(self, actor, idempotency_key, thread_id, message_id,
-                                  source_sha256, work_id, turn_id, provider, model):
+                                  source_sha256, work_id, turn_id, provider, model, *, refusal_mode=None):
+        if refusal_mode is not None and (type(refusal_mode) is not str or refusal_mode != 'capacity-v1'):
+            _fail('invalid_refusal_mode')
         values = {key:_identifier(value,key,model=key in {'provider','model'})
             for key,value in locals().copy().items() if key in {
                 'idempotency_key','thread_id','message_id','work_id','turn_id','provider','model'}}
@@ -541,10 +577,33 @@ class RuntimeMixin:
             existing = db.execute('''SELECT * FROM runtime_executions WHERE owner_id=?
                 AND device_id=? AND session_id=? AND idempotency_key=?''',
                 (actor['owner_id'],actor['device_id'],actor['session_id'],idempotency_key)).fetchone()
+            denied=self._runtime_denial(db,actor,values)
             if existing:
+                if denied:
+                    _fail('execution_admission_conflict',409)
                 if existing['payload'] != payload:
                     _fail('execution_key_conflict',409)
                 return {'reserved':True,'execution':self._execution_view(db,existing),'retried':True}
+            if denied:
+                if len(denied)!=1:
+                    _fail('execution_key_conflict',409)
+                if db.execute('SELECT 1 FROM runtime_executions WHERE owner_id=? AND work_id=? AND turn_id=?',
+                        (actor['owner_id'],work_id,turn_id)).fetchone():
+                    _fail('execution_admission_conflict',409)
+                denied=denied[0]
+                exact = {key:actor[key] for key in ('owner_id','device_id','session_id')} | {
+                    key:values[key] for key in ('idempotency_key','work_id','turn_id')} | {
+                    'agent_id':profile['id'],'profile_version':profile['version'],
+                    'payload_sha256':hashlib.sha256(payload.encode()).hexdigest()}
+                if any(denied[key]!=value for key,value in exact.items()):
+                    _fail('execution_key_conflict',409)
+                if refusal_mode!='capacity-v1':
+                    _fail('execution_admission_refused',409)
+                response=_message_capacity_refusal(actor,profile,{**values,'source_sha256':source_sha256,
+                    'session_id':actor['session_id'],'refusal_mode':refusal_mode})
+                if denied['response']!=_json(response):
+                    _fail('execution_admission_conflict',409)
+                return response
             # Dedicated family sessions execute their ticket controller only,
             # including when the addressed message belongs to that ticket.
             self._delegation_claim_scope(db,actor,None)
@@ -557,6 +616,18 @@ class RuntimeMixin:
             count = db.execute("SELECT COUNT(*) FROM runtime_executions WHERE owner_id=? AND state!='finished'",
                                (actor['owner_id'],)).fetchone()[0]
             if count >= limits['max_concurrent']:
+                if refusal_mode == 'capacity-v1':
+                    # This exact authenticated call is rejected before INSERT.
+                    # Do not turn an exception/lookup absence into this proof.
+                    arguments = {**values, 'source_sha256': source_sha256,
+                        'session_id': actor['session_id'], 'refusal_mode': refusal_mode}
+                    response = _message_capacity_refusal(actor,profile,arguments)
+                    db.execute('''INSERT INTO runtime_admission_refusals(
+                        owner_id,device_id,session_id,agent_id,profile_version,idempotency_key,
+                        work_id,turn_id,payload_sha256,response) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                        (actor['owner_id'],actor['device_id'],actor['session_id'],profile['id'],profile['version'],
+                         idempotency_key,work_id,turn_id,hashlib.sha256(payload.encode()).hexdigest(),_json(response)))
+                    return response
                 _fail('capacity_exhausted',409)
             self._delegation_runtime_check(db,actor,linked['ticket_id'],provider,model)
             identifier,now = secrets.token_hex(16),time.time()

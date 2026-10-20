@@ -15,11 +15,11 @@ from .work_journal import JournalError, _encode, _private_file, _scope
 
 
 APPLICATION_ID = 0x42425254
-PHASES = frozenset({'reserving', 'reserved', 'starting', 'active', 'finished', 'needs_review'})
+PHASES = frozenset({'reserving', 'reserved', 'starting', 'active', 'finished', 'needs_review', 'not_admitted'})
 COLUMNS = ('id','key','configuration','phase','receipt','revision','start_confirmed','created_at','updated_at')
-NEXT = {'reserving': {'reserved', 'needs_review'}, 'reserved': {'starting', 'needs_review'},
+NEXT = {'reserving': {'reserved', 'needs_review', 'not_admitted'}, 'reserved': {'starting', 'needs_review'},
     'starting': {'active', 'needs_review'}, 'active': {'finished', 'needs_review'},
-    'needs_review': {'finished'}, 'finished': set()}
+    'needs_review': {'finished'}, 'finished': set(), 'not_admitted': set()}
 
 
 class RuntimeJournal:
@@ -40,13 +40,20 @@ class RuntimeJournal:
             self.db = sqlite3.connect(path, isolation_level=None, timeout=5)
             self.db.row_factory = sqlite3.Row
             version = self.db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2): raise JournalError('unsupported_runtime_journal')
+            if version not in (0, 1, 2, 3): raise JournalError('unsupported_runtime_journal')
             if version == 0:
                 if self.db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                     raise JournalError('runtime_journal_corrupt')
             elif (self.db.execute('PRAGMA application_id').fetchone()[0] != APPLICATION_ID
                     or tuple(row['name'] for row in self.db.execute('PRAGMA table_info(executions)'))!=COLUMNS):
                 raise JournalError('runtime_journal_corrupt')
+            if version in (1,2) and self.db.execute("SELECT 1 FROM executions WHERE phase='not_admitted' LIMIT 1").fetchone():
+                raise JournalError('runtime_journal_corrupt')
+            if version==3:
+                # Read streaming; preserve every old identity/receipt unchanged.
+                # In particular a reopened negative proof is never just a bit.
+                for row in self.db.execute('SELECT * FROM executions'):
+                    self.decode(row)
             self.db.execute('PRAGMA journal_mode=DELETE')
             self.db.execute('PRAGMA synchronous=FULL')
             if version == 0:
@@ -115,7 +122,15 @@ class RuntimeJournal:
                     or any(type(value[k]) not in (float,int) or not math.isfinite(value[k]) for k in ('created_at','updated_at'))
                     or str(uuid.UUID(value['id'])) != value['id']): raise ValueError
             value['configuration'] = config
+            if value['phase']=='not_admitted' and (type(value['receipt']) is not str or len(value['receipt'].encode())>4096):
+                raise ValueError
             value['receipt'] = json.loads(value['receipt']) if value['receipt'] else None
+            if value['phase']=='not_admitted':
+                from .runtime_admission import refusal_arguments,validate_refusal
+                if config['scope'].get('scope_kind')!='message' or value['start_confirmed']:
+                    raise ValueError
+                validate_refusal({'reserved':False,'refusal':value['receipt']},refusal_arguments(config,value['key']),
+                    owner_id=config['scope']['owner_id'],agent_id=config['scope']['agent_id'])
             return value
         except (ValueError, TypeError, KeyError, AttributeError, RecursionError): raise JournalError('runtime_journal_corrupt') from None
 
@@ -135,7 +150,8 @@ class RuntimeJournal:
             if configuration['provider'] == 'local_broker':
                 # Old readers must refuse the provider extension explicitly,
                 # rather than mistake a local-tool record for model capacity.
-                self.db.execute('PRAGMA user_version=2')
+                if self.db.execute('PRAGMA user_version').fetchone()[0]<2:
+                    self.db.execute('PRAGMA user_version=2')
             identifier, now = str(uuid.uuid4()), time.time()
             self.db.execute('INSERT INTO executions VALUES(?,?,?,?,?,?,?,?,?)',
                 (identifier, key, encoded, 'reserving', None, 1, 0, now, now))
@@ -156,9 +172,23 @@ class RuntimeJournal:
             current = self.get(identifier)
             if current['revision'] != revision: raise JournalError('revision_conflict')
             if current['phase'] == 'finished': raise JournalError('runtime_already_finished')
+            if current['phase'] == 'not_admitted': raise JournalError('runtime_already_refused')
             if phase != current['phase'] and phase not in NEXT[current['phase']]:
                 raise JournalError('invalid_runtime_phase')
             if start_confirmed and phase != 'active': raise JournalError('invalid_runtime_phase')
+            if phase=='not_admitted':
+                from .runtime_admission import refusal_arguments,validate_refusal
+                try:
+                    config=current['configuration']
+                    if (current['phase']!='reserving' or current['receipt'] is not None
+                            or current['start_confirmed'] or config['scope'].get('scope_kind')!='message'):
+                        raise ValueError
+                    receipt=validate_refusal({'reserved':False,'refusal':receipt},refusal_arguments(config,current['key']),
+                        owner_id=config['scope']['owner_id'],agent_id=config['scope']['agent_id'])
+                except (ValueError,TypeError,KeyError):raise JournalError('runtime_refusal_invalid') from None
+                # Atomic schema marker + negative receipt. Old readers refuse;
+                # existing rows/receipts/identities are never rewritten.
+                self.db.execute('PRAGMA user_version=3')
             if phase=='active' and not (current['start_confirmed'] or start_confirmed):
                 raise JournalError('runtime_start_unconfirmed')
             if phase=='finished' and (not isinstance(receipt,dict) or receipt.get('state')!='finished'

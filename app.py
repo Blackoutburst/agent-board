@@ -889,10 +889,11 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                                         thread_id: RuntimeOpaque, message_id: RuntimeOpaque,
                                         source_sha256: Annotated[str, Field(strict=True, pattern=r'^[0-9a-f]{64}$')],
                                         work_id: RuntimeOpaque, turn_id: RuntimeOpaque,
-                                        provider: RuntimeModel, model: RuntimeModel) -> dict:
+                                        provider: RuntimeModel, model: RuntimeModel,
+                                        refusal_mode: Literal['capacity-v1'] | None = None) -> dict:
         """Reserve shared owner capacity for one reply to an exact addressed human message, without a ticket claim. Requires current read/reply access and get_message's source_sha256. Retain the same retry key after uncertainty. This grants no ticket work, shell, publication or automatic launch permission."""
         return board.reserve_message_execution(execution_actor(session_id),idempotency_key,thread_id,
-            message_id,source_sha256,work_id,turn_id,provider,model)
+            message_id,source_sha256,work_id,turn_id,provider,model,refusal_mode=refusal_mode)
 
     @mcp.tool()
     async def lookup_execution(session_id: RuntimeOpaque, idempotency_key: RuntimeOpaque) -> dict:

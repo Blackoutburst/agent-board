@@ -20,6 +20,10 @@ class RuntimeControlError(StoreError):
     pass
 
 
+class RuntimeAdmissionRefused(RuntimeControlError):
+    """One durable negative admission; no execution/cleanup receipt exists."""
+
+
 class RuntimeGuard:
     def __init__(self, journal, client, scope, *, clock=time.monotonic):
         self.journal, self.client, self.scope, self.clock = journal, client, dict(scope), clock
@@ -84,9 +88,13 @@ class RuntimeGuard:
             receipt if receipt is not None else self.operation.get('receipt'),start_confirmed=start_confirmed)
 
     def review(self):
-        if self.operation and self.operation['phase']!='finished':
+        if self.operation and self.operation['phase'] not in ('finished','not_admitted'):
             try:self.save('needs_review')
             except Exception:pass
+
+    def reject_admission(self,result):
+        # Only the explicit message protocol implements negative admission.
+        return None
 
     def before(self, work, turn_id):
         self.control_failed=False
@@ -97,6 +105,7 @@ class RuntimeGuard:
             config=self.operation['configuration']
             name, arguments = self.reservation(config)
             result=self.client.call(name,arguments)
+            self.reject_admission(result)
             if not isinstance(result,dict) or result.get('reserved') is not True or type(result.get('retried')) is not bool:
                 raise RuntimeControlError('runtime_reservation_unconfirmed')
             receipt=self.metadata(result.get('execution'))
@@ -110,6 +119,8 @@ class RuntimeGuard:
                 raise RuntimeControlError('runtime_start_unconfirmed')
             self.save('active',started,start_confirmed=True)
             self.last_heartbeat=self.clock()
+        except RuntimeAdmissionRefused:
+            raise
         except Exception:
             self.review()
             raise RuntimeControlError('runtime_start_requires_review') from None
@@ -135,6 +146,8 @@ class RuntimeGuard:
         config=self.configuration(work,turn_id)
         if self.operation is None or self.operation['configuration']!=config:
             raise RuntimeControlError('runtime_scope_mismatch')
+        if self.operation['phase']=='not_admitted':
+            raise RuntimeControlError('runtime_not_admitted')
         try:
             found=self.client.call('lookup_execution',{'idempotency_key':self.operation['key']})
             if not isinstance(found,dict) or found.get('found') is not True:
@@ -175,4 +188,9 @@ class RuntimeGuard:
     def confirm_cached(self, work, turn_id, result):
         self.operation=self.journal.find(self.configuration(work,turn_id))
         if self.operation is None:raise RuntimeControlError('runtime_cached_turn_unregistered')
+        if self.operation['phase']=='not_admitted':
+            if result!={'status':'blocked','reason':'runtime_capacity_exhausted','text':'','uncertain':False,
+                    'verification':{'runtime_not_admitted':True}}:
+                raise RuntimeControlError('runtime_refusal_result_conflict')
+            raise RuntimeAdmissionRefused('runtime_capacity_exhausted')
         return self.finish(work,turn_id,result)

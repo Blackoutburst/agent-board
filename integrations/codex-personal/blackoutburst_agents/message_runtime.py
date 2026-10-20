@@ -3,7 +3,8 @@ import copy
 import re
 from .board_reader import BoardReadError
 from .runtime_client import RuntimeBoardClient, _identifier
-from .runtime_guard import RuntimeGuard, RuntimeControlError
+from .runtime_guard import RuntimeGuard, RuntimeControlError, RuntimeAdmissionRefused
+from .runtime_admission import REFUSAL_MODE, validate_refusal
 from .runtime_journal import RuntimeJournal
 from .message_scope import validate_scope, local_agent
 
@@ -21,13 +22,32 @@ class MessageRuntimeClient(RuntimeBoardClient):
                     raise BoardReadError('invalid_arguments')
             else:_identifier(value)
         self._initialize()
-        return self._tool(name,{**copy.deepcopy(args),'session_id':self.session_id})
+        arguments={**copy.deepcopy(args),'session_id':self.session_id,'refusal_mode':REFUSAL_MODE}
+        result=self._tool(name,arguments)
+        if type(result) is dict and result.get('reserved') is False:
+            try:validate_refusal(result,arguments)
+            except (ValueError,TypeError,KeyError):raise BoardReadError('runtime_refusal_invalid') from None
+        return result
 
 
 class MessageRuntimeGuard(RuntimeGuard):
     # Set by the message worker for a new admission. Cached cleanup intentionally
     # needs no context read, because it never sends a prompt or starts inference.
     before_transport=None
+    admission_identity=None
+
+    def reject_admission(self,result):
+        if type(result) is dict and result.get('reserved') is False:
+            config=self.operation['configuration']
+            from .runtime_admission import refusal_arguments
+            identity=self.admission_identity
+            if (type(identity) is not dict or set(identity)!={'device_id','profile_version'}
+                    or type(identity['device_id']) is not str or type(identity['profile_version']) is not int):
+                raise RuntimeControlError('runtime_refusal_identity_unconfirmed')
+            proof=validate_refusal(result,refusal_arguments(config,self.operation['key']),
+                owner_id=self.scope['owner_id'],agent_id=self.scope['agent_id'],**identity)
+            self.save('not_admitted',proof)
+            raise RuntimeAdmissionRefused('runtime_capacity_exhausted')
 
     def before(self,work,turn_id):
         if not callable(self.before_transport):raise RuntimeControlError('message_context_guard_required')
