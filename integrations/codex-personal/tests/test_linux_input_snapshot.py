@@ -292,7 +292,7 @@ class LinuxInputSnapshotTests(unittest.TestCase):
         self.assertRefused(lambda: validate_planner_snapshot(self.planner, manifest), 'linux_input_depth_exceeded')
 
     def test_noncanonical_root_and_surrogate_paths_are_refused(self):
-        for root in (str(self.root) + '/', str(self.root).replace('/private/', '//private/'),
+        for root in (str(self.root) + '/', '//' + str(self.root).lstrip('/'),
                      str(self.root) + '/./child', str(self.root) + '/\ud800'):
             manifest = self.broker.manifest; manifest['root'] = root
             self.assertRefused(lambda: validate_planner_snapshot(self.planner, manifest))

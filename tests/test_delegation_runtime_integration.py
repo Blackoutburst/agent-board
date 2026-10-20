@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from legacy_schema_fixtures import remove_server_schema14_tables
+
 from board import Board, BoardError
 from backup import create_backup, restore_backup
 from test_delegation_families import family, open_family, member, reject
@@ -213,6 +215,7 @@ def test_schema_ten_upgrade_is_atomic_and_preserves_old_runtime_rows(family,monk
     f=family;b=f['b'];parent=f['parent']
     old=b.reserve_execution(f['actors'][0],'old',f['project']['id'],parent['id'],'old-work','old-turn','codex_chatgpt','fixture-model')['execution']
     with b._tx() as db:
+        remove_server_schema14_tables(db)
         db.execute('DROP TABLE mcp_page_cursors');db.execute('ALTER TABLE message_feeds DROP COLUMN pending_view');db.execute('ALTER TABLE message_feeds DROP COLUMN pending_compact_json');
         db.execute('DROP TABLE delegation_members');db.execute('DROP TABLE delegation_families');db.execute('PRAGMA user_version=10')
         before=[tuple(row) for row in db.execute('SELECT * FROM runtime_executions')]
@@ -228,13 +231,13 @@ def test_schema_ten_upgrade_is_atomic_and_preserves_old_runtime_rows(family,monk
     restored=Board(b.data_dir)
     assert restored.lookup_execution(f['actors'][0],'old')['execution']==old
     with restored._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==13
+        assert db.execute('PRAGMA user_version').fetchone()[0]==14
         assert not db.execute('PRAGMA foreign_key_check').fetchall()
 
 
 def test_backup_restores_family_claims_pending_runtime_and_private_plan(family,tmp_path):
     f=family;b=f['b'];opened=open_family(f);child=claimed(f,opened);row=execution(f,child)
-    archive=tmp_path/'family.zip';assert create_backup(b.data_dir,archive)['schema']['user_version']==13
+    archive=tmp_path/'family.zip';assert create_backup(b.data_dir,archive)['schema']['user_version']==14
     destination=tmp_path/'restored';restore_backup(archive,destination);restored=Board(destination)
     assert restored.get_delegation_family(f['actors'][0],opened['id'])==opened
     assert restored.lookup_execution(f['actors'][1],'turn')['execution']==row

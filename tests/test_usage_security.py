@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+from legacy_schema_fixtures import remove_server_schema14_tables
+
 from board import Board, BoardError
 import board as board_module
 from usage_observations import TTL_SECONDS, connection_identifier
@@ -310,6 +312,7 @@ def test_v6_migration_preserves_claims_execution_and_idempotency(usage):
                                     'work', 'turn', 'codex_chatgpt', 'fixture-model')['execution']
     cursor = b.read_inbox(item['actor'])['cursor']
     with sqlite3.connect(b.db_path) as db:
+        remove_server_schema14_tables(db)
         db.execute('DROP TABLE message_feeds')
         db.execute('DROP TABLE IF EXISTS mcp_page_cursors')
         db.execute('DROP TABLE ticket_attachments')
@@ -319,7 +322,7 @@ def test_v6_migration_preserves_claims_execution_and_idempotency(usage):
         before_owners = db.execute('SELECT * FROM owners ORDER BY id').fetchall()
     reopened = Board(b.data_dir, base_url=b.base_url)
     with sqlite3.connect(b.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 14
         assert db.execute('SELECT * FROM idempotency ORDER BY 1,2').fetchall() == before_keys
         assert db.execute('SELECT * FROM owners ORDER BY id').fetchall() == before_owners
     assert reopened.get_ticket(item['actor'], ticket['id'])['ticket']['claimant'] == claimed['claimant']
@@ -331,6 +334,7 @@ def test_v6_migration_preserves_claims_execution_and_idempotency(usage):
 def test_v7_migration_failure_rolls_back_schema_and_data(usage, monkeypatch):
     b = usage['board']
     with sqlite3.connect(b.db_path) as db:
+        remove_server_schema14_tables(db)
         db.execute('DROP TABLE message_feeds')
         db.execute('DROP TABLE IF EXISTS mcp_page_cursors')
         db.execute('DROP TABLE ticket_attachments')
