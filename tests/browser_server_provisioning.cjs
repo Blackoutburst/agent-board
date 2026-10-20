@@ -105,7 +105,9 @@ const server = http.createServer(async (req, res) => {
     const posts = () => calls.filter(c => c.method !== 'GET');
     const go = async () => { await page.goto(origin + '/?page=agents'); await page.getByRole('button', { name: 'Sur le serveur', exact: true }).click(); await section().getByText(/Demandes inactives (non )?autorisées/).waitFor(); };
     const refresh = async () => { await page.getByRole('button', { name: 'Actualiser', exact: true }).click(); await section().getByText(/Demandes inactives (non )?autorisées/).waitFor(); };
-    const requestDialog = async () => { await section().getByRole('button', { name: 'Demander la préparation d’un profil', exact: true }).click(); await dialog().getByLabel('Profil souhaité').selectOption('wanted-profile'); await dialog().getByText('Fournisseur demandé : Claude Code', { exact: true }).waitFor(); };
+    const requestDialog = async () => { await section().getByRole('button', { name: 'Demander la préparation d’un profil', exact: true }).click();
+      assert.equal(await dialog().getByLabel('Profil souhaité').locator('option[value="existing-profile"]').count(), 0);
+      await dialog().getByLabel('Profil souhaité').selectOption('wanted-profile'); await dialog().getByText('Fournisseur demandé : Claude Code', { exact: true }).waitFor(); };
     const send = () => dialog().getByRole('button', { name: 'Enregistrer la demande inactive', exact: true }).click();
     await go(); assert.equal(posts().length, 0);
     assert.ok(await section().getByRole('button', { name: 'Demander la préparation d’un profil', exact: true }).isDisabled());
@@ -117,7 +119,7 @@ const server = http.createServer(async (req, res) => {
     // No implicit profile binding; the UI offers a profile navigation only.
     profiles.forEach(p => { p.bindings = []; }); await refresh();
     await section().getByRole('button', { name: 'Demander la préparation d’un profil', exact: true }).click();
-    await dialog().getByText('Il faut un profil actif', { exact: false }).waitFor();
+    await dialog().getByText('Il faut un nouveau profil actif', { exact: false }).waitFor();
     assert.match(await dialog().innerText(), /confirmez sa liaison/); assert.equal(posts().length, 1);
     await dialog().getByRole('button', { name: 'Connexions du profil : Mon relecteur', exact: false }).click();
     await dialog().getByRole('button', { name: 'Link executor', exact: true }).waitFor();
@@ -126,6 +128,14 @@ const server = http.createServer(async (req, res) => {
     await dialog().getByRole('button', { name: 'Close dialog', exact: true }).click();
     profiles.forEach(p => { p.bindings = [{ device_id: device, revoked: false }]; }); await refresh();
     checks.push('profile_binding_not_created');
+    instance.mode = 'ticket_text'; await refresh();
+    assert.ok(await section().getByRole('button', { name: 'Demander la préparation d’un profil', exact: true }).isDisabled());
+    await section().getByText('Les instances de travail sur les tickets conservent leurs commandes habituelles.', { exact: false }).waitFor();
+    assert.ok(await page.locator('[data-server-instance="instance1"]').getByRole('button', { name: 'Démarrer', exact: true }).isEnabled());
+    instance.mode = 'messages'; instance.current_command.instance_version = 1; await refresh();
+    assert.ok(await section().getByRole('button', { name: 'Demander la préparation d’un profil', exact: true }).isDisabled());
+    instance.current_command.instance_version = instance.version; await refresh();
+    checks.push('messages_only_new_profile_current_stop_pins');
     let drop = true;
     await page.route('**/api/server-hosts/host1/provisioning-requests', async route => {
       if (drop && route.request().method() === 'POST') { drop = false; await route.fetch(); await route.abort('failed'); }

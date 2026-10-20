@@ -914,18 +914,20 @@ const Workspace = (() => {
   }), "quiet");
   async function provisionRequestDialog(owner, host, profiles) {
     if (state.actor?.owner_id !== owner) return;
-    const candidates = profiles.filter(p => p.owner_id === owner && p.status === "active" && serverInteger(p.version, 1)
+    const published = new Set(host.instances.map(instance => instance.profile_id));
+    const newProfiles = profiles.filter(p => p.owner_id === owner && p.status === "active" && !published.has(p.id));
+    const candidates = newProfiles.filter(p => serverInteger(p.version, 1)
       && Object.hasOwn(provisionProviders, p.preferred_provider) && provisionModel(p.preferred_model || null)
       && Array.isArray(p.bindings) && p.bindings.some(binding => binding.device_id === host.device_id && binding.revoked === false));
     if (!candidates.length) {
-      serverModal("Choisir un profil déjà lié", el("div", {}, el("p", {}, "Il faut un profil actif, un fournisseur souhaité et une liaison explicite à cet appareil. Cette demande ne crée pas la liaison."),
+      serverModal("Choisir un nouveau profil déjà lié", el("div", {}, el("p", {}, "Il faut un nouveau profil actif, un fournisseur souhaité et une liaison explicite à cet appareil. Un profil déjà hébergé ne constitue pas une nouvelle cible. Cette demande ne crée pas la liaison."),
         el("p", {}, "Ouvrez les connexions du profil, choisissez l’appareil de votre serveur puis confirmez sa liaison. Revenez dans « Sur le serveur » et actualisez pour relire les droits."),
-        el("div", { class: "button-row" }, profiles.filter(p => p.owner_id === owner && p.status === "active").map(p => provisionProfileLink(owner, p))),
+        el("div", { class: "button-row" }, newProfiles.map(p => provisionProfileLink(owner, p))),
         btn("Voir mes profils", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "profiles"; await agents(); })))); return;
     }
     const picker = select("Profil souhaité", "profile_id", candidates.map(p => [p.id, `${p.name} · v${p.version}`]));
     const details = el("div", { class: "callout", role: "status" });
-    const unlinked = profiles.filter(p => p.owner_id === owner && p.status === "active" && !candidates.some(item => item.id === p.id));
+    const unlinked = newProfiles.filter(p => !candidates.some(item => item.id === p.id));
     const form = el("form", {}, el("p", {}, "Enregistrez une demande de préparation pour répondre aux messages. Elle restera inactive : aucun fichier, agent, processus ou budget de modèle ne sera créé."),
       picker, details, el("p", {}, "Tant que cette demande existe, les démarrages et redémarrages de cet hôte sont bloqués. Seule son annulation explicite lèvera ce blocage."), serverButtons("Enregistrer la demande inactive"));
     if (unlinked.length) form.append(el("details", {}, el("summary", {}, "Mon profil n’apparaît pas"),
@@ -980,12 +982,13 @@ const Workspace = (() => {
       barrierUpdates.forEach(update => update(Boolean(active)));
       const stopped = host.instances.length > 0 && host.instances.length < 16 && host.instances.every(instance => {
         const command = serverCommand(instance);
-        return instance.desired_state === "stopped" && instance.observed_state === "stopped" && instance.cleanup_confirmed === true
-          && command?.action === "stop" && command.status === "complete";
+        return instance.mode === "messages" && instance.desired_state === "stopped" && instance.observed_state === "stopped" && instance.cleanup_confirmed === true
+          && command?.action === "stop" && command.status === "complete" && command.instance_version === instance.version
+          && command.generation === instance.generation && command.launchspec_sha256 === instance.launchspec_sha256;
       });
       const rows = el("div", {});
       const renderRow = value => {
-        const profile = profiles.find(p => p.id === value.profile_id);
+        const profile = profiles.find(p => p.owner_id === owner && p.id === value.profile_id);
         return el("article", { class: "profile-section", "data-provision-request": value.request_id },
           el("h4", {}, profile?.name || "Profil souhaité", ` · v${value.profile_version}`),
           badge(value.state === "requested" ? "Demandée · inactive" : "Demande annulée", value.barrier_held ? "status-blocked" : ""),
@@ -999,9 +1002,10 @@ const Workspace = (() => {
       section.replaceChildren(...[heading, el("p", {}, "1. Choisissez un profil et ses préférences. 2. Autorisez séparément les demandes. 3. Enregistrez une demande inactive."),
         el("p", { class: "small muted" }, "La préparation effective et la connexion personnelle viendront ensuite. Cette étape ne crée aucune instance et ne rend aucun agent prêt."),
         el("p", {}, grant.enabled ? "Demandes inactives autorisées pour cet appareil." : "Demandes inactives non autorisées pour cet appareil."),
-        el("div", { class: "button-row" }, btn(grant.enabled ? "Retirer l’autorisation de demande" : "Autoriser les demandes", () => provisionGrantDialog(owner, host, grant), "quiet", { disabled: Boolean(pending) || host.revoked_at !== null }),
+        el("div", { class: "button-row" }, btn(grant.enabled ? "Retirer l’autorisation de demande" : "Autoriser les demandes", () => provisionGrantDialog(owner, host, grant), "quiet", { disabled: Boolean(pending) || host.revoked_at !== null || host.instances.length === 0 }),
           btn("Demander la préparation d’un profil", guard(() => provisionRequestDialog(owner, host, profiles)), "", { disabled: Boolean(pending) || Boolean(active) || !grant.enabled || !stopped || host.revoked_at !== null })),
-        !stopped && !active ? el("p", { class: "small muted" }, host.instances.length === 16 ? "Cet hôte a déjà 16 profils. Aucune place de préparation n’est disponible."
+        !stopped && !active ? el("p", { class: "small muted" }, host.instances.some(instance => instance.mode !== "messages") ? "Ces demandes concernent seulement les hôtes destinés aux réponses aux messages. Les instances de travail sur les tickets conservent leurs commandes habituelles."
+          : host.instances.length === 16 ? "Cet hôte a déjà 16 profils. Aucune place de préparation n’est disponible."
           : "Chaque instance doit avoir un arrêt demandé puis confirmé avant une demande. La liaison initiale du serveur se prépare séparément.") : null,
         pending ? el("div", { class: "callout", role: "status" }, el("p", {}, "Une réponse reste à confirmer. Aucune nouvelle demande ne sera envoyée automatiquement."),
           ["prepared", "uncertain"].includes(pending.status) ? btn("Réessayer la même préparation", guard(() => sendProvisionRecord(owner, host, pending))) : null) : null,
