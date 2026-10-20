@@ -427,6 +427,72 @@ def test_historical_schema_validation_is_independent_of_current_configuration(ho
         assert tuple(host._db.iterdump()) == before
 
 
+@pytest.mark.parametrize('event,mutation', [
+    ('AFTER INSERT', 'enabled=1'),
+    ("AFTER UPDATE OF state", 'remaining=1'),
+])
+def test_persistent_triggers_cannot_change_live_state_during_staging(host, event, mutation):
+    # Independent review reproduced both effects with otherwise exact tables.
+    with locked(host):
+        stage(host)
+        host._db.execute(f'CREATE TRIGGER hostile_stage {event} ON host_append_stages '
+                         f'BEGIN UPDATE control SET {mutation} WHERE id=1; END')
+        before = tuple(host._db.iterdump())
+        with pytest.raises(HostError, match='host_append_schema_invalid'):
+            stage(host, key='new-stage')
+        assert tuple(host._db.iterdump()) == before
+
+
+@pytest.mark.parametrize('table', ['host_append_stage_meta','host_append_stages'])
+def test_temporary_triggers_on_main_tables_are_refused(host, table):
+    with locked(host):
+        stage(host)
+        host._db.execute(f'CREATE TEMP TRIGGER hostile_temp AFTER INSERT ON main.{table} '
+                         'BEGIN UPDATE control SET enabled=1 WHERE id=1; END')
+        before = live(host)
+        with pytest.raises(HostError, match='host_append_schema_invalid'):
+            stage(host, key='temporary-trigger')
+        assert live(host) == before
+
+
+def test_trigger_added_between_intent_and_result_is_refused_before_second_write(host, monkeypatch):
+    original = host._finish_messages_append_stage
+    def changed(attempt):
+        with HostJournal(host.directory) as other:
+            other._db.execute("CREATE TRIGGER late_stage AFTER UPDATE OF state ON host_append_stages "
+                              "BEGIN UPDATE control SET remaining=1 WHERE id=1; END")
+        return original(attempt)
+    monkeypatch.setattr(host, '_finish_messages_append_stage', changed)
+    before = live(host)
+    with locked(host), pytest.raises(HostError, match='host_append_schema_invalid'):
+        stage(host)
+    assert live(host) == before
+    row = host._db.execute('SELECT state,result_json FROM host_append_stages').fetchone()
+    assert tuple(row) == ('intent','{}')
+    assert host._append_active_attempt is None
+
+
+@pytest.mark.parametrize('kind', ['TABLE','VIEW'])
+def test_temporary_table_or_view_cannot_substitute_a_nondurable_stage(host, kind):
+    with locked(host):
+        stage(host)
+        host._db.execute(f'CREATE TEMP {kind} host_append_stages AS SELECT * FROM main.host_append_stages')
+        before = live(host)
+        with pytest.raises(HostError, match='host_append_schema_invalid'):
+            stage(host, key='not-durable')
+        assert live(host) == before
+        assert host._db.execute('SELECT COUNT(*) FROM main.host_append_stages').fetchone()[0] == 1
+        assert host._db.execute('SELECT COUNT(*) FROM temp.host_append_stages').fetchone()[0] == 1
+
+
+def test_main_view_collision_is_refused_without_schema_creation(host):
+    host._db.execute('CREATE VIEW host_append_stages AS SELECT 1 AS sentinel')
+    before = tuple(host._db.iterdump())
+    with locked(host), pytest.raises(HostError, match='host_append_schema_invalid'):
+        stage(host)
+    assert tuple(host._db.iterdump()) == before
+
+
 def test_no_credentials_provider_or_process_reads_and_capacity_is_bounded(host, monkeypatch):
     import socket, subprocess
     from blackoutburst_agents import host_config, message_config

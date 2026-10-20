@@ -57,6 +57,17 @@ def _hashed(data):
 
 class HostAppendStageMixin:
     def _append_schema(self, db, *, create=False):
+        # Unqualified SQL below must resolve to the fixed main tables, and no
+        # insert/update may carry an unrecognized side effect into live state.
+        if (db.execute("SELECT 1 FROM temp.sqlite_master WHERE name COLLATE NOCASE IN (?,?) LIMIT 1",
+                       (_META, _ROWS)).fetchone()
+                or db.execute("SELECT 1 FROM main.sqlite_master WHERE type='view' AND name COLLATE NOCASE IN (?,?) LIMIT 1",
+                              (_META, _ROWS)).fetchone()):
+            raise HostError('host_append_schema_invalid')
+        for schema in ('main', 'temp'):
+            if db.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='trigger' AND tbl_name COLLATE NOCASE IN (?,?) LIMIT 1",
+                          (_META, _ROWS)).fetchone():
+                raise HostError('host_append_schema_invalid')
         names = {row[0] for row in db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)", (_META, _ROWS))}
         if not names and create:

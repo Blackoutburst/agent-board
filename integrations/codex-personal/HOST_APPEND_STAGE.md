@@ -33,7 +33,11 @@ application, jamais des preuves produites ici.
 
 Les deux tables optionnelles sont versionnées explicitement en version 1.
 Leur forme SQL exacte, métadonnée de version et au plus 32 lignes sont validées
-avant toute utilisation. Les tailles sont contrôlées en SQLite avant adoption
+avant toute utilisation. Chaque phase d’écriture refuse les triggers des deux
+tables, dans les schémas principal et temporaire, ainsi qu’une vue principale
+ou tout objet temporaire qui masquerait leurs noms. Aucune écriture ne doit
+activer un effet implicite ni remplacer l’intention durable par une ligne
+temporaire. Les tailles sont contrôlées en SQLite avant adoption
 des textes JSON ; chaque ligne est lue et décodée de manière bornée. Le schéma
 de chaque candidat historique reste complet, normalisé et lié à deux empreintes
 SHA-256 valides, même si son checksum et son résultat ont été recalculés. Cette
