@@ -339,6 +339,7 @@
     "tests/browser_provider_onboarding.cjs": "cfc071239d65c8b25e8538856a4a5cf3f045f9626c6653cbc59d53a7862e013d",
     "tests/browser_requests.cjs": "7c3c77ee30357cdc8b603345ff085a22e962be523f34d4a1fb569885dfda443f",
     "tests/browser_runtime.cjs": "a6857c0eb04dc0e815ff4bb071d881f6974363a407392aaff9c0bd4939aaf3cc",
+    "tests/browser_server_capacity_async.cjs": "13cb3766159162d20ce08eddc92b22ab6ee47928cb11de796ab96e2f25c6be5e",
     "tests/browser_server_instances.cjs": "d6521c594cef792713c825b05d84bee111959a970f0b814414fb9adf57eedf21",
     "tests/browser_sidebar.cjs": "fdaa6e446387be9be07761d3839131f3ff2468e6e0b8727f42fa8f01344de74a",
     "tests/connector_smoke.py": "db164689da35f076c45cf7ab4a2c1ddb047f6457361cc25e845c894a0741e275",
@@ -520,6 +521,6 @@
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "3c52312a7e5a56c8c72ed353bb9129fb03fae9ed48591bba26bf070a7111a733"
+    "web/workspace.js": "324c01bdd8ff1a274571b9bdc9044684645173b50afd242da7e1c90d8dca6bbd"
   }
 }

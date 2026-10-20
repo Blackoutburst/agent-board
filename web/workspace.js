@@ -829,10 +829,12 @@ const Workspace = (() => {
           host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data, capacityUpdates)))
             : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent.")))
           : box("Aucun serveur lié", "Choisissez un appareil déjà connecté à votre compte pour héberger vos profils.", btn("Lier mon serveur", guard(() => serverHostDialog(owner, settings.devices)), "primary"))));
-      const capacity = await capacityRead;
-      if (request !== state.request || state.actor?.owner_id !== owner || !capacityPanel.isConnected) return;
-      capacityPanel.replaceWith(serverCapacityPanel(owner, capacity));
-      capacityUpdates.forEach(update => update(capacity));
+      // This optional hint must not hold agents() or command feedback open.
+      void capacityRead.then(capacity => {
+        if (request !== state.request || state.actor?.owner_id !== owner || !capacityPanel.isConnected) return;
+        capacityPanel.replaceWith(serverCapacityPanel(owner, capacity));
+        capacityUpdates.forEach(update => update(capacity));
+      }).catch(() => {});
     } catch (failure) {
       if (request !== state.request || state.actor?.owner_id !== owner) return;
       loading.replaceWith(el("div", { class: "callout", role: "alert" }, el("strong", {}, "Instances indisponibles"), el("p", {}, "Les commandes restent désactivées. Actualisez pour charger l’état et retrouver le suivi de vos demandes.")));
