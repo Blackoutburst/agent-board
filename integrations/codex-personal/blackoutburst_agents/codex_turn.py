@@ -19,7 +19,8 @@ from typing import Callable
 import uuid
 
 from .subscription_probe import (
-    ProbeSettings, inspect_cli, sanitized_environment, validate_executable,
+    ProbeSettings, _is_completed_error_item, inspect_cli, sanitized_environment,
+    validate_executable,
 )
 
 _PROMPT_LIMIT = 65536
@@ -274,6 +275,12 @@ def execute_turn(
             return _error_category(line.decode("utf-8", "replace"))
         if turn_completed:
             return "protocol_error"
+        if (kind in ("item.started", "item.updated", "item.completed")
+                and isinstance(event.get("item"), dict)
+                and event["item"].get("type") == "error"):
+            # A diagnostic item may precede the session. It cannot establish
+            # one or bypass a terminal failure, valid reply, exit or cleanup.
+            return None if _is_completed_error_item(event) else "protocol_error"
         if kind == "thread.started":
             found = _uuid(event.get("thread_id"))
             if found is None or session_id is not None:
