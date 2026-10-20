@@ -60,6 +60,12 @@ restent des étapes distinctes.
 
 Le contrôleur n’appelle aucun modèle pour attendre des événements. Un démarrage
 autorise le budget fini demandé, dans les limites de la configuration locale.
+L’onglet « Sur le serveur » affiche aussi les places occupées du compte, lues
+depuis le suivi Runtime existant. Un nettoyage non confirmé occupe toujours une
+place ; le bouton de suivi permet de consulter ces exécutions. Une capacité
+pleine grise seulement « Démarrer » pour une instance arrêtée et nettoyée, sans
+modifier les droits ni les commandes d’arrêt ou de redémarrage. Une lecture
+indisponible affiche « Capacité inconnue » ; le serveur garde l’admission finale.
 Un budget supérieur à cette limite est refusé sur le site ; le gestionnaire
 reste disponible pour une nouvelle demande corrigée. Une attente de réponse
 humaine ou de confirmation réseau poursuit le même travail enregistré, sans

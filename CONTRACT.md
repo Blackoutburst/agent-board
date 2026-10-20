@@ -1,6 +1,10 @@
-# Board interface contract — 2.14.1
+# Board interface contract — 2.14.2
 
-The browser REST API and MCP act on one database. Application version is `2.14.1`; schema version is `14`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.14.2`; schema version is `14`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Server capacity display (2.14.2, schema unchanged)
+
+Agents reads the existing human-only Runtime summary independently of its controls. It displays only occupied/maximum places, or an explicit unknown state. A full snapshot disables START for a cleanly stopped instance; Stop, Restart and the server admission rules remain unchanged. This UI observation grants no capacity, releases no execution and does not repair pending work.
 
 ## Provider preparation (2.14.1, schema unchanged)
 

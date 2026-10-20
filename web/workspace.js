@@ -713,7 +713,29 @@ const Workspace = (() => {
     });
     serverModal("Lier un serveur à mon compte", form);
   }
-  function serverInstanceCard(owner, host, instance, profiles, data) {
+  function serverCapacity(data, owner) {
+    const limits = data?.limits;
+    if (limits?.owner_id !== owner || !Number.isSafeInteger(limits.version) || limits.version < 1
+        || !Number.isSafeInteger(limits.max_concurrent) || limits.max_concurrent < 1 || limits.max_concurrent > 8
+        || !Number.isSafeInteger(data.active_count) || data.active_count < 0) return null;
+    return { occupied: data.active_count, maximum: limits.max_concurrent };
+  }
+  function serverCapacityPanel(owner, capacity) {
+    return el("section", { class: "server-capacity callout", "aria-label": "Capacité du compte" },
+      el("h3", {}, "Capacité du compte"),
+      el("p", { class: "server-capacity-count", role: "status" }, capacity
+        ? `${capacity.occupied} / ${capacity.maximum} place${capacity.maximum === 1 ? "" : "s"} occupée${capacity.maximum === 1 ? "" : "s"}`
+        : "Capacité inconnue"),
+      el("p", { class: "small muted" }, capacity
+        ? "Une exécution en attente de nettoyage occupe encore une place. Cette capacité est partagée entre tous vos profils et appareils."
+        : "Les places disponibles n’ont pas pu être vérifiées. Actualisez pour réessayer ; le serveur vérifiera la capacité au lancement."),
+      el("p", { class: "small muted" }, "État à la dernière actualisation. Le serveur confirme toujours l’admission finale."),
+      btn("Voir le suivi des exécutions", guard(async () => {
+        if (state.actor?.owner_id !== owner) return;
+        agentTab = "runtime"; await agents();
+      }), "quiet"));
+  }
+  function serverInstanceCard(owner, host, instance, profiles, data, capacityUpdates) {
     const profile = profiles.get(instance.profile_id), command = serverCommand(instance), pending = pendingServerRecord(data, instance);
     const activeCommand = command === undefined || command && ["queued", "accepted"].includes(command.status);
     const locallyPending = pending && ["prepared", "uncertain", "submitted", "conflict", "refused"].includes(pending.status);
@@ -739,19 +761,28 @@ const Workspace = (() => {
     if (uncertain) card.append(el("p", { class: "small server-uncertain" }, instance.observed_state === "needs_review" ? "Le serveur doit vérifier cette instance. Un nettoyage confirmé ne suffit pas à autoriser une relance." : "Aucune observation fiable ne confirme son état. Vous pouvez demander l’arrêt."));
     if (instance.control_reason) card.append(el("p", { class: "small server-uncertain" }, serverReasons[instance.control_reason]));
     else if (!authorized) card.append(el("p", { class: "small muted" }, "Le démarrage n’est pas autorisé actuellement."));
+    const capacityNote = el("p", { class: "small server-capacity-full", hidden: true }, "Toutes les places du compte sont occupées. Consultez le suivi des exécutions avant un nouveau démarrage.");
+    card.append(capacityNote);
     const note = el("p", { class: serverNeedsReload(pending?.status) ? "form-error" : "server-request-note", role: "status", hidden: !locallyPending, "data-server-request": instance.id },
       pending?.status === "refused" ? "La demande a été refusée. Actualisez avant une nouvelle commande." : pending?.status === "conflict" ? "L’état a changé. Actualisez avant une nouvelle commande." : pending?.status === "submitted" ? "Demande enregistrée ; l’observation du serveur reste attendue." : "La réponse reste à confirmer. Réessayez la même demande.");
-    const actions = el("div", { class: "server-instance-actions" },
-      btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart }),
+    const startButton = btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart });
+    const actions = el("div", { class: "server-instance-actions" }, startButton,
       btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && !activeCommand && !locallyPending }),
       btn("Redémarrer", () => serverActionDialog(owner, instance, "restart"), "quiet", { disabled: !canRestart }));
     if (pending && ["prepared", "uncertain"].includes(pending.status)) actions.append(btn("Réessayer la même demande", guard(() => sendServerRecord(owner, pending)), "quiet"));
     card.append(note, actions);
+    capacityUpdates.push(capacity => {
+      const full = capacity !== null && capacity.occupied >= capacity.maximum;
+      startButton.disabled = !canStart || full;
+      capacityNote.hidden = !full || !cleanStopped;
+    });
     return card;
   }
   async function renderServerHosts(body, request) {
     const owner = state.actor.owner_id, loading = empty("Chargement de vos instances…"); body.append(loading);
     try {
+      // Capacity is a hint: its optional read must not delay stop controls.
+      const capacityRead = api("/runtime").then(data => serverCapacity(data, owner)).catch(() => null);
       const [summary, profiles, settings] = await Promise.all([api("/server-hosts"), api("/agent-profiles"), api("/settings")]);
       if (request !== state.request || state.actor?.owner_id !== owner) return;
       if (!Array.isArray(summary?.hosts) || summary.hosts.length > 64 || !Array.isArray(profiles) || !Array.isArray(settings?.devices)) throw new Error("Données indisponibles.");
@@ -783,19 +814,27 @@ const Workspace = (() => {
       // Probe persistence before rendering any enabled control.
       saveServerStore(owner, data);
       loading.remove();
+      const capacityPanel = serverCapacityPanel(owner, null), capacityUpdates = [];
       const pendingHost = [...data.records].reverse().find(item => item.kind === "host" && ["prepared", "uncertain"].includes(item.status));
       body.append(el("div", { class: "server-intro" }, el("h2", {}, "Mes profils sur le serveur"),
         el("p", {}, "Jusqu’à 16 profils hébergés, dans la capacité d’exécution de votre compte. Chaque démarrage possède son propre budget."),
         el("p", { class: "small muted" }, "Une commande est une demande. Seul le serveur confirme le démarrage, l’arrêt et le nettoyage."),
         btn("Lier un serveur", guard(() => serverHostDialog(owner, settings.devices)), "", { disabled: hosts.some(host => host.revoked_at === null) })),
+        capacityPanel,
         ...(pendingHost ? [el("div", { class: "callout server-pending-host" }, el("p", {}, "La liaison d’un appareil attend confirmation."), btn("Réessayer la liaison", guard(() => sendServerRecord(owner, pendingHost))))] : []),
         el("div", { class: "server-hosts" }, hosts.length ? hosts.map(host => el("section", { class: "server-host", "data-server-host": host.id },
           el("div", { class: "server-host-heading" }, el("div", {}, el("h2", {}, host.name || "Mon serveur"), el("p", { class: "small muted" }, ownerName(owner))),
             badge(host.revoked_at !== null ? "Hôte retiré" : host.enabled ? "Hôte autorisé" : "Démarrages suspendus", host.enabled && host.revoked_at === null ? "status-ready" : "status-blocked")),
           host.revoked_at === null ? serverManagerSetup(host) : null,
-          host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data)))
+          host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data, capacityUpdates)))
             : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent.")))
           : box("Aucun serveur lié", "Choisissez un appareil déjà connecté à votre compte pour héberger vos profils.", btn("Lier mon serveur", guard(() => serverHostDialog(owner, settings.devices)), "primary"))));
+      // This optional hint must not hold agents() or command feedback open.
+      void capacityRead.then(capacity => {
+        if (request !== state.request || state.actor?.owner_id !== owner || !capacityPanel.isConnected) return;
+        capacityPanel.replaceWith(serverCapacityPanel(owner, capacity));
+        capacityUpdates.forEach(update => update(capacity));
+      }).catch(() => {});
     } catch (failure) {
       if (request !== state.request || state.actor?.owner_id !== owner) return;
       loading.replaceWith(el("div", { class: "callout", role: "alert" }, el("strong", {}, "Instances indisponibles"), el("p", {}, "Les commandes restent désactivées. Actualisez pour charger l’état et retrouver le suivi de vos demandes.")));

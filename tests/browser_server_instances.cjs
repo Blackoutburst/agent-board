@@ -31,6 +31,9 @@ const profiles = host.instances.map(item => ({ id: item.profile_id, owner_id: ow
 const requests = [], commands = new Map(), grants = new Map();
 let grantCount = 0;
 let rejectNext = false, rejectGrantStatus = 0, commandCount = 0, hostReads = 0;
+const freeCapacity = () => ({ limits: { owner_id: owner, version: 1, max_concurrent: 1, paused: false }, active_count: 0,
+  executions: [], usage_observations: [] });
+let capacity = freeCapacity(), runtimeStatus = 200, holdRuntime = null, runtimeHeld = false;
 const json = (response, value, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
 const server = http.createServer(async (request, response) => {
   try {
@@ -40,6 +43,12 @@ const server = http.createServer(async (request, response) => {
       const body = raw ? JSON.parse(raw) : undefined;
       requests.push({ path: target.pathname, method: request.method, body });
       if (target.pathname === '/api/me') return json(response, { actor: { kind: 'human', owner_id: owner }, csrf_token: 'synthetic-csrf', owners: [{ id: owner, display_name: 'TheScreamer' }] });
+      if (target.pathname === '/api/runtime') {
+        assert.equal(request.method, 'GET');
+        const snapshot = clone(capacity), status = runtimeStatus, held = holdRuntime;
+        if (held) { holdRuntime = null; runtimeHeld = true; await held; }
+        return json(response, snapshot, status);
+      }
       if (target.pathname === '/api/threads' || target.pathname === '/api/requests' || target.pathname === '/api/projects') return json(response, []);
       if (target.pathname === '/api/inbox') return json(response, { count: 0, messages: [], tickets: [], tasks: [] });
       if (target.pathname === '/api/agent-profiles' || target.pathname === '/api/agents') return json(response, profiles);
@@ -119,6 +128,59 @@ const server = http.createServer(async (request, response) => {
     assert.ok(!(await page.locator('#main').innerText()).includes('PRIVATE OTHER'));
     assert.ok(!requests.some(item => item.path.endsWith('/foreign-host')));
     assert.ok(!(await page.locator("#main").innerText()).split("\n").some(line => line === "null"));
+    await page.getByText('0 / 1 place occupée', { exact: true }).waitFor();
+    const capacityCount = () => page.locator('.server-capacity-count');
+    capacity.active_count = 1;
+    capacity.executions = [{ body: 'PRIVATE RUNTIME BODY', owner_id: owner }];
+    capacity.usage_observations = [{ secret: 'PRIVATE RUNTIME OBSERVATION' }];
+    await refresh();assert.equal(await capacityCount().innerText(), '1 / 1 place occupée');
+    assert.ok(await control('stopped', 'Démarrer').isDisabled());
+    assert.ok(await control('stopped', 'Redémarrer').isEnabled(), 'capacity does not disable Restart');
+    assert.ok(await control('busy', 'Redémarrer').isEnabled());assert.ok(await control('busy', 'Arrêter').isEnabled());
+    assert.match(await card('stopped').innerText(), /Toutes les places du compte sont occupées/);
+    assert.ok(!(await page.locator('#main').innerText()).includes('PRIVATE RUNTIME'));
+    await noOverflow();await page.screenshot({ path: path.join(output, 'capacity-full-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });await noOverflow();
+    await page.screenshot({ path: path.join(output, 'capacity-full-mobile.png'), fullPage: true });
+    // The existing Runtime view is reached without creating or releasing work.
+    capacity = freeCapacity();
+    await page.getByRole('button', { name: 'Voir le suivi des exécutions', exact: true }).click();
+    await page.getByRole('heading', { name: 'Your runtime limits', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Sur le serveur', exact: true }).click();await card('stopped').waitFor();
+    assert.equal(await capacityCount().innerText(), '0 / 1 place occupée');
+    await page.setViewportSize({ width: 1440, height: 1080 });
+    const malformed = [null, {}, { limits: freeCapacity().limits },
+      { ...freeCapacity(), active_count: -1 }, { ...freeCapacity(), active_count: '0' },
+      { ...freeCapacity(), active_count: 1.5 }, { ...freeCapacity(), active_count: Number.MAX_SAFE_INTEGER + 1 },
+      ...[0, 9, '1', null].map(max_concurrent => ({ ...freeCapacity(), limits: { ...freeCapacity().limits, max_concurrent } })),
+      { ...freeCapacity(), limits: { ...freeCapacity().limits, owner_id: 'blackoutburst' } }];
+    for (const invalid of malformed) {
+      capacity = invalid;await refresh();assert.equal(await capacityCount().innerText(), 'Capacité inconnue');
+      assert.ok(await control('busy', 'Arrêter').isEnabled());assert.ok(await control('busy', 'Redémarrer').isEnabled());
+      assert.ok(await control('stopped', 'Démarrer').isEnabled(), 'unknown capacity does not invent a full or free count');
+    }
+    runtimeStatus = 503;capacity = { detail: 'PRIVATE RUNTIME FAILURE' };await refresh();
+    assert.equal(await capacityCount().innerText(), 'Capacité inconnue');
+    assert.ok(!(await page.locator('#main').innerText()).includes('PRIVATE RUNTIME'));
+    await page.setViewportSize({ width: 390, height: 844 });await noOverflow();
+    await page.screenshot({ path: path.join(output, 'capacity-unknown-mobile.png'), fullPage: true });
+    runtimeStatus = 200;capacity = freeCapacity();await page.setViewportSize({ width: 1440, height: 1080 });
+    // Delayed owner A responses must not populate a view after account switch.
+    let releaseRuntime;runtimeHeld = false;holdRuntime = new Promise(resolve => { releaseRuntime = resolve; });
+    await page.getByRole('button', { name: 'Actualiser', exact: true }).click();
+    for (let attempt = 0; !runtimeHeld && attempt < 600; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(runtimeHeld, 'the synthetic runtime request reached its deterministic barrier');
+    await card('busy').waitFor();
+    assert.equal(await capacityCount().innerText(), 'Capacité inconnue');
+    assert.ok(await control('busy', 'Arrêter').isEnabled(), 'a slow optional capacity read never hides stop controls');
+    assert.ok(await control('busy', 'Redémarrer').isEnabled());
+    await page.evaluate(async () => { state.actor.owner_id = 'blackoutburst'; await Workspace.agents(); });
+    releaseRuntime();await page.waitForTimeout(100);
+    assert.equal(await page.locator('.server-capacity').count(), 0);
+    assert.equal(await page.locator('.server-instance').count(), 0);
+    await page.evaluate(() => { state.actor.owner_id = 'thescreamer'; });await refresh();
+    assert.equal(await capacityCount().innerText(), '0 / 1 place occupée');
+    assert.ok(!(await page.evaluate(() => JSON.stringify(localStorage))).includes('PRIVATE RUNTIME'));
     await noOverflow();await page.screenshot({ path: path.join(output, 'hosted-desktop.png'), fullPage: true });
 
     await control('busy', 'Arrêter').click();await dialog().getByRole('button', { name: 'Arrêter', exact: true }).click();
@@ -215,7 +277,7 @@ const server = http.createServer(async (request, response) => {
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ result: 'passed_synthetic_firefox_fixture',
       checks: ['owner_scope', 'text_rendering', 'observed_vs_requested', 'unknown_review_cleanup', 'queued_restart',
         'lost_response_same_key_body_budget', 'reload_persistence', 'CAS_requires_reload', 'budget_integer_bounds',
-        'host_grant_existing_device_only', 'host_name_bounds_no_post', 'terminal_refusal_requires_fresh_read_and_new_key', 'host_grant_lost_reply_persisted', 'owner_switch_refuses_stale_control', 'storage_failure_disables_control', 'stop_supersedes_earlier_requests', 'no_runtime_release', 'desktop_mobile_no_overflow'], model_calls: 0,
+        'host_grant_existing_device_only', 'host_name_bounds_no_post', 'terminal_refusal_requires_fresh_read_and_new_key', 'host_grant_lost_reply_persisted', 'owner_switch_refuses_stale_control', 'storage_failure_disables_control', 'stop_supersedes_earlier_requests', 'no_runtime_release', 'capacity_full_start_only', 'capacity_free', 'capacity_unknown_12_shapes', 'capacity_http_failure', 'slow_capacity_preserves_stop_controls', 'capacity_runtime_navigation', 'capacity_account_switch_stale_response', 'capacity_no_history_or_storage', 'capacity_desktop_mobile', 'desktop_mobile_no_overflow'], model_calls: 0,
       real_agent_processes: 0, production_calls: 0, page_errors: errors, posts: requests.filter(item => item.method === 'POST').length }, null, 2));
   } finally { await browser.close(); }
 })().then(() => server.close()).catch(error => { console.error(error); server.close(); process.exitCode = 1; });
