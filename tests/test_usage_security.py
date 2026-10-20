@@ -357,7 +357,7 @@ def test_future_schema_refuses_without_modifying_existing_usage(usage):
     b.report_usage_observation(item['actor'], item['connection'], time.time() - 1, snapshot())
     before = rows(b)
     with sqlite3.connect(b.db_path) as db:
-        db.execute('PRAGMA user_version=14')
+        db.execute('PRAGMA user_version=15')
     with pytest.raises(RuntimeError, match='newer'):
         Board(b.data_dir, base_url=b.base_url)
     assert rows(b) == before

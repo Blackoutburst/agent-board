@@ -1,10 +1,10 @@
 # Operations and release procedure
 
-Current source is Board 2.13.1/schema 14 with adapter 0.28.1. It combines
+Current source is Board 2.14.0/schema 14 with adapter 0.29.0. It adds explicit owner/device server controls and the managed owner process. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures
-only. Historical adapter 0.26 native receipts are not adopted by version 0.27.
+only. Historical native receipts are not adopted by adapter 0.29.
 Older qualification receipts remain tied to their exact source and private pins;
 they do not qualify this integrated source or authorize a deployment.
 
@@ -57,7 +57,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.13.1` and schema 13. Through the public MCP URL with an existing device credential, discover 58 tools including `get_development_frame`, `release_ticket`, `reconcile_profile_claim`, `reserve_message_execution`, `inspect_profile_refresh` and `refresh_agent_session`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git, including `profile_refresh.py`. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.14.0` and schema 14. Through the public MCP URL with an existing device credential, discover 62 tools including `get_development_frame`, `release_ticket`, `reconcile_profile_claim`, `reserve_message_execution`, `inspect_profile_refresh` and `refresh_agent_session`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git, including `profile_refresh.py`. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
