@@ -1,6 +1,22 @@
-# Board interface contract — 2.15.2
+# Board interface contract — 2.16.0
 
-The browser REST API and MCP act on one database. Application version is `2.15.2`; schema version is `15`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.16.0`; schema version is `16`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Human preparation drafts (2.16.0, schema 16)
+
+A separate human grant permits an inert preparation request for an additional
+message profile. A request holds a durable host-wide Start/Restart barrier until
+explicit human cancellation. It creates no instance, private file, connection,
+provider login or execution. Existing manager wire shapes and reason enums are
+preserved; manager consumption and applying an append are unavailable.
+The public context supplies server-computed profile/catalogue digests as read
+pins, and every mutation checks current authority and CAS transactionally.
+See [the draft contract](docs/SERVER-PROVISIONING-APPEND-PROPOSAL.md).
+
+Schema 16 preserves earlier records and permanent admission refusals. Older
+Board source must refuse the new marker; rollback must retain draft barriers
+and use compatible code. Protected owner source and private journals are
+unchanged by this Board migration.
 
 ## Explicit source catalogue replacement (2.15.2, schema unchanged)
 

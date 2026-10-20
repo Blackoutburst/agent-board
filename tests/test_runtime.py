@@ -70,7 +70,7 @@ def test_migration_default_is_read_only_and_persists(runtime):
                      'active_count': 0, 'quota': {'status': 'unavailable'}, 'usage_observations': [], 'executions': []}
     assert snapshot(board) == before
     with sqlite3.connect(board.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 15
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 16
     assert Board(board.data_dir).get_runtime(human) == value
 
 

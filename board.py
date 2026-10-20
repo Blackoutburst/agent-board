@@ -20,6 +20,7 @@ from usage_observations import UsageObservationsMixin, migrate_usage_observation
 from message_feed import MessageFeedMixin, migrate_message_feed
 from delegation_families import DelegationFamiliesMixin, migrate_delegation_families
 from server_instances import ServerInstancesMixin, migrate_server_instances
+from server_provisioning import ServerProvisioningMixin, migrate_server_provisioning
 
 
 class BoardError(Exception):
@@ -50,7 +51,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -65,7 +66,7 @@ class Board(ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, Usa
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 15:
+            if version > 16:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -179,6 +180,10 @@ class Board(ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, Usa
             if version < 15:
                 migrate_runtime_admission_refusals(db)
                 db.execute("PRAGMA user_version=15")
+            if version < 16:
+                migrate_server_provisioning(db)
+                db.execute("PRAGMA user_version=16")
+            self._provisioning_schema(db)
 
     @contextmanager
     def _connection(self):

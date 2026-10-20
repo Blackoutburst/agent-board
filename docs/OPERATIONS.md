@@ -1,12 +1,20 @@
 # Operations and release procedure
 
-Current source is Board 2.15.2/schema 15 with adapter 0.30.2. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema15 and every refusal tombstone; a pre15 database restore is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
+Current source is Board 2.16.0/schema 16 with adapter 0.30.2. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema16, its draft barriers and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures
 only. Historical native receipts are not adopted by adapter 0.30.
 Older qualification receipts remain tied to their exact source and private pins;
 they do not qualify this integrated source or authorize a deployment.
+
+Schema 16 adds only human preparation drafts and their durable Start/Restart
+barrier. It does not install a profile, consume a manager request, pair a device,
+log in to a provider or start a model. A draft remains until explicit human
+cancellation; silence, expiry and rollback are not cancellation. Keep schema16
+and all barriers/refusals for code rollback. Complete any explicit owner
+catalogue recovery before enabling this draft workflow, because that recovery
+requires current Start authority while a draft intentionally suspends it.
 
 Adapter 0.30.2 includes a separate finite owner entry for explicitly abandoning
 one exact legacy pretransport message attempt. Follow
@@ -41,7 +49,7 @@ before migration, including pending confirmed-feed deliveries and page cursors.
 
 ## Before release
 
-Run the checks appropriate to the changed paths, syntax checks and connector smoke tests; include browser acceptance when browser behavior changes. Validate schema changes on representative synthetic migration fixtures, including row counts, foreign keys and integrity. A restored private-data validation copy requires explicit authorization and must remain on the server; never use the live data directory for migration validation. Preserve the source revision and an authorized matching private database/attachment backup before deployment. Board 2.15.2 keeps schema15: its private owner journal transitions are tested separately and are never performed by the Board deployment.
+Run the checks appropriate to the changed paths, syntax checks and connector smoke tests; include browser acceptance when browser behavior changes. Validate schema changes on representative synthetic migration fixtures, including row counts, foreign keys and integrity. A restored private-data validation copy requires explicit authorization and must remain on the server; never use the live data directory for migration validation. Preserve the source revision and an authorized matching private database/attachment backup before deployment. Board 2.16.0 migrates schema15 to schema16 transactionally, preserving all existing rows and permanent admission refusals. Validate this upgrade on synthetic fixtures; private owner journal transitions are separate and are never performed by the Board deployment.
 
 `backup.py create` includes the database and referenced attachments in a mode-0600 checksummed archive. It excludes the private Discord configuration; preserve that file separately without printing its contents.
 
@@ -68,7 +76,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.15.2` and schema 15. Through the public MCP URL with an existing device credential, discover 64 tools including `get_development_frame`, `release_ticket`, `reconcile_profile_claim`, `reserve_message_execution`, `inspect_profile_refresh` and `refresh_agent_session`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git, including `profile_refresh.py`. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.16.0` and schema 16. Through the public MCP URL with an existing device credential, discover 64 tools including `get_development_frame`, `release_ticket`, `reconcile_profile_claim`, `reserve_message_execution`, `inspect_profile_refresh` and `refresh_agent_session`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git, including `profile_refresh.py`. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 
@@ -80,9 +88,11 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.9 code against a schema-12 database, or source supporting only schema 12 against a schema-13 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the source that matches that backup's schema, then promote the restored directory and restart.
+A code rollback must use source that supports the current schema and preserves every durable refusal, preparation request, cancellation and Start barrier. After migration to schema16, use a schema16-compatible corrective release; do not run schema15 or older code against that database. Stop/restart only through the authorized route and preserve the current source and data before attempting recovery.
 
-Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
+A pre-release archive can be restored with `backup.py restore` into a separate directory for inspection or disaster recovery. Do not promote an earlier snapshot over current data: doing so would discard newer barriers, refusal records, messages or external-operation receipts. Recovery after data loss needs a separately reviewed reconciliation of those records and external effects before the service resumes. Preserve the private Discord configuration without printing it.
+
+Run integrity, health, attachment and authenticated MCP checks on the recovered source/data pair. Keep the failed-release directory and all immutable operation receipts. Restoring files never undoes work already performed by agents, grants a new activation or establishes cleanup.
 
 ## Agent recovery
 
