@@ -88,9 +88,11 @@ A configured notification destination is not proof of delivery. Check durable ou
 
 ## Rollback
 
-Do not start any pre-2.9 code against a schema-12 database, or source supporting only schema 12 against a schema-13 database. Stop/restart the service through its authorized route, preserve the failed release's data directory, restore the matching pre-release archive into a new directory with `backup.py restore`, copy the private Discord configuration from the preserved directory, restore the source that matches that backup's schema, then promote the restored directory and restart.
+A code rollback must use source that supports the current schema and preserves every durable refusal, preparation request, cancellation and Start barrier. After migration to schema16, use a schema16-compatible corrective release; do not run schema15 or older code against that database. Stop/restart only through the authorized route and preserve the current source and data before attempting recovery.
 
-Run integrity, health, attachment and authenticated MCP checks. Retain the failed-release directory so post-backup records are recoverable. Restoring a database never rolls back external work performed by agents. Inspect those effects before reclaiming anything.
+A pre-release archive can be restored with `backup.py restore` into a separate directory for inspection or disaster recovery. Do not promote an earlier snapshot over current data: doing so would discard newer barriers, refusal records, messages or external-operation receipts. Recovery after data loss needs a separately reviewed reconciliation of those records and external effects before the service resumes. Preserve the private Discord configuration without printing it.
+
+Run integrity, health, attachment and authenticated MCP checks on the recovered source/data pair. Keep the failed-release directory and all immutable operation receipts. Restoring files never undoes work already performed by agents, grants a new activation or establishes cleanup.
 
 ## Agent recovery
 
