@@ -21,6 +21,8 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
@@ -30,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from board import Board, BoardError
+from server_instances import MANAGER_TOOLS, validate_manager_arguments
 from notifications import DiscordNotifications
 from development_frames import (get_development_frame as development_frame, wire_frame,
                                 validate_arguments as development_frame_arguments)
@@ -45,12 +48,14 @@ class BoardMCP(FastMCP):
         # and pre-parses JSON strings. This one fixed protocol accepts neither.
         if name == 'get_development_frame':
             development_frame_arguments(arguments)
+        elif name in MANAGER_TOOLS:
+            validate_manager_arguments(name, arguments)
         return await super().call_tool(name, arguments)
 
     async def list_tools(self):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
-                if tool.name == 'get_development_frame' else tool for tool in tools]
+                if tool.name == 'get_development_frame' or tool.name in MANAGER_TOOLS else tool for tool in tools]
 
 
 class Body(BaseModel):
@@ -368,6 +373,43 @@ RuntimeReason = Literal['', 'completed', 'cancelled', 'quota_or_rate_limit', 'au
     'protocol_error', 'policy_changed', 'claim_lost', 'stop_requested', 'owner_paused']
 RuntimeBool = Annotated[bool, Field(strict=True)]
 
+ServerOpaque = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+ServerHash = Annotated[str, Field(strict=True, pattern=r'^[0-9a-f]{64}$')]
+ServerZero = Annotated[int, Field(strict=True, ge=0, le=2**63-1)]
+ServerState = Literal['unknown','stopped','starting','ready','busy','stopping','needs_review']
+ServerReason = Literal['','stopped','not_started','launch_refused','configuration_changed',
+    'authorization_changed','host_revoked','cleanup_unconfirmed','connection_lost',
+    'budget_exhausted','execution_failed','authentication_required','quota_unavailable']
+
+
+class ServerCatalogEntry(Body):
+    catalog_key: ServerOpaque
+    profile_id: ServerOpaque
+    profile_version: Version
+    launchspec_sha256: ServerHash
+    mode: Literal['messages', 'ticket_text']
+
+
+class ServerHostCreate(Body):
+    device_id: ServerOpaque
+    name: Annotated[str, Field(strict=True, min_length=1, max_length=100)]
+    idempotency_key: ServerOpaque
+
+
+class ServerHostRevoke(Body):
+    expected_version: Version
+    idempotency_key: ServerOpaque
+
+
+class ServerInstanceCommand(Body):
+    action: Literal['start', 'stop', 'restart']
+    expected_version: Version
+    expected_generation: ServerZero
+    launchspec_sha256: ServerHash
+    budget: Annotated[int, Field(strict=True, ge=0, le=20)]
+    idempotency_key: ServerOpaque
+
+
 
 class RuntimeLimitsPatch(ProjectBody):
     expected_version: Version
@@ -441,12 +483,13 @@ class RequestLimits:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        maximum = 4096 if scope.get("path", "").startswith(("/api/server-hosts", "/api/server-instances")) else MAX_BODY
         headers = dict(scope.get("headers", []))
         try:
             length = int(headers.get(b"content-length", b"0"))
         except ValueError:
             return await JSONResponse({"detail": "Invalid Content-Length"}, 400)(scope, receive, send)
-        if length > MAX_BODY:
+        if length > maximum:
             return await JSONResponse({"detail": "Request exceeds size limit"}, 413)(scope, receive, send)
         received = 0
 
@@ -454,7 +497,7 @@ class RequestLimits:
             nonlocal received
             message = await receive()
             received += len(message.get("body", b""))
-            if received > MAX_BODY:
+            if received > maximum:
                 raise HTTPException(413, "Request exceeds size limit")
             return message
 
@@ -798,6 +841,35 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return {**device_actor(), 'session_id': session_id}
 
     @mcp.tool()
+    async def publish_server_catalog(host_id: ServerOpaque, expected_catalog_version: ServerZero,
+                                     entries: list[ServerCatalogEntry], idempotency_key: ServerOpaque) -> dict:
+        """Publish at most sixteen private launchspec hashes for the exact human-granted manager device. No paths, commands or credentials. This creates metadata, never starts a process or grants work permissions."""
+        return board.publish_server_catalog(device_actor(), host_id, expected_catalog_version,
+            [entry.model_dump() for entry in entries], idempotency_key)
+
+    @mcp.tool()
+    async def poll_instance_commands(host_id: ServerOpaque,
+                                     limit: Annotated[int, Field(strict=True, ge=1, le=20)] = 20) -> dict:
+        """Read current instance observations and durable queued/accepted commands for this human-granted manager device. Redelivers unresolved commands; reading is not acknowledgement or launch authority. Cleanup remains available after work permission withdrawal, never after device revocation."""
+        return board.poll_instance_commands(device_actor(), host_id, limit)
+
+    @mcp.tool()
+    async def ack_instance_command(host_id: ServerOpaque, command_id: ServerOpaque,
+                                   expected_revision: Version, idempotency_key: ServerOpaque) -> dict:
+        """Acknowledge local durable acceptance of one current command, using its exact revision and retry key. Not a launch or cleanup receipt. Superseded starts and withdrawn work authority refuse; stop survives work permission withdrawal."""
+        return board.ack_instance_command(device_actor(), host_id, command_id, expected_revision, idempotency_key)
+
+    @mcp.tool()
+    async def report_instance_state(host_id: ServerOpaque, instance_id: ServerOpaque,
+                                    expected_observation_revision: ServerZero, generation: ServerZero,
+                                    launchspec_sha256: ServerHash, command_id: ServerOpaque | None,
+                                    state: ServerState, cleanup_confirmed: RuntimeBool, reason: ServerReason,
+                                    idempotency_key: ServerOpaque) -> dict:
+        """Report bounded local observation for an exact instance/generation/launchspec/current command. Unknown processes/effects remain needs_review. Restart requires stopped cleanup before ready. These observations never change Runtime capacity or prove an execution qualified."""
+        return board.report_instance_state(device_actor(), host_id, instance_id, expected_observation_revision,
+            generation, launchspec_sha256, command_id, state, cleanup_confirmed, reason, idempotency_key)
+
+    @mcp.tool()
     async def report_usage_observation(session_id: RuntimeOpaque, connection_id: RuntimeOpaque,
                                        observed_at: UsageTimestamp, snapshot: UsageSnapshot) -> dict:
         """Report sanitized, dated local subscription measurements for this exact owner/profile/device connection. Requires current request permission; informational only, never permission to execute, unpause, reset or change model. Do not send account IDs, emails, credits, credentials or raw provider responses. Duplicate timestamps cannot refresh a sample's age."""
@@ -957,6 +1029,12 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[host, "localhost", "127.0.0.1", "testserver"])
     attempts = defaultdict(deque)
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, error):
+        if request.url.path.startswith(('/api/server-hosts', '/api/server-instances')):
+            return JSONResponse({'detail': 'invalid_server_payload'}, status_code=422)
+        return await request_validation_exception_handler(request, error)
+
     @app.exception_handler(BoardError)
     async def board_error(request, error):
         return JSONResponse({"detail": str(error)}, status_code=error.status)
@@ -997,7 +1075,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.13.0", "schema_version": 13, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame"]}
+        return {"status": "ok", "version": "2.13.0", "schema_version": 14, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1199,6 +1277,26 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/agent-profiles/{profile_id}/bindings')
     async def bind_agent_profile(profile_id: str, values: ProfileBinding, actor=Depends(human)):
         return board.bind_agent_profile(actor, profile_id, **values.model_dump())
+
+    @app.get('/api/server-hosts')
+    async def server_hosts(actor=Depends(human)):
+        return board.list_server_hosts(actor)
+
+    @app.post('/api/server-hosts')
+    async def create_server_host(values: ServerHostCreate, actor=Depends(human)):
+        return board.create_server_host(actor, **values.model_dump())
+
+    @app.get('/api/server-hosts/{host_id}')
+    async def server_host(host_id: ServerOpaque, actor=Depends(human)):
+        return board.get_server_host(actor, host_id)
+
+    @app.post('/api/server-hosts/{host_id}/revoke')
+    async def revoke_server_host(host_id: ServerOpaque, values: ServerHostRevoke, actor=Depends(human)):
+        return board.revoke_server_host(actor, host_id, **values.model_dump())
+
+    @app.post('/api/server-instances/{instance_id}/commands')
+    async def command_server_instance(instance_id: ServerOpaque, values: ServerInstanceCommand, actor=Depends(human)):
+        return board.command_server_instance(actor, instance_id, **values.model_dump())
 
     @app.get('/api/runtime')
     async def runtime_status(actor=Depends(human)):
