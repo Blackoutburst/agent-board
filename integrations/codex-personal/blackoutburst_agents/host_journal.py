@@ -15,6 +15,7 @@ import ipaddress
 
 from .host_config import HostError, digest, private_directory, validate
 from .managed_host import ManagedHostJournalMixin
+from .host_append_stage import HostAppendStageMixin
 from .work_journal import _private_file, _encode
 
 _APPLICATION_ID = 0x4242484A
@@ -25,10 +26,12 @@ def canonical_directory():
     return Path(pwd.getpwuid(os.geteuid()).pw_dir) / '.local' / 'state' / 'blackoutburst-agents' / 'hosts'
 
 
-class HostJournal(ManagedHostJournalMixin):
+class HostJournal(HostAppendStageMixin, ManagedHostJournalMixin):
     def __init__(self, directory):
         self._db = None
         self._held = False
+        self._owner_lock_token = None
+        self._append_active_attempt = None
         try:
             self.directory = private_directory(directory)
             database = self.directory / 'host.sqlite3'
@@ -144,8 +147,10 @@ class HostJournal(ManagedHostJournalMixin):
             if not current:
                 os.write(descriptor, binding); os.fsync(descriptor)
             self._held = (os.getpid(),threading.get_ident())
+            self._owner_lock_token = object()
             yield
         finally:
+            self._owner_lock_token = None
             self._held = False
             os.close(descriptor)
 
