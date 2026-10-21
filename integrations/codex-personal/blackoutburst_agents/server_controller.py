@@ -74,6 +74,12 @@ class ServerController:
         return self._owned_call('finish_managed_effect',identity,result)['result']
 
     def publish(self,catalog):
+        if self.host._messages_append_version()==5:
+            from .message_append_journal import effective_message_catalog
+            state=self.host._messages_binding_state()
+            effective=effective_message_catalog(self.host,state['source_release_sha256'])
+            if sorted(catalog,key=lambda e:e['catalog_key'])!=sorted(effective,key=lambda e:e['catalog_key']):
+                raise HostError('managed_catalog_conflict')
         expected=self.host.managed_settings()['catalog_sha256']
         if digest(sorted(catalog,key=lambda e:e['catalog_key']))!=expected:
             raise HostError('managed_catalog_conflict')

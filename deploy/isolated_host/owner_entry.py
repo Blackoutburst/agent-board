@@ -684,11 +684,12 @@ def execute(args, manifest):
         return _catalog_source(args, manifest)
     if args.action in ('managed-prepare','managed-run'):
         from blackoutburst_agents.host_journal import HostJournal
-        from blackoutburst_agents.server_controller import ServerController,launch_catalog
+        from blackoutburst_agents.server_controller import ServerController
+        from blackoutburst_agents.message_append_journal import effective_message_catalog
         from blackoutburst_agents.server_control_client import ServerControlClient
         config=_configuration(manifest,args.release,args.owner)
-        catalog=launch_catalog(config,manifest_id(manifest))
         with HostJournal(journal) as state:
+            catalog=effective_message_catalog(state,manifest_id(manifest))
             if args.action=='managed-prepare':
                 with state.owner_lock():state.prepare_managed(args.host_id,catalog)
                 print(json.dumps({'status':'managed_prepared','host_id':args.host_id,

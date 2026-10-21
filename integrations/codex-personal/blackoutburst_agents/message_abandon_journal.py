@@ -32,7 +32,7 @@ class HostMessageAbandonMixin:
     def _check_abandonments(self):
         version=self._db.execute('PRAGMA user_version').fetchone()[0]
         exists=self._db.execute("SELECT 1 FROM main.sqlite_master WHERE name=?",(TABLE,)).fetchone()
-        if version not in (3,4):
+        if version not in (3,4,5):
             if exists:raise HostError('message_abandon_schema')
             return
         self._abandon_schema(self._db)
@@ -41,7 +41,7 @@ class HostMessageAbandonMixin:
 
     def _abandon_record(self,*,request_key=None,intent_id=None):
         if (request_key is None)==(intent_id is None):raise HostError('message_abandon_invalid')
-        if self._db.execute('PRAGMA user_version').fetchone()[0] not in (3,4):return None
+        if self._db.execute('PRAGMA user_version').fetchone()[0] not in (3,4,5):return None
         self._abandon_schema(self._db)
         row=self._db.execute(f'SELECT * FROM main.{TABLE} WHERE '+('request_key' if request_key is not None else 'id')+'=?',
             (request_key if request_key is not None else intent_id,)).fetchone()
@@ -68,6 +68,7 @@ class HostMessageAbandonMixin:
         except Exception:raise HostError('message_abandon_corrupt') from None
 
     def _abandon_host_fingerprint(self,target_id,batch_id):
+        if self._db.execute('PRAGMA user_version').fetchone()[0]==5:raise HostError('messages_append_legacy_mutation')
         self._require_lock();guard_sql(self._db,HOST_TABLES)
         if not self.managed():raise HostError('message_abandon_managed_required')
         self._check_managed()
@@ -86,7 +87,7 @@ class HostMessageAbandonMixin:
 
     def _require_no_unsettled_abandonment(self):
         self._require_no_unsettled_executed_disposition()
-        if self._db.execute('PRAGMA user_version').fetchone()[0] in (3,4):
+        if self._db.execute('PRAGMA user_version').fetchone()[0] in (3,4,5):
             self._abandon_schema(self._db)
             if self._db.execute(f"SELECT 1 FROM main.{TABLE} WHERE phase!='complete' LIMIT 1").fetchone():
                 raise HostError('message_abandon_unsettled')
@@ -116,6 +117,7 @@ class HostMessageAbandonMixin:
 
     def _abandon_advance(self,record,phase,*,seal=None,checkpoints=None):
         self._require_lock()
+        if self._db.execute('PRAGMA user_version').fetchone()[0]==5:raise HostError('messages_append_legacy_mutation')
         with self._tx() as db:
             current=self._abandon_record(intent_id=record['id'])
             if current!=record or PHASES.index(phase)!=PHASES.index(current['phase'])+1:
