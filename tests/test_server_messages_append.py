@@ -498,3 +498,33 @@ def test_non_codex_binding_is_not_offered_as_a_supported_slot(ready):
     before=snapshot(b)
     with pytest.raises(BoardError,match='slot_changed'):create(e,v)
     assert snapshot(b)==before
+
+
+@pytest.mark.parametrize('corruption',['request-sha','schema'])
+def test_invalid_B_denies_launch_but_preserves_independent_Stop_channel(ready,corruption):
+    e,p,v=ready;b,h,_,raw,_,host,*_=e;r=create(e,v)
+    with b._tx() as db:
+        if corruption=='request-sha':db.execute("UPDATE server_messages_append_requests SET request_sha256=? WHERE id=?",('f'*64,r['request_id']))
+        else:db.execute('CREATE INDEX unexpected_b_index ON server_messages_append_requests(state)')
+    with b._connection() as db:
+        corrupt=[tuple(x) for x in db.execute('SELECT * FROM server_messages_append_requests')]
+    instance=b.poll_instance_commands(raw,host['id'])['instances'][0]
+    assert instance['can_start'] is False and instance['control_reason']=='authorization_changed'
+    c=command(e,'stop','stop-invalid-b',instance=instance)
+    queued=b.poll_instance_commands(raw,host['id'])
+    assert queued['instances'][0]['current_command']['id']==c['id']
+    assert queued['commands'][0]['id']==c['id']
+    accepted=ack(e,c)
+    assert accepted['command']['status']=='accepted'
+    cleaned=report(e,instance=accepted['instance'],key='cleanup-invalid-b')
+    assert cleaned['instance']['observed_state']=='stopped' and cleaned['instance']['cleanup_confirmed'] is True
+    assert cleaned['command']['status']=='complete'
+    before=snapshot(b)
+    with pytest.raises(BoardError):command(e,'start','no-start-invalid-b',instance=cleaned['instance'])
+    with pytest.raises(BoardError):command(e,'restart','no-restart-invalid-b',instance=cleaned['instance'])
+    with pytest.raises(BoardError):report(e,'ready',False,instance=cleaned['instance'],key='no-positive-invalid-b')
+    with pytest.raises(BoardError):b.get_server_messages_append(h,host['id'],r['request_id'])
+    with pytest.raises(BoardError):b.poll_server_messages_appends(raw,host['id'])
+    assert snapshot(b)==before
+    with b._connection() as db:assert [tuple(x) for x in db.execute('SELECT * FROM server_messages_append_requests')]==corrupt
+    assert b.get_runtime(h)['active_count']==0

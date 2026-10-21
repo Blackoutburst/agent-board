@@ -261,9 +261,19 @@ class ServerInstancesMixin:
     def _server_start_reason(self, db, host, instance, *, _barriers=True):
         if host['revoked_at'] is not None:
             return 'host_revoked'
-        if _barriers and (self._provisioning_has_barrier(db, host) or self._messages_append_has_barrier(db, host)):
-            # Keep the existing closed SDK wire: launch authority is suspended.
-            return 'authorization_changed'
+        if _barriers:
+            if self._provisioning_has_barrier(db, host):
+                return 'authorization_changed'
+            # This is a non-authoritative display of launch eligibility. An
+            # invalid B ledger denies launch but cannot consume the independent
+            # existing device channel needed to deliver/ACK/report a Stop.
+            # Positive mutations still call the strict B guard before effects.
+            from board import BoardError
+            try:
+                if self._messages_append_has_barrier(db, host):
+                    return 'authorization_changed'
+            except BoardError:
+                return 'authorization_changed'
         if not instance['active']:
             return 'configuration_changed'
         if not db.execute('SELECT 1 FROM devices WHERE id=? AND owner_id=? AND revoked_at IS NULL',
