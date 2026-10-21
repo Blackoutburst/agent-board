@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from blackoutburst_agents.pool_journal import PoolError
+from blackoutburst_agents.dev_manifest import DevelopmentError
 from blackoutburst_agents.worker_pool import WorkerPool, PoolDriverBinding, PoolOutcome
 from blackoutburst_agents.work_journal import WorkJournal
 from blackoutburst_agents.queue_journal import QueueJournal
@@ -347,3 +348,31 @@ def test_corrupt_durable_state_is_not_reset_on_reopen(pools,harness):
     pool.close();path.write_bytes(b'{')
     with pytest.raises(PoolError,match='pool_journal_unavailable'):pools(harness)
     assert path.read_bytes()==b'{'
+
+
+@pytest.mark.parametrize('settings',[
+    {'concurrency':True},{'concurrency':1.0},{'ceiling':True},{'ceiling':1.0},
+])
+def test_reopen_validates_supplied_types_before_numeric_equality(tmp_path,settings):
+    root=tmp_path/'pool'
+    pool=WorkerPool(root,concurrency=1,ceiling=1);pool.close()
+    before=(root/'pool-state.json').read_bytes()
+    with pytest.raises(PoolError,match='invalid_pool_concurrency'):
+        WorkerPool(root,**settings)
+    assert (root/'pool-state.json').read_bytes()==before
+    reopened=WorkerPool(root)
+    try:assert reopened.status()['configured']==reopened.status()['ceiling']==1
+    finally:reopened.close()
+
+
+def test_failed_workers_directory_initialization_releases_lease_and_keeps_original_error(tmp_path):
+    root=tmp_path/'pool';root.mkdir(mode=0o700)
+    foreign=tmp_path/'foreign';foreign.mkdir(mode=0o700)
+    (root/'workers').symlink_to(foreign,target_is_directory=True)
+    failed=WorkerPool.__new__(WorkerPool)
+    with pytest.raises(DevelopmentError):failed.__init__(root)
+    assert failed.closed and failed.journal.fd is None and failed.journal.private.fd is None
+    (root/'workers').unlink()
+    reopened=WorkerPool(root)
+    try:assert reopened.status()['capacity_held']==0
+    finally:reopened.close()

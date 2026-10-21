@@ -74,6 +74,8 @@ class PoolJournal:
             else:
                 os.close(descriptor)
             current = self.read()
+            self._limits(current['concurrency'] if concurrency is None else concurrency,
+                         current['ceiling'] if ceiling is None else ceiling)
             if ((ceiling is not None and ceiling != current['ceiling'])
                     or (concurrency is not None and concurrency != current['concurrency'])):
                 raise PoolError('pool_configuration_conflict')

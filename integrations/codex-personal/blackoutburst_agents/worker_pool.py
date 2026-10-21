@@ -58,12 +58,18 @@ class WorkerPool:
             if type(binding) is not PoolDriverBinding:
                 raise PoolError('invalid_pool_driver')
         self.journal = PoolJournal(directory, concurrency=concurrency, ceiling=ceiling)
-        self.mutex = threading.RLock()
-        self.threads, self.stops, self.calling, self.reconciling, self.launching = {}, {}, set(), set(), set()
-        self.closed = False
-        self.admissions_blocked, self.stop_unconfirmed = False, False
-        with PrivateDirectory(self.journal.private.path/'workers', create=True):
-            pass
+        try:
+            self.mutex = threading.RLock()
+            self.threads, self.stops, self.calling, self.reconciling, self.launching = {}, {}, set(), set(), set()
+            self.closed = False
+            self.admissions_blocked, self.stop_unconfirmed = False, False
+            with PrivateDirectory(self.journal.private.path/'workers', create=True):
+                pass
+        except BaseException:
+            try:self.journal.close()
+            except BaseException:pass
+            self.closed = True
+            raise
 
     def _ready(self):
         if self.closed:
