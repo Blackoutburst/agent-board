@@ -14,7 +14,10 @@ every request records that exact local-to-remote mapping.
 
 Construct `GitHubDraftPublisher(deliveries, publication_root, grant=grant,
 git_executable='/usr/bin/git', gh_executable='/usr/bin/gh')` with separate owned
-mode-0700 roots and protected executables. `deliveries` must be the concrete
+mode-0700 roots and protected executables. The optional `python_executable`
+defaults to the resolved current interpreter; it too must be protected and pinned.
+The fixed guardian source is pinned and kept outside model-controlled roots.
+`deliveries` must be the concrete
 `LocalGitDeliveryController`. The existing Git executable must match; Git, gh,
 root identities and physical separation are pinned. Missing/changed executables
 refuse. No command is run by construction, except existing local inspection
@@ -113,8 +116,15 @@ reconciled by reading the exact existing PR. Absence retains it; no second POST
 is made. A lost response after the complete durable receipt is safe to retry.
 There is no cleanup/reset/repair API, and no inference of success from exit zero.
 
-The official subprocess wrapper has fixed environment, bounded output/time and
-owned process-group cleanup. Raw stderr is not returned. Read failures do not
+The official subprocess wrapper has fixed environment and bounded output/time.
+A small pinned Python guardian remains the live group leader while Git/gh runs
+as its child. The target inherits neither private control/status descriptor.
+The guardian sends only the target's actual integer exit code on a bounded pipe,
+then waits. The controller terminates that still-owned group before reaping the
+guardian, even on target success. Children with detached streams cannot survive
+a successful call; no signal targets a PGID after its leader was reaped. Closing
+the controller's life pipe also cleans the group during or after the command.
+Raw stderr is not returned. Read failures do not
 authorize retries of ambiguous writes. This is a cooperative protected-controller
 boundary, not a sandbox against arbitrary same-UID Python or external changes
 made after an observed GitHub response.

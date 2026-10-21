@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
+import time
 import uuid
 
 import pytest
@@ -22,11 +24,15 @@ class Crash(BaseException): pass
 
 
 @pytest.fixture
-def publication(delivery):
+def publication(delivery,monkeypatch):
     f=delivery;seal(f)
     root=f['state'].parent
     f['publication_root']=root/'publications';f['publication_root'].mkdir(mode=0o700)
     f['gh']=root/'approved-gh';f['gh'].write_text('#!/bin/sh\nexit 99\n');f['gh'].chmod(0o700)
+    # The Mac test installation is group-writable. Test a private executable
+    # copy without relaxing the production protected-tool requirement.
+    f['python']=root/'approved-python';f['python'].write_bytes(Path(sys.executable).resolve().read_bytes());f['python'].chmod(0o700)
+    monkeypatch.setattr(sys,'executable',str(f['python']))
     f['remote']=root/'synthetic-remote.git'
     git(root,'clone','--bare','--no-hardlinks',str(f['source']),str(f['remote']))
     f['publication_grant']=GitHubPublicationGrant(f['scope']['owner_id'],REPOSITORY,'main',f['grant'].base_commit)
@@ -336,12 +342,13 @@ def test_evasive_base_ref_is_refused_before_preparation(publication,branch):
         replace(f['publication_grant'],base_branch=branch).document()
 
 
-def test_actual_bounded_command_uses_only_a_synthetic_executable(publication):
+@pytest.mark.parametrize('exit_code',[0,7])
+def test_actual_bounded_command_uses_only_a_synthetic_executable(publication,exit_code):
     f=publication
-    f['gh'].write_text('#!/bin/sh\nprintf synthetic-output\n');f['gh'].chmod(0o700)
+    f['gh'].write_text('#!/bin/sh\nprintf synthetic-output\nexit '+str(exit_code)+'\n');f['gh'].chmod(0o700)
     value=GitHubDraftPublisher(f['delivery'],f['publication_root'],grant=f['publication_grant'],gh_executable=f['gh'])
     code,out,err=value._command([str(f['gh']),'synthetic-command'],cwd=f['publication_root'])
-    assert (code,out,err)==(0,b'synthetic-output',b'')
+    assert (code,out,err)==(exit_code,b'synthetic-output',b'')
 
 
 def test_empty_authentication_output_is_not_a_success(publication):
@@ -407,7 +414,7 @@ def test_branch_appearing_before_push_is_not_fast_forwarded_even_from_base(publi
     assert git(f['remote'],'rev-parse','refs/heads/codex/delivery-'+f['op'])==f['grant'].base_commit
 
 
-def test_timeout_kills_owned_group_when_main_process_already_exited(publication,monkeypatch):
+def test_exited_command_child_holding_pipes_is_cleaned_before_success(publication,monkeypatch):
     f=publication;f['gh'].write_text('#!/bin/sh\nsleep 10 &\nexit 0\n');f['gh'].chmod(0o700)
     value=GitHubDraftPublisher(f['delivery'],f['publication_root'],grant=f['publication_grant'],gh_executable=f['gh'],timeout_seconds=1)
     popen=subprocess.Popen;killpg=os.killpg;processes=[];killed=[]
@@ -417,12 +424,82 @@ def test_timeout_kills_owned_group_when_main_process_already_exited(publication,
         result=killpg(group,number);killed.append((group,number));return result
     monkeypatch.setattr(subprocess,'Popen',remember);monkeypatch.setattr(os,'killpg',kill)
     try:
-        with pytest.raises(DevelopmentError,match='command_unconfirmed'):
-            value._command([str(f['gh']),'synthetic-command'],cwd=f['publication_root'])
-        assert len(processes)==1 and processes[0].poll()==0
+        assert value._command([str(f['gh']),'synthetic-command'],cwd=f['publication_root'])==(0,b'',b'')
+        assert len(processes)==1 and processes[0].poll()==-signal.SIGKILL
         assert (processes[0].pid,signal.SIGKILL) in killed
     finally:
         for process in processes:
             if (process.pid,signal.SIGKILL) not in killed:
                 try:killpg(process.pid,signal.SIGKILL)
                 except ProcessLookupError:pass
+
+
+def test_successful_main_exit_kills_owned_child_with_detached_streams(publication,monkeypatch):
+    f=publication;marker=f['publication_root']/'late-child-write'
+    f['gh'].write_text('#!/bin/sh\n(sleep 0.25; printf late > '+str(marker)+') </dev/null >/dev/null 2>&1 &\nexit 0\n')
+    f['gh'].chmod(0o700)
+    value=GitHubDraftPublisher(f['delivery'],f['publication_root'],grant=f['publication_grant'],gh_executable=f['gh'])
+    popen=subprocess.Popen;processes=[];killpg=os.killpg;killed=[]
+    def remember(*args,**kw):
+        result=popen(*args,**kw);processes.append(result);return result
+    def kill(group,number):
+        # The principal is still owned/unreaped when its group is signalled.
+        assert len(processes)==1 and processes[0].pid==group and processes[0].returncode is None
+        result=killpg(group,number);killed.append((group,number));return result
+    monkeypatch.setattr(subprocess,'Popen',remember);monkeypatch.setattr(os,'killpg',kill)
+    try:
+        assert value._command([str(f['gh']),'synthetic-command'],cwd=f['publication_root'])==(0,b'',b'')
+        assert (processes[0].pid,signal.SIGKILL) in killed
+        time.sleep(.4)
+        assert not marker.exists()
+    finally:
+        for process in processes:
+            if (process.pid,signal.SIGKILL) not in killed:
+                try:killpg(process.pid,signal.SIGKILL)
+                except (ProcessLookupError,PermissionError):pass
+
+
+def test_private_guardian_fds_are_not_inherited_by_target_command(publication):
+    f=publication
+    script='import json,os; descriptors=[]\nfor n in range(3,128):\n try:os.fstat(n);descriptors.append(n)\n except OSError:pass\nprint(json.dumps(descriptors))'
+    import shlex
+    f['gh'].write_text('#!/bin/sh\nexec '+shlex.quote(str(f['python']))+' -I -S -B -c '+shlex.quote(script)+'\n')
+    f['gh'].chmod(0o700)
+    value=GitHubDraftPublisher(f['delivery'],f['publication_root'],grant=f['publication_grant'],gh_executable=f['gh'])
+    assert value._command([str(f['gh']),'synthetic-command'],cwd=f['publication_root'])==(0,b'[]\n',b'')
+
+
+def test_guardian_start_failure_is_refused_and_reaped(publication,monkeypatch):
+    f=publication;popen=subprocess.Popen;processes=[]
+    def remember(*args,**kw):
+        result=popen(*args,**kw);processes.append(result);return result
+    value=GitHubDraftPublisher(f['delivery'],f['publication_root'],grant=f['publication_grant'],gh_executable=f['gh'])
+    monkeypatch.setattr(subprocess,'Popen',remember)
+    with pytest.raises(DevelopmentError,match='command_unconfirmed'):
+        value._command([str(f['gh'].with_name('missing-synthetic-command'))],cwd=f['publication_root'])
+    assert len(processes)==1 and processes[0].returncode==-signal.SIGKILL
+
+
+@pytest.mark.parametrize('when',['during_command','after_command'])
+def test_guardian_life_pipe_eof_cleans_group_without_controller_signal(publication,when):
+    f=publication;marker=f['publication_root']/'orphan-child-write'
+    ending='sleep 10' if when=='during_command' else 'exit 0'
+    f['gh'].write_text('#!/bin/sh\n(sleep .25; printf late > '+str(marker)+') </dev/null >/dev/null 2>&1 &\n'+ending+'\n')
+    f['gh'].chmod(0o700)
+    value=GitHubDraftPublisher(f['delivery'],f['publication_root'],grant=f['publication_grant'],gh_executable=f['gh'])
+    sr,sw=os.pipe();lr,lw=os.pipe();descriptors=[sr,sw,lr,lw];process=None
+    try:
+        process=subprocess.Popen([str(value.python),'-I','-S','-B',str(value.guardian),str(sw),str(lr),'--',str(f['gh'])],
+            cwd=f['publication_root'],env=value._environment(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,start_new_session=True,pass_fds=(sw,lr))
+        os.close(sw);descriptors.remove(sw);os.close(lr);descriptors.remove(lr)
+        if when=='after_command':assert os.read(sr,64)==b'0\n'
+        os.close(lw);descriptors.remove(lw)
+        assert process.wait(timeout=3)==-signal.SIGKILL
+        time.sleep(.4);assert not marker.exists()
+    finally:
+        if process is not None and process.returncode is None:
+            try:os.killpg(process.pid,signal.SIGKILL)
+            except ProcessLookupError:pass
+            process.wait(timeout=3)
+        for descriptor in descriptors:os.close(descriptor)

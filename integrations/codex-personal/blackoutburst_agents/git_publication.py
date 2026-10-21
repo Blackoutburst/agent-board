@@ -13,6 +13,7 @@ import selectors
 import shlex
 import signal
 import subprocess
+import sys
 import time
 from urllib.parse import quote
 
@@ -80,17 +81,23 @@ class GitHubPublicationGrant:
 class GitHubDraftPublisher:
     """Per-delivery lock only. Interrupted effects are read back, never repeated."""
     def __init__(self, deliveries, publication_root, *, grant, git_executable='/usr/bin/git',
-                 gh_executable='/usr/bin/gh', timeout_seconds=60):
+                 gh_executable='/usr/bin/gh', timeout_seconds=60, python_executable=None):
         if type(deliveries) is not LocalGitDeliveryController or type(grant) is not GitHubPublicationGrant:
             fail('git_publication_controller_required')
         self.deliveries, self.workspaces = deliveries, deliveries.workspaces
         self.root, self.git, self.gh = _path(publication_root), _path(git_executable), _path(gh_executable)
+        self.python = _path(python_executable or Path(sys.executable).resolve())
+        self.guardian = _path(Path(__file__).absolute().with_name('git_publication_guardian.py'))
         self._grant, self.grant = grant, grant.document()
         if self.git != self.workspaces.git: fail('git_publication_tool_mismatch')
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 120: fail('git_publication_timeout_refused')
         self.timeout = timeout_seconds
-        self.pins = {'root':_directory(self.root,private=True), 'git':self._tool(self.git), 'gh':self._tool(self.gh)}
+        self.pins = self._pins()
         self._roots()
+
+    def _pins(self):
+        return {'root':_directory(self.root,private=True), 'git':self._tool(self.git), 'gh':self._tool(self.gh),
+                'python':self._tool(self.python), 'guardian':digest(_file(self.guardian,32768))}
 
     @staticmethod
     def _tool(path):
@@ -103,13 +110,16 @@ class GitHubDraftPublisher:
     def _roots(self):
         self.deliveries._roots()
         if (self.grant != self._grant.document()
-                or self.pins != {'root':_directory(self.root,private=True),'git':self._tool(self.git),'gh':self._tool(self.gh)}
+                or self.pins != self._pins()
                 or self.pins['git'] != self.workspaces.pins['git_sha256']): fail('git_publication_pin_changed')
         paths = (self.root,self.deliveries.delivery_root,self.deliveries.review_root,
                  self.workspaces.state_root,self.workspaces.workspace_root,self.workspaces.repository)
         chains = [_ancestry(path) for path in paths]
         if any(a[-1] in b or b[-1] in a for n,a in enumerate(chains) for b in chains[n+1:]):
             fail('git_publication_roots_overlap')
+        for tool in (self.python,self.guardian):
+            ancestry = _ancestry(tool.parent)
+            if any(root[-1] in ancestry for root in chains): fail('git_publication_tool_location_refused')
 
     def _environment(self, *, git=False):
         # Preserve the existing user's normal gh configuration/keyring location.
@@ -149,35 +159,61 @@ class GitHubDraftPublisher:
     def _command(self, argv, *, cwd, git=False):
         """Bounded argv-only command. Raw stdout/stderr never become a receipt."""
         self._roots()
-        process = None; confirmed = False
+        process = None; descriptors = []; terminated = False
         try:
-            process = subprocess.Popen(argv,cwd=cwd,env=self._environment(git=git),stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,umask=0o077)
-            outputs = [bytearray(),bytearray()]; total = 0; deadline = time.monotonic()+self.timeout
+            descriptors.extend(os.pipe()); descriptors.extend(os.pipe())
+            status_read,status_write,life_read,life_write = descriptors
+            launcher = [str(self.python),'-I','-S','-B',str(self.guardian),str(status_write),str(life_read),'--',*argv]
+            process = subprocess.Popen(launcher,cwd=cwd,env=self._environment(git=git),stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,umask=0o077,
+                pass_fds=(status_write,life_read))
+            os.close(status_write); descriptors.remove(status_write)
+            os.close(life_read); descriptors.remove(life_read)
+            outputs = [bytearray(),bytearray()]; status = bytearray(); code = None
+            total = 0; deadline = time.monotonic()+self.timeout
             with selectors.DefaultSelector() as poll:
                 poll.register(process.stdout,selectors.EVENT_READ,0); poll.register(process.stderr,selectors.EVENT_READ,1)
+                poll.register(status_read,selectors.EVENT_READ,2)
                 while poll.get_map():
                     if time.monotonic() >= deadline: fail('git_publication_command_unconfirmed')
                     for key,_ in poll.select(min(.1,max(.001,deadline-time.monotonic()))):
-                        raw = os.read(key.fileobj.fileno(),min(65536,MAX_OUTPUT+1-total))
-                        if not raw: poll.unregister(key.fileobj)
+                        raw = os.read(key.fd,65-len(status) if key.data==2 else min(65536,MAX_OUTPUT+1-total))
+                        if not raw:
+                            poll.unregister(key.fileobj)
+                            if key.data==2 and code is None: fail('git_publication_command_unconfirmed')
+                        elif key.data==2:
+                            status.extend(raw)
+                            if len(status)>64: fail('git_publication_command_unconfirmed')
+                            if b'\n' in status:
+                                if code is not None or re.fullmatch(rb'(?:0|[1-9][0-9]{0,2}|-[1-9][0-9]{0,2})\n',status) is None:
+                                    fail('git_publication_command_unconfirmed')
+                                code = int(status)
+                                if not -255 <= code <= 255: fail('git_publication_command_unconfirmed')
+                                if os.getpgid(process.pid)!=process.pid or os.getsid(process.pid)!=process.pid:
+                                    fail('git_publication_command_unconfirmed')
+                                os.killpg(process.pid,signal.SIGKILL); terminated = True
                         else:
                             total += len(raw)
                             if total > MAX_OUTPUT: fail('git_publication_command_unconfirmed')
                             outputs[key.data].extend(raw)
-            code = process.wait(timeout=max(.01,deadline-time.monotonic()))
-            confirmed = True
+            if code is None or not terminated or process.wait(timeout=5)!=-signal.SIGKILL:
+                fail('git_publication_command_unconfirmed')
             return code,bytes(outputs[0]),bytes(outputs[1])
         except (OSError,subprocess.TimeoutExpired): fail('git_publication_command_unconfirmed')
         finally:
+            cleanup_error = False
             if process is not None:
-                # An exited main process can leave a child holding the pipes.
-                # Timeout/failure still owns and must terminate that group.
-                if not confirmed or process.poll() is None:
+                # No poll/reap before the owned group signal, including failures.
+                if not terminated and process.returncode is None:
                     try: os.killpg(process.pid,signal.SIGKILL)
                     except ProcessLookupError: pass
-                    if process.poll() is None: process.wait(timeout=5)
+                    except OSError: cleanup_error = True
+                if process.returncode is None:
+                    try: process.wait(timeout=5)
+                    except (OSError,subprocess.TimeoutExpired): cleanup_error = True
                 process.stdout.close(); process.stderr.close()
+            for descriptor in descriptors: os.close(descriptor)
+            if cleanup_error: fail('git_publication_command_unconfirmed')
 
     def _api(self, path, *, cwd, method='GET', input_file=None):
         argv = [str(self.gh),'api','--hostname',HOST,'--method',method,path]
