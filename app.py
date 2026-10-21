@@ -33,6 +33,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from board import Board, BoardError
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
+from server_messages_append import validate_messages_append_arguments
 from runtime import validate_message_admission_seal_arguments
 from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
@@ -42,6 +43,8 @@ from development_frames import (get_development_frame as development_frame, wire
 ROOT = Path(__file__).resolve().parent
 COOKIE = "board_session"
 MAX_BODY = 15 * 1024 * 1024
+APPEND_MANAGER_TOOLS = frozenset({'poll_server_messages_appends', 'prepare_server_messages_append',
+    'precommit_server_messages_append', 'commit_server_messages_append', 'complete_server_messages_append'})
 
 
 class BoardMCP(FastMCP):
@@ -52,6 +55,8 @@ class BoardMCP(FastMCP):
             development_frame_arguments(arguments)
         elif name in MANAGER_TOOLS:
             validate_manager_arguments(name, arguments)
+        elif name in APPEND_MANAGER_TOOLS:
+            validate_messages_append_arguments(name, arguments)
         elif name == 'seal_message_execution_admission':
             validate_message_admission_seal_arguments(arguments)
         return await super().call_tool(name, arguments)
@@ -60,7 +65,7 @@ class BoardMCP(FastMCP):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
                 if tool.name in {'get_development_frame', 'seal_message_execution_admission'}
-                or tool.name in MANAGER_TOOLS else tool for tool in tools]
+                or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS else tool for tool in tools]
 
 
 class Body(BaseModel):
@@ -864,7 +869,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @mcp.tool()
     async def poll_server_messages_appends(host_id: ServerOpaque,
-            limit: Annotated[int, Field(strict=True, ge=1, le=16)] = 1) -> dict:
+            limit: Annotated[int, Field(strict=True, ge=1, le=16)]) -> dict:
         """Read one finite queue of explicit owner append requests. Metadata only; no registration, login, feed, model or execution authority."""
         return board.poll_server_messages_appends(device_actor(), host_id, limit=limit)
 

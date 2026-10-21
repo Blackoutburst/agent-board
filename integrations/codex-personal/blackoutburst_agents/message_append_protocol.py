@@ -10,7 +10,10 @@ from .managed_host import _opaque, _sha
 
 TOOLS = frozenset({'poll_server_messages_appends', 'prepare_server_messages_append',
     'precommit_server_messages_append', 'commit_server_messages_append',
-    'complete_server_messages_append'})
+    'complete_server_messages_append', 'report_server_messages_append_status'})
+STATUS_REASONS = frozenset({'slot_unavailable','source_changed','children_uncertain','connection_lost',
+    'request_changed','authorization_changed','local_state_conflict','local_io_failed',
+    'protocol_error','requires_reconciliation'})
 PHASES = {'prepared': 2, 'precommit': 3, 'committed': 4, 'complete': 5}
 PIN_FIELDS = ('source_release_sha256', 'old_configuration_sha256', 'new_configuration_sha256',
     'old_catalog_sha256', 'new_catalog_sha256', 'bindings_sha256', 'children_roster_sha256')
@@ -22,7 +25,7 @@ REQUEST_FIELDS = ('schema expected_host_version expected_catalog_version expecte
     'grant_version profile_id profile_version profile_sha256 provider_id requested_model slot_id idempotency_key')
 VIEW_FIELDS = ('schema request_id request_sha256 owner_id host_id device_id revision state reason '
     'barrier_held profile_id profile_version provider_id requested_model slot_id can_cancel instance_id '
-    'proof connection_status model_catalog_status model_access_status')
+    'proof connection_status model_catalog_status model_access_status controller_status controller_reason')
 SLOT_FIELDS = 'slot_id device_id session_id agent_kind identity_key profile_id profile_version'
 
 
@@ -116,6 +119,9 @@ def view(value):
         _fail()
     if any(value[k] != 'not_attested' for k in ('connection_status', 'model_catalog_status', 'model_access_status')):
         _fail()
+    if type(value['controller_reason']) is not str or not ((value['controller_status']=='not_reported' and value['controller_reason']=='')
+            or (value['controller_status']=='blocked' and value['controller_reason'] in STATUS_REASONS)):
+        _fail()
     if phase in ('requested', 'cancelled'):
         if value['proof'] is not None or value['instance_id'] is not None:
             _fail()
@@ -128,12 +134,40 @@ def view(value):
     return value
 
 
+def validate_record(item, *, expected_host_id, allow_complete=False):
+    """Consistency of public data, including a retained local receipt hint.
+
+    This never establishes that the data is a fresh Board observation. The
+    coordinator still performs the exact currently authorized RPC before effects.
+    """
+    _exact(item, 'request body slot')
+    v = view(item['request']); b = request(item['body']); s = slot(item['slot'])
+    if (v['host_id'] != expected_host_id or v['state'] == 'cancelled'
+            or (v['state'] == 'complete' and not allow_complete)
+            or any(v[k] != b[k] for k in ('profile_id', 'profile_version', 'provider_id', 'requested_model', 'slot_id'))
+            or any(s[k] != b[k] for k in ('profile_id', 'profile_version', 'slot_id'))):
+        _fail()
+    if v['request_sha256'] != _ascii_hash(dict(purpose='messages_append_v1',
+            owner_id=v['owner_id'], host_id=v['host_id'], device_id=v['device_id'], body=b)):
+        _fail()
+    if v['proof'] is not None and any(v['proof'][k] != b[k] for k in
+            ('grant_version', 'expected_host_version', 'expected_catalog_version', 'expected_instances_sha256')):
+        _fail()
+    return item
+
+
 def arguments(name, args):
     if name not in TOOLS:
         _fail()
     _bounded(args, 16384)
     if name == 'poll_server_messages_appends':
         _exact(args, 'host_id limit'); _opaque(args['host_id']); _int(args['limit'], 1, 16)
+        return args
+    if name == 'report_server_messages_append_status':
+        _exact(args,'host_id request_id expected_revision status reason idempotency_key')
+        for key in ('host_id','request_id','idempotency_key'):_opaque(args[key])
+        _int(args['expected_revision'],1,5)
+        if args['status']!='blocked' or type(args['reason']) is not str or args['reason'] not in STATUS_REASONS:_fail()
         return args
     keys = 'host_id request_id expected_revision idempotency_key '
     if name == 'prepare_server_messages_append':
@@ -169,27 +203,24 @@ def arguments(name, args):
 def response(name, value, args):
     """Validate correlation too, so a valid foreign receipt cannot advance a host."""
     arguments(name, args); _bounded(value, 65536)
-    if name == 'poll_server_messages_appends':
+    if name == 'report_server_messages_append_status':
+        _exact(value,'schema owner_id host_id device_id request_id request_revision status reason')
+        if value['schema']!='server-messages-append-controller-status-v1':_fail()
+        for key in ('owner_id','host_id','device_id','request_id'):_opaque(value[key])
+        if (any(value[k]!=args[k] for k in ('host_id','request_id','status','reason'))
+                or type(value['request_revision']) is not int
+                or value['request_revision']!=args['expected_revision']):_fail()
+    elif name == 'poll_server_messages_appends':
         _exact(value, 'schema host_id requests')
         if (value['schema'] != 'server-messages-append-poll-v1' or value['host_id'] != args['host_id']
                 or type(value['requests']) is not list or len(value['requests']) > args['limit']):
             _fail()
         ids = set()
         for item in value['requests']:
-            _exact(item, 'request body slot')
-            v = view(item['request']); b = request(item['body']); s = slot(item['slot'])
-            if (v['host_id'] != args['host_id'] or v['request_id'] in ids
-                    or v['state'] in ('cancelled', 'complete')
-                    or any(v[k] != b[k] for k in ('profile_id', 'profile_version', 'provider_id', 'requested_model', 'slot_id'))
-                    or any(s[k] != b[k] for k in ('profile_id', 'profile_version', 'slot_id'))):
+            validate_record(item, expected_host_id=args['host_id'])
+            if item['request']['request_id'] in ids:
                 _fail()
-            if v['request_sha256'] != _ascii_hash(dict(purpose='messages_append_v1',
-                    owner_id=v['owner_id'], host_id=v['host_id'], device_id=v['device_id'], body=b)):
-                _fail()
-            if v['proof'] is not None and any(v['proof'][k] != b[k] for k in
-                    ('grant_version', 'expected_host_version', 'expected_catalog_version', 'expected_instances_sha256')):
-                _fail()
-            ids.add(v['request_id'])
+            ids.add(item['request']['request_id'])
     else:
         p = proof(value)
         phase = {'prepare_server_messages_append': 'prepared', 'precommit_server_messages_append': 'precommit',

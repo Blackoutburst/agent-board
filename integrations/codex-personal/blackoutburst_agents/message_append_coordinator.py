@@ -14,7 +14,7 @@ import stat
 import uuid
 
 from .host_config import HostError, private_directory
-from .message_append_protocol import PIN_FIELDS, arguments, response, view, request, slot
+from .message_append_protocol import PIN_FIELDS, arguments, response, validate_record
 
 NAMESPACE = uuid.UUID('b23f1c87-733e-40e3-9eca-e93ce34f22f3')
 MAX_OUTBOX = 18*1024*1024
@@ -96,7 +96,7 @@ def existing_append_children(host,operation_id=None):
             if fd is not None:os.close(fd)
     with ExitStack() as resources:
         messages=resources.enter_context(MessageJournal(host.directory/'messages'))
-        runs=RunStore(host.directory/'message-runs');resources.callback(runs.close)
+        runs=RunStore(host.directory/'message-runs',existing_only=True);resources.callback(runs.close)
         runtime=resources.enter_context(RuntimeJournal(host.directory/'message-runtime'))
         with locked_message_append_children(host,messages,runs,runtime,operation_id=operation_id) as children:
             yield children
@@ -116,7 +116,7 @@ class MessagesAppendCoordinator:
         if self.host._db.in_transaction and plan is None:_fail('transaction')
         if self.source_guard() is not None:_fail('source')
         v,b,s=record['request'],record['body'],record['slot']
-        view(v);request(b);slot(s)
+        validate_record(record,expected_host_id=self.host.managed_settings()['host_id'],allow_complete=True)
         if (v['host_id']!=self.host.managed_settings()['host_id']
                 or v['owner_id']!=self.host.control()['configuration']['owner_id']):_fail('identity')
         if plan is not None:
@@ -157,7 +157,10 @@ class MessagesAppendCoordinator:
         try:
             fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
             offset=0
-            while offset<len(raw):offset+=os.write(fd,raw[offset:])
+            while offset<len(raw):
+                written=os.write(fd,raw[offset:])
+                if written<=0:_fail('outbox')
+                offset+=written
             os.fsync(fd)
         except OSError:_fail('outbox')
         finally:
@@ -175,10 +178,61 @@ class MessagesAppendCoordinator:
         arguments(name,args)
         result=self.client.call(name,args)
         response(name,result,args)
+        if name=='complete_server_messages_append':
+            self._completed_membership(plan,result)
         self._guard(record,plan)
         loaded=self._load(record)
         if loaded is None or loaded[1]!=pin:_fail('outbox_changed')
         return result
+
+    def _completed_membership(self,plan,completion):
+        # The completion receipt may be historical after a lost response. A
+        # fresh poll checks membership, never asserts that old command/cleanup
+        # observations remain current after a later human Stop.
+        from .server_control_protocol import response as control_response
+        snapshot=self.client.call('poll_instance_commands',{'host_id':plan['host_id'],'limit':20})
+        control_response('poll_instance_commands',snapshot)
+        if (snapshot['host_id']!=plan['host_id'] or snapshot['catalog_version']!=completion['catalog_version']):
+            _fail('catalog_changed')
+        expected={entry['catalog_key']:entry for entry in plan['new_catalog']}
+        actual={row['catalog_key']:row for row in snapshot['instances']}
+        if set(actual)!=set(expected):_fail('catalog_changed')
+        old_ids={row['target_id']:row['instance_id'] for row in plan['preserved']['managed_targets']}
+        added=plan['new_configuration']['targets'][-1]['id']
+        for key,entry in expected.items():
+            row=actual[key]
+            if (not row['active'] or any(row[field]!=value for field,value in entry.items())
+                    or row['id']!=(completion['instance_id'] if key==added else old_ids[key])):
+                _fail('catalog_changed')
+
+    def pending_hint(self):
+        """Recover the exact local request after remote complete left the queue.
+
+        This retained view is history, not a fresh grant. advance() must still
+        replay the original RPC and check its response before a local effect.
+        """
+        self.host._require_lock()
+        if self.host._db.execute('PRAGMA user_version').fetchone()[0]!=5:return None
+        self.host._check_messages_appends()
+        rows=self.host._db.execute("SELECT operation_id FROM host_message_appends WHERE phase!='complete' LIMIT 2").fetchall()
+        if not rows:return None
+        if len(rows)!=1:_fail('conflict')
+        local=self.host.messages_append_record(operation_id=rows[0][0]);p=local['proofs'][-1]
+        path=self._outbox({'request':{'request_id':p['request_id']}})
+        data,_=_read_exact(path)
+        if type(data) is not dict or 'body' not in data or 'slot' not in data:_fail('outbox')
+        b=data['body']
+        retained=dict(schema='server-messages-append-view-v1',request_id=p['request_id'],request_sha256=p['request_sha256'],
+            owner_id=p['owner_id'],host_id=p['host_id'],device_id=p['device_id'],revision=p['request_revision'],
+            state=p['phase'],reason=p['phase'],barrier_held=True,profile_id=b['profile_id'],
+            profile_version=b['profile_version'],provider_id=b['provider_id'],requested_model=b['requested_model'],
+            slot_id=b['slot_id'],can_cancel=False,instance_id=p['instance_id'],proof=deepcopy(p),
+            connection_status='not_attested',model_catalog_status='not_attested',model_access_status='not_attested')
+        retained.update(controller_status='not_reported',controller_reason='')
+        record=dict(request=retained,body=deepcopy(b),slot=deepcopy(data['slot']))
+        loaded=self._load(record)
+        if loaded is None or _encoded(loaded[0])!=_encoded(local['plan']):_fail('outbox_changed')
+        return record
 
     def advance(self,record):
         """One finite phase only, with no global retry, Start, feed or model."""

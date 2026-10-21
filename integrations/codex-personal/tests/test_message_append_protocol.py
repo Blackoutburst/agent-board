@@ -70,7 +70,8 @@ def poll_item():
         host_id='host',device_id='manager',revision=1,state='requested',reason='requested',barrier_held=True,
         profile_id=b['profile_id'],profile_version=b['profile_version'],provider_id=b['provider_id'],
         requested_model=b['requested_model'],slot_id=b['slot_id'],can_cancel=True,instance_id=None,proof=None,
-        connection_status='not_attested',model_catalog_status='not_attested',model_access_status='not_attested')
+        connection_status='not_attested',model_catalog_status='not_attested',model_access_status='not_attested',
+        controller_status='not_reported',controller_reason='')
     v['request_sha256']=_ascii_hash(dict(purpose='messages_append_v1',owner_id='owner',host_id='host',device_id='manager',body=b))
     return dict(request=v,body=b,slot=s)
 
