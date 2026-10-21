@@ -1,5 +1,7 @@
 # Requête et paquet d’entrées Linux — codec inactif
 
+Le [profil exécutable 0.30](LINUX_EXECUTION.md) réutilise ces primitives via un journal schema 3 distinct et des handles vivants. Le codec et le snapshot restent sans effet natif par eux-mêmes ; les états input-only/schema 2 et les preuves historiques ne sont jamais adoptés.
+
 `blackoutburst_agents/linux_test_protocol.py` définit uniquement les données
 privées d’une future tentative de test Linux. Il ne prépare pas de plan, ne
 sélectionne pas de backend, ne lance pas de processus et n’écrit aucun journal,

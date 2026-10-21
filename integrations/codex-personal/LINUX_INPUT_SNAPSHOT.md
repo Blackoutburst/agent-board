@@ -1,5 +1,7 @@
 # Contrat privé des entrées Linux — incrément inactif
 
+Le [profil exécutable 0.30](LINUX_EXECUTION.md) réutilise ces primitives via un journal schema 3 distinct et des handles vivants. Le codec et le snapshot restent sans effet natif par eux-mêmes ; les états input-only/schema 2 et les preuves historiques ne sont jamais adoptés.
+
 `blackoutburst_agents/linux_input_snapshot.py` prépare uniquement la copie privée
 et bornée des fichiers texte explicitement présents dans le manifeste du broker.
 Il ne crée ni plan d'exécution, backend, reçu de qualification ou capacité du

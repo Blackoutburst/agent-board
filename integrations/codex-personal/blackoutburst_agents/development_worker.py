@@ -27,6 +27,17 @@ from .planner_policy import PlannerPolicy
 from .work_journal import JournalError
 
 
+def execution_factories(profile='darwin'):
+    """Closed explicit selection, never inferred from platform or a model."""
+    if profile == 'darwin':
+        return {'backend_factory': SupervisedNativeNamedPythonBackend, 'policy_factory': PlannerPolicy}
+    if profile == 'linux-python-execution-v1':
+        from .linux_test_backend import SupervisedLinuxNamedPythonBackend
+        from .linux_planner_policy import LinuxPlannerPolicy
+        return {'backend_factory': SupervisedLinuxNamedPythonBackend, 'policy_factory': LinuxPlannerPolicy}
+    raise DevelopmentError('development_execution_profile_invalid')
+
+
 class DevelopmentBoardWorker:
     def __init__(self, journal, store, runtime_journal, client, control_client, *,
                  backend_factory=SupervisedNativeNamedPythonBackend, policy_factory=PlannerPolicy,
@@ -166,6 +177,17 @@ class DevelopmentBoardWorker:
             policy.validate_for(policy.executable, policy.workspace)  # Offline pins only.
             backend = self.backend_factory(backend_path, manifest=manifest.manifest, authorize_scope=authorize)
             stack.callback(backend.close)
+            if manifest._linux_execution_profile:
+                from .linux_test_backend import SupervisedLinuxNamedPythonBackend
+                from .linux_planner_policy import LinuxPlannerPolicy
+                if (type(backend) is not SupervisedLinuxNamedPythonBackend or type(policy) is not LinuxPlannerPolicy
+                        or backend.environment != policy.environment):
+                    raise DevelopmentError('development_linux_pair_mismatch')
+            elif getattr(backend, 'kind', None) == 'linux-python-execution-v1':
+                raise DevelopmentError('development_linux_journal_required')
+            elif not self.allow_fixture and (type(backend) is not SupervisedNativeNamedPythonBackend
+                    or type(policy) is not PlannerPolicy):
+                raise DevelopmentError('development_backend_policy_mismatch')
             if (not manifest.manifest['tests'] or any(not backend.qualified_for(manifest.manifest_hash,suite)
                     for suite in manifest.manifest['tests'])):
                 raise DevelopmentError('development_backend_unqualified')
@@ -173,8 +195,11 @@ class DevelopmentBoardWorker:
 
     @staticmethod
     def _backend_pin(backend):
-        return digest(canonical({'backend_id':backend.backend_id, 'plan_hash':backend.document['plan_hash'],
-                                  'supervision':backend.supervision}))
+        value={'backend_id':backend.backend_id, 'plan_hash':backend.document['plan_hash'],
+               'supervision':backend.supervision}
+        if getattr(backend,'kind',None)=='linux-python-execution-v1':
+            value['kind']='linux-python-execution-v1'
+        return digest(canonical(value))
 
     def prepare(self, *, scope, request_id, instruction, broker_directory, backend_directory,
                 planner_policy_directory, model, budgets=None, operation_id=None, registration=None):
@@ -242,6 +267,9 @@ class DevelopmentBoardWorker:
                 config={'schema':1,'kind':'development','instruction':instruction,'model':model,'budgets':limits,
                     'pins':pins,'manifest_hash':manifest.manifest_hash,'policy_hash':policy.fingerprint,
                     'backend_hash':self._backend_pin(backend)}
+                if manifest._linux_execution_profile:
+                    config.update(execution_profile='linux-python-execution-v1',
+                                  linux_execution_plan_sha256=backend.document['plan_hash'])
                 if self.controller_scope is not None:
                     config['controller_scope']=deepcopy(self.controller_scope)
                 if prior is not None and prior['configuration']!=config:
@@ -263,6 +291,12 @@ class DevelopmentBoardWorker:
                 or config['manifest_hash']!=manifest.manifest_hash or config['policy_hash']!=policy.fingerprint
                 or config['backend_hash']!=self._backend_pin(backend)):
             raise DevelopmentError('development_configuration_changed')
+        if manifest._linux_execution_profile:
+            if (config.get('execution_profile')!='linux-python-execution-v1'
+                    or config.get('linux_execution_plan_sha256')!=backend.document['plan_hash']):
+                raise DevelopmentError('development_linux_configuration_changed')
+        elif 'execution_profile' in config:
+            raise DevelopmentError('development_execution_profile_changed')
         for pin in config['pins'].values():
             if _directory_pin(pin['path'])!=pin:
                 raise DevelopmentError('development_directory_changed')
@@ -434,16 +468,7 @@ class DevelopmentBoardWorker:
                     authorization.claim_id=op['payload']['claim_id']
                 # Qualification is an offline check. Before claim, the callback
                 # verifies explicit grants without asserting a nonexistent lease.
-                def allowed(scope,action,resource):
-                    try:
-                        if 'context' in op['payload']:
-                            grant=authorization()
-                            return (scope==grant['scope'] and action in grant['actions'] and resource in grant['resources'])
-                        policy=authorization._policy()
-                        return (scope==authorization.manifest['scope'] and action in policy['actions']
-                            and resource==authorization.manifest['resource'] and resource in policy['resources'])
-                    except Exception:
-                        return False
+                allowed=authorization.allowed
                 with self._resources(pins['broker']['path'],pins['backend']['path'],pins['planner_policy']['path'],
                                      authorize=allowed) as resources:
                     manifest,policy,backend=resources

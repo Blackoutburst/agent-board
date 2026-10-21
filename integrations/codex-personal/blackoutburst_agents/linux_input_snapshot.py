@@ -274,12 +274,20 @@ class LinuxInputSnapshot:
 
     def _capture(self):
         self._held()
+        shared = None
+        if self._broker.journal._linux_execution_profile:
+            from .linux_test_backend import _ExecutionCapturePermit
+            if type(self._capture_permit) is not _ExecutionCapturePermit:
+                _error('linux_execution_capture_permit_invalid')
+            self._capture_permit.take(self)
+            shared = self._capture_permit.authorize_capture(self)
+            self._held()
         if self._broker.journal._linux_input_profile:
             from .linux_input_admission import _CapturePermit
             if type(self._capture_permit) is not _CapturePermit:
                 _error('linux_input_capture_permit_invalid')
             self._capture_permit.take(self)
-        if self._authorize_reads or self._broker.journal._linux_input_profile:
+        if not self._broker.journal._linux_execution_profile and (self._authorize_reads or self._broker.journal._linux_input_profile):
             self._broker._authorize('repo.read_file')
             self._broker._authorize('repo.run_test')
             self._held()
@@ -330,6 +338,8 @@ class LinuxInputSnapshot:
                     'files': entries, 'planner_snapshot': projection}
         validate_input_snapshot(document, manifest=manifest, planner_snapshot=self._planner_snapshot)
         self._held()
+        if self._broker.journal._linux_execution_profile:
+            self._capture_permit.capture_complete(self, shared)
         return document, contents
 
     def document(self):

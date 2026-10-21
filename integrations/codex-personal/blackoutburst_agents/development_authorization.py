@@ -185,3 +185,21 @@ class DevelopmentAuthorization:
         return {'scope':deepcopy(self.manifest['scope']), 'claim_id':claim,
             'owner_enabled':True, 'profile_enabled':True, 'project_allowed':True, 'claim_current':True,
             'actions':snapshot['policy']['actions'], 'resources':snapshot['policy']['resources']}
+
+    def allowed(self, scope, action, resource):
+        """Concrete broker adapter; each ordinary call observes fresh grants.
+
+        Before claim/seal only the explicit policy floor is checked, as in the
+        worker's original qualification callback. A sealed operation always
+        includes its current claim and complete context observation.
+        """
+        try:
+            if self.expected_context is not None:
+                grant = self()
+                return (scope == grant['scope'] and action in grant['actions']
+                        and resource in grant['resources'])
+            policy = self._policy()
+            return (scope == self.manifest['scope'] and action in policy['actions']
+                    and resource == self.manifest['resource'] and resource in policy['resources'])
+        except Exception:
+            return False

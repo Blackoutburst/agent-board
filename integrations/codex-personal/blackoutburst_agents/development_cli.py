@@ -7,7 +7,7 @@ from pathlib import Path
 from .board_reader import BoardReadError
 from .client_lifecycle import own_client
 from .development_client import DevelopmentBoardClient
-from .development_worker import DevelopmentBoardWorker
+from .development_worker import DevelopmentBoardWorker, execution_factories
 from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import (DevelopmentError, RepositoryFiles, absolute_directory,
                            canonical, check_content, digest, relative_path)
@@ -34,6 +34,8 @@ def configure_parser(parser):
     prepare.add_argument('--broker',required=True,type=Path,help='Manifeste existant du checkout isolé.')
     prepare.add_argument('--test-backend',required=True,type=Path,help='Backend nommé déjà qualifié et supervisé.')
     prepare.add_argument('--planner-policy',required=True,type=Path,help='Politique déjà qualifiée du planner vide.')
+    prepare.add_argument('--execution-profile',choices=('darwin','linux-python-execution-v1'),default='darwin',
+                         help='Paire locale explicitement préparée et qualifiée ; aucun choix automatique.')
     prepare.add_argument('--max-turns',type=int,default=16)
     prepare.add_argument('--max-actions',type=int,default=16)
     prepare.add_argument('--max-wall-seconds',type=int,default=1800)
@@ -124,7 +126,10 @@ def run(args):
                         raise DevelopmentError('development_connection_scope_mismatch')
                     client.adopt_registration()
                 control=own_client(stack,RuntimeBoardClient.from_worker(client))
-                worker=DevelopmentBoardWorker(journal,store,runtime,client,control)
+                profile=getattr(args,'execution_profile','darwin') if command=='prepare' else op['configuration'].get('execution_profile','darwin')
+                factories=execution_factories(profile)
+                worker=DevelopmentBoardWorker(journal,store,runtime,client,control,
+                    **(factories if profile!='darwin' else {}))
                 if command=='prepare':
                     result=worker.prepare(scope=scope,request_id=args.request,instruction=instruction,
                         broker_directory=args.broker,backend_directory=args.test_backend,

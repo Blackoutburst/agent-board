@@ -186,8 +186,9 @@ def execute_turn(
     planner_arguments = None
     if planner_policy is not None:
         from .planner_policy import PlannerPolicy
+        from .linux_planner_policy import LinuxPlannerPolicy
         try:
-            if not isinstance(planner_policy, PlannerPolicy):
+            if type(planner_policy) not in (PlannerPolicy, LinuxPlannerPolicy):
                 raise ValueError
             planner_arguments = planner_policy.validate_for(executable, directory)
         except Exception:

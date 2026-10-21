@@ -27,6 +27,7 @@ MAX_TOTAL_BYTES = 4 * 1024 * 1024
 MAX_INPUT_ENTRIES = 256
 MAX_HEADER_BYTES = 128 * 1024
 MAX_REQUEST_BYTES = 8192
+EXECUTION_REQUEST_SCHEMA = 'blackoutburst-linux-execution-request-v1'
 REQUEST_FIELDS = frozenset({'schema', 'operation_id', 'workflow_id', 'manifest_sha256',
     'plan_sha256', 'scope_sha256', 'input_snapshot_sha256', 'input_packet_sha256',
     'planner_snapshot_sha256', 'root', 'root_identity', 'name', 'timeout_seconds',
@@ -193,4 +194,47 @@ def validate_linux_request(value, *, manifest, snapshot, planner_snapshot,
     decode_input_packet(input_packet, manifest=manifest, snapshot=snapshot, planner_snapshot=planner_snapshot)
     if value['input_packet_sha256'] != digest(input_packet):
         _fail()
+    return decode(canonical(value))
+
+
+def linux_execution_backend_id(plan_sha256):
+    """Execution and input-only names deliberately cannot alias one another."""
+    return 'linux-python-exec-v1-' + sha256(plan_sha256)[:40]
+
+
+def validate_execution_request_shape(value):
+    extra = {'input_plan_sha256', 'fence_sha256'}
+    if (type(value) is not dict or set(value) != REQUEST_FIELDS | extra
+            or value.get('schema') != EXECUTION_REQUEST_SCHEMA):
+        _fail()
+    projected = {name: item for name, item in value.items() if name not in extra}
+    projected['schema'] = REQUEST_SCHEMA
+    _request_shape(projected)
+    for name in extra:
+        sha256(value[name])
+    if len(canonical(value)) > MAX_REQUEST_BYTES:
+        _fail()
+    return value
+
+
+def validate_linux_execution_request(value, *, manifest, snapshot, planner_snapshot,
+                                     execution_plan_sha256, input_plan_sha256, input_packet):
+    """Exact data binding only; no persistent document reconstructs a live lease."""
+    validate_execution_request_shape(value)
+    _, snapshot_hash = _input_context(manifest, snapshot, planner_snapshot)
+    suite = next((test for test in manifest['tests'] if test['name'] == value['name']), None)
+    if (suite is None or suite['backend_id'] != linux_execution_backend_id(execution_plan_sha256)
+            or value['plan_sha256'] != execution_plan_sha256
+            or value['input_plan_sha256'] != input_plan_sha256
+            or value['workflow_id'] != snapshot['operation_id']
+            or value['manifest_sha256'] != digest(canonical(manifest))
+            or value['scope_sha256'] != digest(canonical(manifest['scope']))
+            or value['input_snapshot_sha256'] != snapshot_hash
+            or value['input_packet_sha256'] != digest(input_packet)
+            or value['planner_snapshot_sha256'] != planner_snapshot['sha256']
+            or value['fence_sha256'] != snapshot['fence_record_sha256']
+            or value['root'] != manifest['root'] or value['root_identity'] != manifest['root_identity']
+            or any(value[name] != suite[name] for name in ('timeout_seconds', 'max_output_bytes'))):
+        _fail()
+    decode_input_packet(input_packet, manifest=manifest, snapshot=snapshot, planner_snapshot=planner_snapshot)
     return decode(canonical(value))
