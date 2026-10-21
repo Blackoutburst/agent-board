@@ -123,15 +123,24 @@ UID, unit, kernel, CLI, account, namespace or future deployment.
 
 ## Native fixture observed on 2026-10-21
 
-The [dated backend observation](docs/linux-backend-fixture-2026-10-21.json)
-records all nine cases passing on source `745ed52`, Ubuntu x86_64 kernel
-`5.15.0-198-generic`, Python 3.10 and UID 1000, with cleanup confirmed.
-The run used synthetic inputs and no model, account RPC or Board connection.
-It exposed and led to fixes for empty public runtime files, publication of the
-SOURCE marker, and readiness of the existing nonblocking control descriptor.
+The [dated observations](docs/linux-backend-fixture-2026-10-21.json) record all
+nine backend cases and all five planner sandbox canaries passing on source
+`b6a3f27`, Ubuntu x86_64 kernel `5.15.0-198-generic`, Python 3.10 and UID 1000,
+with cleanup confirmed. These are separate synthetic fixtures, with no model,
+account RPC or Board connection. They exposed and led to fixes for empty public
+runtime files, SOURCE marker publication, control descriptor readiness, the
+exact CLI executable permission and Linux-specific denial error codes.
 Earlier refused attempts remain retained separately.
 
-This is a dated validation result. It does not qualify the planner policy, a
-protected owner service or any newly created Git checkout. Each real job still
-requires preparation and qualification bound to its own exact sources, roots
-and execution environment before the development worker can use it.
+These dated results do not qualify a prepared backend/policy pair for a real
+job, a protected owner service or a newly created Git checkout. Each real job
+still requires preparation and qualification bound to its own exact sources,
+roots and execution environment before the development worker can use it.
+
+The standalone pool can explicitly enable a bounded, local metadata wait using
+`standalone_fence_wait()`. Only checks on the shared fence are serialized;
+models and test processes run outside this gate. A wait after collecting grants
+requires a fresh grant collection, with at most three read/check rounds and no
+extension of the original SOURCE deadline. External process locks remain
+nonblocking, family operations refuse this opt-in, and a second operation on
+the same checkout still refuses.

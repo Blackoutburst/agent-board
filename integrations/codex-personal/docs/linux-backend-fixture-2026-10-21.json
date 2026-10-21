@@ -1,23 +1,23 @@
 {
   "schema": "blackoutburst-public-native-validation-observation-v1",
   "date": "2026-10-21",
-  "source_commit": "745ed52efdc4dd9147c12f7e79d5d761437c9187",
-  "qualification": "synthetic_backend_fixture_only",
+  "source_commit": "b6a3f27fd2ebe2b47dd140d213984ced658dae98",
+  "qualification": "separate_synthetic_backend_and_planner_fixtures_only",
   "live_owner_upgrade": false,
   "portable_authority": false,
   "report": {
     "account_rpc_calls": 0,
     "broker_snapshot_admitted": false,
     "case_proof_sha256": {
-      "assertion_failed": "c7bc01409bdb2531c6f5b0bd5f3063c706aca8b91d0cde3c51d7170b96b777d1",
-      "controller_loss": "0f401b293a5621c879c4bb0698f4fb2e2367384d3b2343b3f1a76de39cf8a1f2",
-      "eof_running": "287708612513193736579ae4210656692f12dcf99406584378db2edc800dfcec",
-      "normal": "4260813a20621a3334ff60e1020ffece88812d289eb007ad69c07556183a4de2",
-      "output_limit": "b43ecd84c4d3a7a00664b19666dbc28635cb497a560ac283bb80f741e593ba08",
-      "replay_and_corruption": "9a46f1fdd318d3eea8166bf8ee84369c13849981df7f1737405e5ded85a6625f",
-      "source_revoked": "535dc49ebecb689a4181e9e8c4c833b2a20426c4e3036e011f83f624893489b2",
-      "supervisor_loss": "a19ded8e3757c383068000a5a3aec5400daad9cf2a702f67c9b9a7ba0d09cd2d",
-      "wall_timeout": "dc2069a49ed8d2deab193fa26a3d1b1ca73ad198e9d1c19c8e2fc7f9e0433cd9"
+      "assertion_failed": "1be0a309bd139ce2f638a0238a86dc8a9fee929df5b15963244d1ac5e077e516",
+      "controller_loss": "95924f79c88a1efc8e1d00099bf8cae21ac571e2664a4746629b6e5e1b3a6bca",
+      "eof_running": "f5a2147f28df0031120e3263c83d22c1a4893fa409f6ba3ea6d700c26847680e",
+      "normal": "dcc9df30561377293a3643ad018fd41faf9eef85de76538c805603b233470539",
+      "output_limit": "f297f128d3c67af9847c713ac1e59e37df97e92145c17d79f852613042d72d7c",
+      "replay_and_corruption": "310b2d8204fc3c69fe9315ab0666a3f2b8feea220bafccf141bbeaf85a02ea71",
+      "source_revoked": "48fe61b72286f573d30e6c77ba376d8d55b10810c19e34f620acb1463cdcef61",
+      "supervisor_loss": "50e85e791133de4b38323d80430522b82653e9eda143fb6176c174caa7b0adeb",
+      "wall_timeout": "03832c3adeb380e6fae050c438f66621bdb86a42671d3c40120c3246e27c9d9e"
     },
     "checks": {
       "assertion_failed": true,
@@ -46,16 +46,53 @@
     "model_calls": 0,
     "owner_service_activated": false,
     "owner_subscription_qualified": false,
-    "plan_sha256": "393af6aaa6bea874f22c75594054d5630326ca2dbd1059941022ea162ef2d7ac",
+    "plan_sha256": "34ed2421cb9091da4410d5a9bd080d2d31be1d091c414483c4ab4d98de4444a4",
     "planner_policy_qualified": false,
-    "receipt_sha256": "c7906942c2e1fea26e3b5c3266089180cbfdcc7f9c48f340be998bf508a48b6e",
+    "receipt_sha256": "756f8767d572696f3f79fe2f283a9a98184bbee0c4be238e4095fdae829892c6",
     "result": "qualified_synthetic_backend_fixture",
     "runner_sha256": "248543c3248ad1d24a117e4d56e8f9e7c5ab6ba881d4663c742a3c5b030b3e4f",
     "schema": "blackoutburst-linux-execution-backend-qualification-v1",
     "scope": "synthetic_Linux_test_backend_only",
     "source_execution_from_held_bytes": true,
-    "source_inventory_sha256": "4e651bd755885e809d0491d1b0cc62d857a003e7ea02555a34e583d5a2fc00d2",
+    "source_inventory_sha256": "4ef939d22ca55a925bcf263e8f6c5ee670ad27f6e2269fa08331daea1fe8d2c3",
     "uid": 1000,
     "unshare_sha256": "9f41a192393e7a05b843ae51bd187a76e09482392d37275d796f8881db97dde6"
-  }
+  },
+  "planner_report": {
+    "account_rpc_calls": 0,
+    "backend_qualified": false,
+    "checks": {
+      "inside_read": true,
+      "inside_write_denied": true,
+      "network_loopback_denied": true,
+      "outside_read_denied": true,
+      "outside_write_denied": true
+    },
+    "cleanup_confirmed": true,
+    "cli_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "environment_sha256": "e16c56691c206e5bebd8c1b2a325be9baee75f67020131606dcbc1a7bfb961d4",
+    "fingerprint": "576e7f3f8b97164dfb331b2bd14522e21ab99bae10912426fa617bcf84ea4940",
+    "fixtures_retained": true,
+    "host": {
+      "kernel_version": "#208-Ubuntu SMP Fri Sep 4 10:22:38 UTC 2026",
+      "machine": "x86_64",
+      "node": "ubuntu",
+      "pointer_bits": 64,
+      "release": "5.15.0-198-generic",
+      "system": "Linux"
+    },
+    "interpreter_sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+    "mcp_calls": 0,
+    "model_calls": 0,
+    "owner_service_activated": false,
+    "receipt_sha256": "79e2df1dbdc4fbbb468ccfe2127613a63552b90d519d643b2bb945c962780c01",
+    "result": "qualified_planner_policy_fixture",
+    "runner_sha256": "9ea755ca5566a2b10338b87cd31058a5a6b702feaaa530aa00533ac1dc9738fc",
+    "schema": "blackoutburst-linux-planner-policy-qualification-v1",
+    "scope": "Linux_CLI_planner_sandbox_only",
+    "source_execution_from_held_bytes": true,
+    "source_inventory_sha256": "4ef939d22ca55a925bcf263e8f6c5ee670ad27f6e2269fa08331daea1fe8d2c3",
+    "uid": 1000
+  },
+  "same_prepared_job_pair": false
 }
