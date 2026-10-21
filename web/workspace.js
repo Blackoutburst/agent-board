@@ -963,7 +963,7 @@ const Workspace = (() => {
     });
     serverModal("Demander une préparation inactive", form); await load();
   }
-  async function renderProvisioning(section, owner, host, profiles, request, barrierUpdates) {
+  async function renderProvisioning(section, owner, host, profiles, request, barrier) {
     const current = () => state.actor?.owner_id === owner && request === state.request && section.isConnected;
     try {
       if (host.owner_id !== owner || !provisionText(host.device_id) || !serverInteger(host.version, 1)
@@ -979,7 +979,7 @@ const Workspace = (() => {
       saveProvisionStore(owner, data);
       const pending = data.records.find(item => item.host_id === host.id && !["confirmed", "reloaded"].includes(item.status));
       const active = list.requests.find(item => item.state === "requested");
-      barrierUpdates.forEach(update => update(Boolean(active)));
+      barrier.set("draft", Boolean(active));
       const stopped = host.instances.length > 0 && host.instances.length < 16 && host.instances.every(instance => {
         const command = serverCommand(instance);
         return instance.mode === "messages" && instance.desired_state === "stopped" && instance.observed_state === "stopped" && instance.cleanup_confirmed === true
@@ -998,12 +998,15 @@ const Workspace = (() => {
           value.can_cancel ? btn("Annuler cette demande", () => provisionCancelDialog(owner, host, value), "quiet", { disabled: Boolean(pending) }) : null);
       };
       rows.append(...list.requests.map(renderRow));
+      const blocked = Boolean(pending) || Boolean(active) || !grant.enabled || !stopped || host.revoked_at !== null;
+      const requestButton = btn("Demander la préparation d’un profil", guard(() => provisionRequestDialog(owner, host, profiles)), "", { disabled: blocked || barrier.held() });
+      barrier.subscribe(held => { requestButton.disabled = blocked || held; });
       const heading = el("h3", {}, "Demandes de préparation");
       section.replaceChildren(...[heading, el("p", {}, "1. Choisissez un profil et ses préférences. 2. Autorisez séparément les demandes. 3. Enregistrez une demande inactive."),
-        el("p", { class: "small muted" }, "La préparation effective et la connexion personnelle viendront ensuite. Cette étape ne crée aucune instance et ne rend aucun agent prêt."),
+        el("p", { class: "small muted" }, "Ces demandes conservent seulement des préférences : elles ne créent aucune instance. Pour un ajout réel, utilisez « Ajouter un profil au serveur ». La connexion fournisseur reste séparée."),
         el("p", {}, grant.enabled ? "Demandes inactives autorisées pour cet appareil." : "Demandes inactives non autorisées pour cet appareil."),
         el("div", { class: "button-row" }, btn(grant.enabled ? "Retirer l’autorisation de demande" : "Autoriser les demandes", () => provisionGrantDialog(owner, host, grant), "quiet", { disabled: Boolean(pending) || host.revoked_at !== null || host.instances.length === 0 }),
-          btn("Demander la préparation d’un profil", guard(() => provisionRequestDialog(owner, host, profiles)), "", { disabled: Boolean(pending) || Boolean(active) || !grant.enabled || !stopped || host.revoked_at !== null })),
+          requestButton),
         !stopped && !active ? el("p", { class: "small muted" }, host.instances.some(instance => instance.mode !== "messages") ? "Ces demandes concernent seulement les hôtes destinés aux réponses aux messages. Les instances de travail sur les tickets conservent leurs commandes habituelles."
           : host.instances.length === 16 ? "Cet hôte a déjà 16 profils. Aucune place de préparation n’est disponible."
           : "Chaque instance doit avoir un arrêt demandé puis confirmé avant une demande. La liaison initiale du serveur se prépare séparément.") : null,
@@ -1027,6 +1030,263 @@ const Workspace = (() => {
       if (current()) section.replaceChildren(el("h3", {}, "Demandes de préparation"), el("p", { role: "status" }, "Préparation indisponible. Aucune demande n’a été envoyée ; actualisez pour vérifier les autorisations et demandes actuelles."));
     }
   }
+  // Real append requests are separate from metadata-only draft A and its outbox.
+  const appendSchemas = { grant: "server-messages-append-grant-v1", request: "server-messages-append-request-v1", cancel: "server-messages-append-cancel-v1" };
+  const appendStates = { requested: "Ajout demandé", prepared: "Préparé localement", precommit: "Publication en préparation", committed: "Instance enregistrée", complete: "Ajout terminé · instance inactive", cancelled: "Demande annulée" };
+  const appendBusy = new Set(), appendStorageKey = owner => `board-messages-append-v1:${owner}`;
+  const appendBase = host => `/server-hosts/${workPath(host.id)}/messages-append`;
+  function appendBodyValid(kind, body) {
+    if (!Object.hasOwn(appendSchemas, kind) || body?.schema !== appendSchemas[kind]) return false;
+    if (kind === "grant") return provisionKeys(body, "schema,expected_host_version,expected_grant_version,enabled")
+      && serverInteger(body.expected_host_version, 1) && serverInteger(body.expected_grant_version) && typeof body.enabled === "boolean";
+    if (kind === "cancel") return provisionKeys(body, "schema,expected_revision") && serverInteger(body.expected_revision, 1);
+    return provisionKeys(body, "schema,expected_host_version,expected_catalog_version,expected_instances_sha256,grant_version,profile_id,profile_version,profile_sha256,provider_id,requested_model,slot_id")
+      && serverInteger(body.expected_host_version, 1) && serverInteger(body.expected_catalog_version, 1)
+      && provisionHash(body.expected_instances_sha256) && serverInteger(body.grant_version, 1)
+      && provisionText(body.profile_id) && serverInteger(body.profile_version, 1) && provisionHash(body.profile_sha256)
+      && body.provider_id === "codex_chatgpt" && provisionText(body.requested_model) && provisionHash(body.slot_id);
+  }
+  function appendGrantValid(value, owner, host) {
+    return provisionKeys(value, "schema,owner_id,host_id,device_id,purpose,version,enabled")
+      && value.schema === "server-messages-append-grant-view-v1" && value.owner_id === owner && value.host_id === host.id
+      && value.device_id === host.device_id && value.purpose === "messages_append_v1" && serverInteger(value.version)
+      && typeof value.enabled === "boolean" && (value.version > 0 || value.enabled === false);
+  }
+  function appendProofValid(value, row) {
+    if (!provisionKeys(value, "schema,operation_id,request_id,request_sha256,owner_id,host_id,device_id,grant_version,request_revision,expected_host_version,expected_catalog_version,expected_instances_sha256,source_release_sha256,old_configuration_sha256,new_configuration_sha256,old_catalog_sha256,new_catalog_sha256,bindings_sha256,children_roster_sha256,phase,instance_id,catalog_version,instances_sha256")
+        || value.schema !== "server-messages-append-proof-v1" || typeof value.operation_id !== "string"
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value.operation_id)
+        || ["request_id", "request_sha256", "owner_id", "host_id", "device_id", "instance_id"].some(k => value[k] !== row[k])
+        || value.phase !== row.state || value.request_revision !== row.revision
+        || !["grant_version", "request_revision", "expected_host_version", "expected_catalog_version"].every(k => serverInteger(value[k], 1))
+        || !["request_sha256", "expected_instances_sha256", "source_release_sha256", "old_configuration_sha256", "new_configuration_sha256", "old_catalog_sha256", "new_catalog_sha256", "bindings_sha256", "children_roster_sha256"].every(k => provisionHash(value[k]))) return false;
+    return ["prepared", "precommit"].includes(row.state)
+      ? value.instance_id === null && value.catalog_version === null && value.instances_sha256 === null
+      : provisionText(value.instance_id) && serverInteger(value.catalog_version, 2) && provisionHash(value.instances_sha256);
+  }
+  function appendViewValid(value, owner, host) {
+    if (!provisionKeys(value, "schema,request_id,request_sha256,owner_id,host_id,device_id,revision,state,reason,barrier_held,profile_id,profile_version,provider_id,requested_model,slot_id,can_cancel,instance_id,proof,connection_status,model_catalog_status,model_access_status")
+        || value.schema !== "server-messages-append-view-v1" || value.owner_id !== owner || value.host_id !== host.id || value.device_id !== host.device_id
+        || !provisionText(value.request_id) || !provisionHash(value.request_sha256) || !provisionText(value.profile_id)
+        || !serverInteger(value.profile_version, 1) || !serverInteger(value.revision, 1) || !provisionHash(value.slot_id)
+        || value.provider_id !== "codex_chatgpt" || !provisionText(value.requested_model)
+        || !Object.hasOwn(appendStates, value.state) || typeof value.can_cancel !== "boolean" || typeof value.barrier_held !== "boolean"
+        || !["connection_status", "model_catalog_status", "model_access_status"].every(k => value[k] === "not_attested")) return false;
+    if (value.state === "requested" || value.state === "cancelled") return value.proof === null && value.instance_id === null
+      && (value.state === "requested" ? value.revision === 1 && value.reason === "requested" && value.barrier_held === true
+        : value.revision === 2 && value.reason === "cancelled_by_owner" && value.barrier_held === false && value.can_cancel === false);
+    return value.reason === value.state && value.revision === ({ prepared: 2, precommit: 3, committed: 4, complete: 5 })[value.state]
+      && value.barrier_held === (value.state !== "complete") && value.can_cancel === false && appendProofValid(value.proof, value);
+  }
+  function appendListValid(value, owner, host) {
+    return provisionKeys(value, "schema,requests,next_before") && value.schema === "server-messages-append-list-v1"
+      && Array.isArray(value.requests) && value.requests.length <= 16 && value.requests.every(row => appendViewValid(row, owner, host))
+      && new Set(value.requests.map(row => row.request_id)).size === value.requests.length && value.requests.filter(row => row.barrier_held).length <= 1
+      && (value.next_before === null || provisionText(value.next_before) && value.requests.length > 0 && value.next_before === value.requests.at(-1).request_id);
+  }
+  function appendContextValid(value, owner, host, profile) {
+    if (!provisionKeys(value, "schema,owner_id,host_id,device_id,expected_host_version,expected_catalog_version,expected_instances_sha256,grant_version,profile_id,profile_version,profile_sha256,provider_id,requested_model,slots")
+        || value.schema !== "server-messages-append-context-v1" || value.owner_id !== owner || value.host_id !== host.id
+        || value.device_id !== host.device_id || value.profile_id !== profile.id || value.profile_version !== profile.version
+        || value.provider_id !== profile.preferred_provider || value.requested_model !== (profile.preferred_model || null)
+        || !Array.isArray(value.slots) || value.slots.length > 16 || new Set(value.slots.map(s => s?.slot_id)).size !== value.slots.length) return false;
+    return value.slots.every(slot => provisionKeys(slot, "slot_id,device_id,session_id,agent_kind,identity_key,profile_id,profile_version")
+      && provisionHash(slot.slot_id) && ["device_id", "session_id", "agent_kind", "identity_key"].every(k => provisionText(slot[k]))
+      && slot.profile_id === value.profile_id && slot.profile_version === value.profile_version && serverInteger(slot.profile_version, 1))
+      && serverInteger(value.expected_host_version, 1) && serverInteger(value.expected_catalog_version, 1) && serverInteger(value.grant_version)
+      && provisionHash(value.expected_instances_sha256) && provisionHash(value.profile_sha256) && value.provider_id === "codex_chatgpt" && provisionText(value.requested_model);
+  }
+  function appendStore(owner) {
+    const raw = sessionStorage.getItem(appendStorageKey(owner));
+    if (raw && raw.length > 65536) throw new Error("Le suivi des ajouts est plein. Rien n’a été envoyé.");
+    const data = raw === null ? { schema: 1, owner, records: [] } : JSON.parse(raw);
+    if (!provisionKeys(data, "schema,owner,records") || data.schema !== 1 || data.owner !== owner || !Array.isArray(data.records) || data.records.length > 32) throw new Error("Le suivi des ajouts est indisponible.");
+    const seen = new Set();
+    for (const r of data.records) {
+      if (!provisionKeys(r, "kind,host_id,device_id,request_id,key,body,status,created_at") || !provisionText(r.host_id) || !provisionText(r.device_id)
+          || !provisionText(r.key) || seen.has(r.key) || !serverInteger(r.created_at) || !appendBodyValid(r.kind, r.body)
+          || !(r.kind === "cancel" ? provisionText(r.request_id) : r.request_id === null)
+          || !["prepared", "uncertain", "confirmed", "conflict", "refused", "reloaded"].includes(r.status)) throw new Error("Le suivi des ajouts est invalide. Rien n’a été envoyé.");
+      seen.add(r.key);
+    }
+    return data;
+  }
+  function saveAppendStore(owner, data) {
+    const raw = JSON.stringify(data);
+    if (raw.length > 65536) throw new Error("Le suivi des ajouts est plein.");
+    sessionStorage.setItem(appendStorageKey(owner), raw);
+    if (sessionStorage.getItem(appendStorageKey(owner)) !== raw) throw new Error("La demande ne peut pas être conservée. Rien n’a été envoyé.");
+  }
+  function appendRecord(owner, host, kind, body, requestId = null) {
+    if (state.actor?.owner_id !== owner) throw new Error("Le compte a changé. Rouvrez les ajouts.");
+    const data = appendStore(owner), encoded = JSON.stringify(body);
+    let record = data.records.find(r => r.host_id === host.id && r.device_id === host.device_id && r.kind === kind && r.request_id === requestId
+      && JSON.stringify(r.body) === encoded && ["prepared", "uncertain"].includes(r.status));
+    if (!record) {
+      if (data.records.some(r => r.host_id === host.id && !["confirmed", "reloaded"].includes(r.status))) throw new Error("Une réponse d’ajout reste à confirmer. Réessayez à l’identique ou actualisez.");
+      data.records = data.records.filter(r => !["confirmed", "reloaded"].includes(r.status));
+      if (data.records.length >= 32 || !appendBodyValid(kind, body)) throw new Error("L’ajout ne peut pas être conservé.");
+      record = { kind, host_id: host.id, device_id: host.device_id, request_id: requestId, key: idempotencyKey(), body, status: "prepared", created_at: Date.now() }; data.records.push(record);
+    }
+    saveAppendStore(owner, data); return record;
+  }
+  function updateAppendRecord(owner, key, status) {
+    const data = appendStore(owner), record = data.records.find(r => r.key === key);
+    if (!record) throw new Error("Le suivi de cet ajout est introuvable.");
+    record.status = status; saveAppendStore(owner, data);
+  }
+  async function appendApi(path, { method = "GET", data } = {}) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const body = data === undefined ? undefined : JSON.stringify(data);
+      if (body !== undefined && new TextEncoder().encode(body).length > 8192) throw new Error("Demande trop longue.");
+      const headers = body === undefined ? {} : { "Content-Type": "application/json", "X-CSRF-Token": state.csrf };
+      const response = await fetch(`${basePath}api${path}`, { method, headers, body, credentials: "same-origin", cache: "no-store", signal: controller.signal });
+      if (!response.ok) { if (response.status === 401) showLogin(); const error = new Error("Ajout indisponible."); error.status = response.status; throw error; }
+      const reader = response.body.getReader(), chunks = []; let bytes = 0;
+      while (true) { const item = await reader.read(); if (item.done) break; bytes += item.value.byteLength;
+        if (bytes > 16384) { await reader.cancel(); throw new Error("Réponse d’ajout indisponible."); } chunks.push(item.value); }
+      const result = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(result));
+    } finally { clearTimeout(timer); }
+  }
+  async function sendAppendRecord(owner, host, record) {
+    if (state.actor?.owner_id !== owner || appendBusy.has(record.key)) return;
+    const saved = appendStore(owner).records.find(r => r.key === record.key);
+    if (!saved || saved.host_id !== host.id || saved.device_id !== host.device_id || !["prepared", "uncertain"].includes(saved.status)
+        || JSON.stringify(saved) !== JSON.stringify(record)) throw new Error("Actualisez avant de reprendre cet ajout.");
+    const modalSnapshot = $("modal").open ? $("modal-content").firstElementChild : null;
+    appendBusy.add(record.key);
+    try {
+      updateAppendRecord(owner, record.key, "uncertain");
+      const route = record.kind === "grant" ? "/grant" : record.kind === "request" ? "/requests" : `/requests/${workPath(record.request_id)}/cancel`;
+      const value = await appendApi(appendBase(host) + route, { method: record.kind === "grant" ? "PUT" : "POST", data: { ...record.body, idempotency_key: record.key } });
+      if (record.kind === "grant" ? !appendGrantValid(value, owner, host) || value.enabled !== record.body.enabled || value.version !== record.body.expected_grant_version + 1
+          : !appendViewValid(value, owner, host) || (record.kind === "cancel" ? value.request_id !== record.request_id || value.state !== "cancelled" || value.revision !== record.body.expected_revision + 1
+            : value.state !== "requested" || value.revision !== 1 || ["profile_id", "profile_version", "provider_id", "requested_model", "slot_id"].some(k => value[k] !== record.body[k]))) throw new Error("Confirmation d’ajout indisponible.");
+      updateAppendRecord(owner, record.key, "confirmed");
+      if (state.actor?.owner_id === owner && state.view === "agents" && agentTab === "hosted") {
+        if (modalSnapshot && $("modal-content").firstElementChild === modalSnapshot) closeModal();
+        await agents(); notify("Demande d’ajout enregistrée. État actuel relu ; aucun démarrage demandé.");
+      }
+    } catch (error) {
+      const reload = [400, 401, 403, 404, 409, 422].includes(error.status);
+      if (reload) updateAppendRecord(owner, record.key, error.status === 409 ? "conflict" : "refused");
+      if (state.actor?.owner_id === owner) {
+        notify(reload ? "L’ajout n’est pas accepté dans l’état actuel. Actualisez avant de le corriger."
+          : "Réponse d’ajout non confirmée. Réessayez cette même demande à l’identique ; aucune reprise automatique.", true);
+        if (reload && modalSnapshot && $("modal-content").firstElementChild === modalSnapshot) closeModal();
+      }
+    } finally { appendBusy.delete(record.key); }
+  }
+  function appendGrantDialog(owner, host, grant) {
+    if (state.actor?.owner_id !== owner) return;
+    const enabled = !grant.enabled;
+    const form = el("form", {}, el("p", {}, enabled ? "Autoriser les ajouts de profils depuis des emplacements personnels déjà appairés sur cet hôte ? Cette autorisation est séparée des demandes inactives et des liaisons du profil."
+      : "Retirer l’autorisation de nouveaux ajouts ? Un ajout déjà engagé et son blocage restent conservés."),
+      el("p", {}, "Cela ne connecte aucun fournisseur, ne copie aucun compte et ne démarre aucun profil."), serverButtons(enabled ? "Autoriser les ajouts" : "Retirer l’autorisation d’ajout"));
+    bindForm(form, () => sendAppendRecord(owner, host, appendRecord(owner, host, "grant", { schema: appendSchemas.grant,
+      expected_host_version: host.version, expected_grant_version: grant.version, enabled })));
+    serverModal("Autorisation d’ajout séparée", form);
+  }
+  function appendCancelDialog(owner, host, row) {
+    if (state.actor?.owner_id !== owner || row.state !== "requested" || row.can_cancel !== true) return;
+    const form = el("form", {}, el("p", {}, "Annuler cet ajout avant que le gestionnaire commence à le préparer ? L’historique reste conservé. Aucune autre exécution n’est arrêtée par cette action."), serverButtons("Annuler l’ajout"));
+    bindForm(form, () => sendAppendRecord(owner, host, appendRecord(owner, host, "cancel", { schema: appendSchemas.cancel, expected_revision: row.revision }, row.request_id)));
+    serverModal("Annuler l’ajout demandé", form);
+  }
+  async function appendRequestDialog(owner, host, profiles) {
+    if (state.actor?.owner_id !== owner) return;
+    const published = new Set(host.instances.map(i => i.profile_id));
+    const candidates = profiles.filter(p => p.owner_id === owner && p.status === "active" && !published.has(p.id) && serverInteger(p.version, 1)
+      && p.preferred_provider === "codex_chatgpt" && provisionText(p.preferred_model)
+      && Array.isArray(p.bindings) && p.bindings.some(b => b.device_id === host.device_id && b.revoked === false));
+    if (!candidates.length) { serverModal("Choisir un profil déjà lié", el("div", {}, el("p", {}, "Choisissez d’abord un nouveau profil Codex actif avec un modèle demandé et liez-le explicitement à l’appareil du gestionnaire. L’ajout ne crée ni appairage ni connexion fournisseur."),
+      btn("Voir mes profils", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "profiles"; await agents(); })))); return; }
+    const picker = select("Profil à ajouter", "profile_id", candidates.map(p => [p.id, `${p.name} · v${p.version}`]));
+    const slots = el("div", {}), details = el("div", { class: "callout", role: "status" });
+    const form = el("form", {}, el("p", {}, "Ajoutez un profil destiné aux messages depuis un emplacement personnel déjà appairé. Il sera créé inactif ; vous devrez ensuite utiliser les commandes d’arrêt et de démarrage habituelles."), picker, slots, details,
+      el("p", {}, "La préparation bloque les démarrages et redémarrages de cet hôte jusqu’à sa clôture. Les arrêts restent disponibles."), serverButtons("Demander l’ajout au serveur"));
+    const submit = form.querySelector('button[type="submit"]'); let context = null, generation = 0, slotPicker = null;
+    const load = async () => {
+      const current = ++generation, profile = candidates.find(p => p.id === picker.querySelector("select").value);
+      context = null; slotPicker = null; slots.replaceChildren(); submit.disabled = true; details.textContent = "Vérification du profil et de ses emplacements déjà appairés…";
+      try {
+        const value = await appendApi(`${appendBase(host)}/context?profile_id=${workPath(profile.id)}`);
+        if (current !== generation || state.actor?.owner_id !== owner || !form.isConnected) return;
+        if (!appendContextValid(value, owner, host, profile)) throw new Error("Contexte d’ajout indisponible.");
+        context = value;
+        details.replaceChildren(el("p", {}, `Fournisseur demandé : ${provisionProviders[value.provider_id]}`), el("p", {}, `Modèle demandé : ${value.requested_model || "Non choisi"}`),
+          el("p", {}, "Emplacement appairé au board : cela ne prouve ni connexion fournisseur ni accès au modèle. Aucun repli vers une API payante."));
+        if (!value.slots.length) { details.append(el("p", {}, "Aucun emplacement personnel appairé et lié à ce profil n’est disponible. Préparez cette liaison dans Connexions, puis actualisez."), provisionProfileLink(owner, profile)); return; }
+        slotPicker = select("Emplacement personnel déjà appairé", "slot_id", value.slots.map((s, index) => [s.slot_id, `Emplacement ${index + 1} · appareil ${s.device_id.slice(0, 8)}`]));
+        slots.append(slotPicker); submit.disabled = value.grant_version < 1;
+      } catch (_) {
+        if (current === generation && state.actor?.owner_id === owner && form.isConnected) details.replaceChildren(el("p", {}, "L’ajout ne peut pas être vérifié. Actualisez les profils, les liaisons et les demandes avant de continuer."));
+      }
+    };
+    picker.querySelector("select").addEventListener("change", () => { void load(); });
+    bindForm(form, () => {
+      const slotId = slotPicker?.querySelector("select").value;
+      if (state.actor?.owner_id !== owner || !context || context.profile_id !== picker.querySelector("select").value || !context.slots.some(s => s.slot_id === slotId)) throw new Error("Relisez le profil et son emplacement avant de continuer.");
+      const body = { schema: appendSchemas.request, ...Object.fromEntries(["expected_host_version", "expected_catalog_version", "expected_instances_sha256", "grant_version", "profile_id", "profile_version", "profile_sha256", "provider_id", "requested_model"].map(k => [k, context[k]])), slot_id: slotId };
+      return sendAppendRecord(owner, host, appendRecord(owner, host, "request", body));
+    });
+    serverModal("Ajouter un profil déjà appairé", form); await load();
+  }
+  async function renderMessagesAppend(section, owner, host, profiles, request, barrier) {
+    const current = () => state.actor?.owner_id === owner && request === state.request && section.isConnected;
+    try {
+      const base = appendBase(host), [grant, list] = await Promise.all([appendApi(base + "/grant"), appendApi(base + "/requests?limit=16")]);
+      if (!current()) return;
+      if (!appendGrantValid(grant, owner, host) || !appendListValid(list, owner, host)) throw new Error("Projection d’ajout indisponible.");
+      const data = appendStore(owner); let changed = false;
+      for (const row of data.records) if (row.host_id === host.id && row.device_id === host.device_id && serverNeedsReload(row.status)) { row.status = "reloaded"; changed = true; }
+      if (changed) saveAppendStore(owner, data); saveAppendStore(owner, data);
+      const pending = data.records.find(r => r.host_id === host.id && !["confirmed", "reloaded"].includes(r.status));
+      const active = list.requests.some(row => row.barrier_held); barrier.set("append", active);
+      const stopped = host.instances.length > 0 && host.instances.length < 16 && host.instances.every(i => { const c = serverCommand(i);
+        return i.mode === "messages" && i.desired_state === "stopped" && i.observed_state === "stopped" && i.cleanup_confirmed === true
+          && c?.action === "stop" && c.status === "complete" && c.instance_version === i.version && c.generation === i.generation && c.launchspec_sha256 === i.launchspec_sha256; });
+      const rows = el("div", {});
+      const renderRow = row => el("article", { class: "profile-section", "data-append-request": row.request_id },
+        el("h4", {}, profiles.find(p => p.owner_id === owner && p.id === row.profile_id)?.name || "Profil demandé", ` · v${row.profile_version}`),
+        badge(appendStates[row.state], row.barrier_held ? "status-blocked" : ""),
+        el("p", {}, `${provisionProviders[row.provider_id]} · ${row.requested_model || "Modèle non choisi"}`),
+        el("p", { class: "small muted" }, "Connexion fournisseur, catalogue de modèles et accès au modèle : non vérifiés."),
+        row.barrier_held ? el("p", { class: "callout" }, "L’ajout conserve son blocage des démarrages et redémarrages. Il ne lance aucun modèle.")
+          : row.state === "complete" ? el("p", {}, "L’instance est inactive et son état reste à confirmer. Demandez d’abord « Arrêter » dans sa carte, puis attendez sa confirmation avant de choisir « Démarrer » avec un budget. La connexion fournisseur reste non vérifiée.") : null,
+        row.state === "requested" && row.can_cancel ? btn("Annuler cet ajout", () => appendCancelDialog(owner, host, row), "quiet", { disabled: Boolean(pending) }) : null);
+      rows.append(...list.requests.map(renderRow));
+      const blocked = Boolean(pending) || active || !grant.enabled || !stopped || host.revoked_at !== null;
+      const requestButton = btn("Ajouter un profil déjà appairé", guard(() => appendRequestDialog(owner, host, profiles)), "", { disabled: blocked || barrier.held() });
+      barrier.subscribe(held => { requestButton.disabled = blocked || held; });
+      section.replaceChildren(...[el("h3", {}, "Ajouter un profil au serveur"),
+        el("p", {}, "Autorisation distincte → profil et emplacement déjà appairé → ajout inactif. Les anciennes demandes de métadonnées ne sont jamais transformées en ajouts."),
+        el("p", {}, grant.enabled ? "Ajouts autorisés pour cet appareil." : "Ajouts non autorisés pour cet appareil."),
+        el("div", { class: "button-row" }, btn(grant.enabled ? "Retirer l’autorisation d’ajout" : "Autoriser les ajouts", () => appendGrantDialog(owner, host, grant), "quiet", { disabled: Boolean(pending) || host.revoked_at !== null || !host.instances.length }),
+          requestButton),
+        !stopped && !active ? el("p", { class: "small muted" }, "Un arrêt humain confirmé de chaque instance est requis, avec une place libre. Arrêter reste disponible dans les cartes ci-dessus.") : null,
+        pending ? el("div", { class: "callout", role: "status" }, el("p", {}, "Une réponse d’ajout reste à confirmer. Aucun renvoi automatique."),
+          ["prepared", "uncertain"].includes(pending.status) ? btn("Réessayer le même ajout", guard(() => sendAppendRecord(owner, host, pending)), "quiet") : null) : null,
+        rows, list.requests.length ? null : el("p", { class: "muted" }, "Aucun ajout demandé.")].filter(node => node !== null));
+      if (list.next_before !== null) {
+        let before = list.next_before, count = list.requests.length;
+        const more = btn("Voir les ajouts précédents", guard(async () => {
+          more.disabled = true;
+          try { const page = await appendApi(`${base}/requests?limit=16&before=${workPath(before)}`);
+            if (!current()) return;
+            if (!appendListValid(page, owner, host) || count + page.requests.length > 32 || page.requests.some(r => rows.querySelector(`[data-append-request="${CSS.escape(r.request_id)}"]`))) throw new Error("Historique d’ajout indisponible.");
+            rows.append(...page.requests.map(renderRow)); count += page.requests.length; before = page.next_before;
+            if (before === null || count >= 32) more.remove(); else more.disabled = false;
+          } catch (_) { if (current()) notify("Historique d’ajout indisponible. Actualisez.", true); }
+        }), "quiet"); section.append(more);
+      }
+    } catch (_) {
+      if (current()) section.replaceChildren(el("h3", {}, "Ajouter un profil au serveur"), el("p", { role: "status" }, "Ajout indisponible. Actualisez pour vérifier vos autorisations et les emplacements. Aucune demande n’a été envoyée."));
+    }
+  }
+
   function serverInstanceCard(owner, host, instance, profiles, data, capacityUpdates, barrierUpdates = []) {
     const profile = profiles.get(instance.profile_id), command = serverCommand(instance), pending = pendingServerRecord(data, instance);
     const activeCommand = command === undefined || command && ["queued", "accepted"].includes(command.status);
@@ -1119,15 +1379,21 @@ const Workspace = (() => {
         capacityPanel,
         ...(pendingHost ? [el("div", { class: "callout server-pending-host" }, el("p", {}, "La liaison d’un appareil attend confirmation."), btn("Réessayer la liaison", guard(() => sendServerRecord(owner, pendingHost))))] : []),
         el("div", { class: "server-hosts" }, hosts.length ? hosts.map(host => {
-          const barrierUpdates = [], preparation = el("section", { class: "profile-section", "data-provision-host": host.id }, el("h3", {}, "Demandes de préparation"), el("p", {}, "Vérification des demandes…"));
+          const barrierUpdates = [], flags = { draft: false, append: false };
+          const barrier = { held: () => flags.draft || flags.append,
+            set: (kind, held) => { flags[kind] = held === true; barrierUpdates.forEach(update => update(barrier.held())); },
+            subscribe: update => { barrierUpdates.push(update); update(barrier.held()); } };
+          const preparation = el("section", { class: "profile-section", "data-provision-host": host.id }, el("h3", {}, "Demandes de préparation"), el("p", {}, "Vérification des demandes…"));
+          const addition = el("section", { class: "profile-section", "data-append-host": host.id }, el("h3", {}, "Ajouter un profil au serveur"), el("p", {}, "Vérification des ajouts…"));
           const card = el("section", { class: "server-host", "data-server-host": host.id },
             el("div", { class: "server-host-heading" }, el("div", {}, el("h2", {}, host.name || "Mon serveur"), el("p", { class: "small muted" }, ownerName(owner))),
               badge(host.revoked_at !== null ? "Hôte retiré" : host.enabled ? "Hôte autorisé" : "Démarrages suspendus", host.enabled && host.revoked_at === null ? "status-ready" : "status-blocked")),
             host.revoked_at === null ? serverManagerSetup(host) : null,
             host.instances.length ? el("div", { class: "server-instance-grid" }, host.instances.map(instance => serverInstanceCard(owner, host, instance, names, data, capacityUpdates, barrierUpdates)))
-              : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent."), preparation);
+              : el("p", { class: "empty" }, "Aucun profil publié par ce serveur. La liaison seule ne démarre pas d’agent."), addition, preparation);
           // Optional draft metadata never delays the existing stop controls.
-          void Promise.resolve().then(() => renderProvisioning(preparation, owner, host, profiles, request, barrierUpdates)).catch(() => {});
+          void Promise.resolve().then(() => renderProvisioning(preparation, owner, host, profiles, request, barrier)).catch(() => {});
+          void Promise.resolve().then(() => renderMessagesAppend(addition, owner, host, profiles, request, barrier)).catch(() => {});
           return card;
         })
           : box("Aucun serveur lié", "Choisissez un appareil déjà connecté à votre compte pour héberger vos profils.", btn("Lier mon serveur", guard(() => serverHostDialog(owner, settings.devices)), "primary"))));
@@ -1392,7 +1658,7 @@ const Workspace = (() => {
       data.host ? el("section", {}, el("h3", {}, "Hôte lié : " + data.host.name),
         el("p", {}, `${data.host.published_targets.length} profil(s) déclaré(s) par ce serveur. Le nouveau profil devra être préparé séparément.`), serverManagerSetup(data.host))
         : el("p", { class: "callout" }, "Aucun hôte lié à votre compte. Après la création du profil, utilisez « Lier un serveur », puis configurez votre gestionnaire personnel."),
-      el("p", { class: "small muted" }, "Après la création du profil, liez-le explicitement à l’appareil. Vous pourrez ensuite autoriser séparément une demande de préparation inactive. La préparation effective et la connexion personnelle restent des étapes ultérieures."),
+      el("p", { class: "small muted" }, "Après la création du profil, liez-le explicitement au gestionnaire et à un emplacement personnel déjà appairé. Dans « Sur le serveur », autorisez séparément son ajout. La connexion fournisseur reste à vérifier."),
       serverButtons("Personnaliser le profil"));
     bindForm(form, async values => {
       if (state.actor?.owner_id !== owner) return;
@@ -1414,8 +1680,8 @@ const Workspace = (() => {
       el("dl", {}, el("dt", {}, "Fournisseur demandé"), el("dd", {}, data.providers.find(p => p.id === requested.provider)?.name || requested.provider || "Non choisi"),
         el("dt", {}, "Modèle demandé"), el("dd", {}, requested.model || "À choisir")),
       el("p", {}, "Connexion fournisseur : non vérifiée. Accès au modèle : non vérifié."),
-      el("p", {}, "Votre profil est enregistré. Le serveur doit encore le préparer et votre connexion personnelle doit être vérifiée. Il ne fonctionne pas encore en arrière-plan."),
-      data.host ? el("div", {}, el("p", {}, "Autorisez explicitement l’appareil du serveur dans les connexions de ce profil. Cela n’est pas accordé par l’autorisation de demande. Revenez ensuite dans « Sur le serveur » et actualisez."), provisionProfileLink(owner, profile)) : null,
+      el("p", {}, "Votre profil est enregistré. Son ajout au serveur et la vérification de votre connexion personnelle sont des étapes séparées. Aucun démarrage n’a été demandé."),
+      data.host ? el("div", {}, el("p", {}, "Liez explicitement ce profil au gestionnaire et à son emplacement personnel déjà appairé. Revenez dans « Sur le serveur » pour autoriser puis demander son ajout. Une ancienne demande inactive ne sera pas transformée en ajout."), provisionProfileLink(owner, profile)) : null,
       data.host ? serverManagerSetup(data.host) : el("p", {}, "Liez un appareil à votre compte dans « Sur le serveur » pour commencer la préparation du gestionnaire."),
       btn("Voir mes instances serveur", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "hosted"; await agents(); }), "primary")));
   }
