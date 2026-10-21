@@ -129,6 +129,35 @@ authorize retries of ambiguous writes. This is a cooperative protected-controlle
 boundary, not a sandbox against arbitrary same-UID Python or external changes
 made after an observed GitHub response.
 
+## Optional concrete development authority
+
+The generic publisher still accepts its explicit local operator grant without a
+Board worker. A pool delivery must instead supply
+`authority=DevelopmentGitPublicationAuthority(worker, operation_id)`. This exact
+closed type binds the real standalone Linux `DevelopmentBoardWorker`, sealed
+configuration/manifest/context/claim and its private WorkJournal directory. Its
+GitDelivery must use the exact `DevelopmentDeliveryProof` for that same worker
+and operation; a callable, subclass or claimed SHA is insufficient.
+
+The authority descriptor is pinned in the publication request before effects.
+Adding, removing or changing it conflicts with the retained request on restart.
+Standalone requests retain their original representation without that optional
+field. The descriptor is local and stable after Board review publication: remote
+read-only verification does not demand a now-released execution claim.
+
+Immediately before **each** push or PR POST, after its last GitHub/remote GET and
+after the durable `pushing`/`creating` intent, the concrete authority observes the
+real current Board policy, exact sealed context and original live claim. It
+checks policy again after the context reads and checks local Stop/pins. Only
+local source/test/transport/intent revalidation follows that observation before
+the command. A refusal is outside the effect's uncertain-response handler and
+cannot be swallowed into a successful publication. No registration, renewal,
+Runtime effect, test, model or qualification is performed by this guard.
+
+This provides fresh observations at mutation boundaries, not an atomic
+transaction spanning Board and GitHub or cancellation of an already-started
+remote command. Pipeline integration and native qualification remain separate.
+
 ## Verification and deployment limits
 
 Tests use small real local repositories. The HTTP command layer is simulated;

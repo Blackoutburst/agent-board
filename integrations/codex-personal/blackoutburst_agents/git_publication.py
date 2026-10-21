@@ -81,12 +81,23 @@ class GitHubPublicationGrant:
 class GitHubDraftPublisher:
     """Per-delivery lock only. Interrupted effects are read back, never repeated."""
     def __init__(self, deliveries, publication_root, *, grant, git_executable='/usr/bin/git',
-                 gh_executable='/usr/bin/gh', timeout_seconds=60, python_executable=None):
+                 gh_executable='/usr/bin/gh', timeout_seconds=60, python_executable=None, authority=None):
         if type(deliveries) is not LocalGitDeliveryController or type(grant) is not GitHubPublicationGrant:
             fail('git_publication_controller_required')
         self.deliveries, self.workspaces = deliveries, deliveries.workspaces
         self.root, self.git, self.gh = _path(publication_root), _path(git_executable), _path(gh_executable)
         self.python = _path(python_executable or Path(sys.executable).resolve())
+        self.authority, self.authority_pin = authority, None
+        if authority is not None:
+            # Lazy: the generic standalone publisher need not import the Board
+            # worker. No callable/subclass/model-provided grant is accepted.
+            from .development_git_authority import DevelopmentGitPublicationAuthority
+            from .development_delivery import DevelopmentDeliveryProof
+            proof = deliveries.test_guard
+            if (type(authority) is not DevelopmentGitPublicationAuthority or type(proof) is not DevelopmentDeliveryProof
+                    or proof.worker is not authority.worker or proof.operation_id != authority.operation_id):
+                fail('git_publication_authority_required')
+            self.authority_pin = authority.descriptor()
         self.guardian = _path(Path(__file__).absolute().with_name('git_publication_guardian.py'))
         self._grant, self.grant = grant, grant.document()
         if self.git != self.workspaces.git: fail('git_publication_tool_mismatch')
@@ -109,6 +120,17 @@ class GitHubDraftPublisher:
 
     def _roots(self):
         self.deliveries._roots()
+        if self.authority is not None:
+            from .development_git_authority import DevelopmentGitPublicationAuthority
+            from .development_delivery import DevelopmentDeliveryProof
+            if (type(self.authority) is not DevelopmentGitPublicationAuthority
+                    or type(self.deliveries.test_guard) is not DevelopmentDeliveryProof
+                    or self.deliveries.test_guard.worker is not self.authority.worker
+                    or self.deliveries.test_guard.operation_id != self.authority.operation_id):
+                fail('git_publication_authority_changed')
+        if ((self.authority is None) != (self.authority_pin is None)
+                or self.authority is not None and self.authority.descriptor() != self.authority_pin):
+            fail('git_publication_authority_changed')
         if (self.grant != self._grant.document()
                 or self.pins != self._pins()
                 or self.pins['git'] != self.workspaces.pins['git_sha256']): fail('git_publication_pin_changed')
@@ -254,6 +276,7 @@ class GitHubDraftPublisher:
                 or value['request_sha256'] != digest(canonical(value['request']))
                 or value['request'].get('operation_id') != private.path.name
                 or value['request'].get('grant') != self.grant
+                or value['request'].get('authority') != self.authority_pin
                 or value['request'].get('local_grant') != self.workspaces.grant): fail('git_publication_record_refused')
         return value
 
@@ -341,6 +364,17 @@ class GitHubDraftPublisher:
         if self._read(private) != value: fail('git_publication_record_changed')
         return head
 
+    def _authorize_effect(self, operation_id, workspace_private, delivery_private, private, value):
+        # All GitHub/remote GETs precede this fresh Board observation. Nothing
+        # remotely read follows it before push/POST. Repeat local proof/pins
+        # after those Board reads without spending execution/test budgets.
+        if self.authority is None: return
+        if self.authority.before_effect(operation_id=operation_id,grant=self.grant,request=value['request']) is not True:
+            fail('git_publication_authority_refused')
+        self._source(operation_id,workspace_private,delivery_private,value['request']['delivery_sha'])
+        self._transport(private,value)
+        if self._read(private) != value: fail('git_publication_record_changed')
+
     def publish(self, *, operation_id, delivery_sha, title, body):
         _operation(operation_id); sha(delivery_sha)
         if (type(title) is not str or not 1 <= len(title.encode()) <= 200 or not title.strip()
@@ -356,6 +390,7 @@ class GitHubDraftPublisher:
             request = dict(operation_id=operation_id,grant=self.grant,local_grant=self.workspaces.grant,
                 delivery_sha=delivery_sha,tree_sha=source['seal']['tree_sha'],snapshot_sha256=source['snapshot_sha256'],
                 scope=source['request']['scope'],branch='codex/delivery-'+operation_id,title=title,body=body)
+            if self.authority_pin is not None: request['authority'] = copied(self.authority_pin)
             with self.deliveries._record(self.root,operation_id,create=True) as (private,fresh):
                 if fresh:
                     value = dict(schema=SCHEMA,phase='planned',request=request,request_sha256=digest(canonical(request)),
@@ -376,6 +411,7 @@ class GitHubDraftPublisher:
                     if head is None:
                         if value['phase']=='pushing': fail('git_publication_push_retained')
                         self._save(private,value,'pushing')
+                        self._authorize_effect(operation_id,workspace_private,delivery_private,private,value)
                         # Absence-only CAS: the server must still see this exact
                         # deterministic ref as absent. No existing ref is replaced.
                         try:
@@ -399,6 +435,7 @@ class GitHubDraftPublisher:
                         self._before_effect(operation_id,workspace_private,delivery_private,private,value,head_required=True)
                         if private.read('create-pr.json',MAX_RECORD) != canonical(payload): fail('git_publication_input_changed')
                         self._save(private,value,'creating')
+                        self._authorize_effect(operation_id,workspace_private,delivery_private,private,value)
                         try: self._api(API+'/pulls',cwd=private.path,method='POST',input_file=private.path/'create-pr.json')
                         except DevelopmentError: pass
                         found = self._lookup_pr(private,value)
