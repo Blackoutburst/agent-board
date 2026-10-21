@@ -304,13 +304,18 @@ def linux_source_pins():
         if descriptor is not None: os.close(descriptor)
 
 
-def permission_document(workspace):
-    return {'filesystem':{':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny',workspace:'read'},
+def permission_document(workspace, *, executable):
+    # Callers pin this exact regular executable before using the document.
+    # The executable contributes only its canonical file path, never its parent.
+    workspace,executable = (_path(os.fspath(path)) for path in (workspace,executable))
+    return {'filesystem':{':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny',
+                          workspace:'read',executable:'read'},
             'network':{'enabled':False}}
 
 
-def permission_arguments(workspace):
-    entries = ','.join(json.dumps(key)+'='+json.dumps(value) for key,value in permission_document(workspace)['filesystem'].items())
+def permission_arguments(workspace, *, executable):
+    entries = ','.join(json.dumps(key)+'='+json.dumps(value) for key,value in
+                      permission_document(workspace,executable=executable)['filesystem'].items())
     return ['-c','default_permissions='+json.dumps(PROFILE_NAME),'-c',
             'permissions.'+PROFILE_NAME+'={filesystem={'+entries+'},network={enabled=false}}']
 
@@ -367,7 +372,7 @@ def prepare_linux_planner_policy(directory, *, workspace, checkout, executable,
                 'executable':os.fspath(executable),'executable_pin':_executable_pin(executable),
                 'cli_version':cli_version,'cli_sha256':_binary(executable),
                 'interpreter':os.fspath(interpreter),'interpreter_pin':_executable_pin(interpreter),
-                'policy':permission_document(workspace),'canary_sha256':digest(CANARY.encode()),
+                'policy':permission_document(workspace,executable=executable),'canary_sha256':digest(CANARY.encode()),
                 'source_pins':linux_source_pins(),'environment':environment,'environment_sha256':digest(canonical(environment))}
             if plan['cli_sha256'] != plan['executable_pin']['sha256'] or linux_execution_identity() != environment:
                 _fail('linux_planner_policy_changed')
@@ -444,7 +449,7 @@ class LinuxPlannerPolicy:
                     or type(p['profile_version']) is not int or p['profile_version'] != PROFILE_VERSION
                     or type(p['origin']) is not str or str(uuid.UUID(p['origin'])) != p['origin']
                     or type(p['cli_version']) is not str or re.fullmatch(r'codex-cli [0-9][A-Za-z0-9._+-]{0,79}',p['cli_version']) is None
-                    or canonical(p['policy']) != canonical(permission_document(p['workspace']))
+                    or canonical(p['policy']) != canonical(permission_document(p['workspace'],executable=p['executable']))
                     or p['canary_sha256'] != digest(CANARY.encode())): _fail('linux_planner_policy_changed')
             validate_linux_execution_identity(p['environment'])
             sha256(p['cli_sha256']);sha256(p['environment_sha256'])
@@ -522,7 +527,7 @@ class LinuxPlannerPolicy:
                         or any(marker[name] != value[name] for name in ('fingerprint','environment_sha256','source_pins_sha256'))
                         or digest(canonical(marker)) != value['attempt_sha256']): _fail('linux_planner_policy_unqualified')
             except (DevelopmentError,OSError,ValueError,TypeError,KeyError): _fail('linux_planner_policy_unqualified')
-            return permission_arguments(self.workspace)
+            return permission_arguments(self.workspace,executable=self.executable)
 
     def qualify(self):
         """ONE explicit synthetic sandbox attempt; never exec/login/model.
@@ -573,8 +578,9 @@ class LinuxPlannerPolicy:
                 payload = {'inside':self.workspace+'/'+fixture,'inside_write':self.workspace+'/'+fixture+'-write',
                     'outside':str(self.private.path/outside),'outside_write':str(self.private.path/(outside+'-write')),
                     'port':listener.getsockname()[1]}
-                command = [self.executable,*permission_arguments(self.workspace),
-                    'sandbox','--',self._plan['interpreter'],'-I','-S','-c',CANARY,canonical(payload).decode()]
+                command = [self.executable,*permission_arguments(self.workspace,executable=self.executable),
+                    'sandbox','--permission-profile',PROFILE_NAME,'--include-managed-config',
+                    '--',self._plan['interpreter'],'-I','-S','-c',CANARY,canonical(payload).decode()]
                 run = _run_bounded(command,self.workspace,15,8192,env)
                 process_cleanup = process_cleanup and _known_process_cleanup(run)
                 if type(run.stdout) is not bytes: _fail('linux_planner_canary_output_invalid')

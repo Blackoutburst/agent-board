@@ -12,11 +12,13 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from blackoutburst_agents.codex_turn import _arguments
 from blackoutburst_agents.dev_journal import decode
 from blackoutburst_agents.dev_manifest import DevelopmentError,canonical,digest
 from blackoutburst_agents import linux_planner_policy as policy_module
 from blackoutburst_agents.linux_planner_policy import (CHECKS,LinuxPlannerPolicy,PlannerPolicyError,
     linux_execution_identity,prepare_linux_planner_policy,validate_linux_execution_identity)
+from blackoutburst_agents.subscription_probe import ProbeSettings
 
 
 def environment():
@@ -82,19 +84,108 @@ class LinuxPolicyTests(unittest.TestCase):
         self.prepare()
         with LinuxPlannerPolicy(self.state) as policy:
             receipt=policy.qualify()
-            self.assertEqual(policy.validate_for(self.cli,self.workspace),policy_module.permission_arguments(str(self.workspace)))
+            arguments=policy.validate_for(self.cli,self.workspace)
+            self.assertEqual(arguments,policy_module.permission_arguments(self.workspace,executable=self.cli))
             self.assertEqual(receipt['cleanup_confirmed'],True)
             self.assertEqual(receipt['checks'],{name:True for name in CHECKS})
             self.assertEqual(list(self.workspace.iterdir()),[])
             self.assertEqual(len(self.commands),2)
             command=self.commands[1][0]
             self.assertIn('sandbox',command);self.assertNotIn('--ignore-user-config',command)
+            self.assertEqual(command[:1+len(arguments)],[str(self.cli),*arguments])
+            self.assertEqual(command[1+len(arguments):5+len(arguments)],
+                ['sandbox','--permission-profile',policy_module.PROFILE_NAME,'--include-managed-config'])
             self.assertIn('default_permissions="board-linux-planner-read-v1"',command)
             self.assertNotIn('-P',command);self.assertNotIn('exec',command);self.assertNotIn('login',command)
             self.assertEqual(self.commands[1][3],8192)
             self.assertNotIn('OPENAI_API_KEY',self.commands[1][4])
             self.refuse(policy.qualify,'linux_planner_attempt_not_reusable')
         with LinuxPlannerPolicy(self.state) as reopened:reopened.validate_for(self.cli,self.workspace)
+
+    def test_profile_reads_only_the_exact_executable_and_workspace(self):
+        public='/opt/blackoutburst-agent-host/releases/'+'7'*64+'/tools/codex'
+        expected={':root':'deny',':minimal':'read',':tmpdir':'deny',':slash_tmp':'deny',
+                  str(self.workspace):'read',public:'read'}
+        self.assertEqual(policy_module.permission_document(self.workspace,executable=public),
+                         {'filesystem':expected,'network':{'enabled':False}})
+        arguments=policy_module.permission_arguments(self.workspace,executable=public)
+        entries=','.join(json.dumps(key)+'='+json.dumps(value) for key,value in expected.items())
+        self.assertEqual(arguments,['-c','default_permissions='+json.dumps(policy_module.PROFILE_NAME),
+            '-c','permissions.'+policy_module.PROFILE_NAME+'={filesystem={'+entries+'},network={enabled=false}}'])
+        self.prepare()
+        plan=decode((self.state/'planner-plan.json').read_bytes())
+        self.assertEqual(plan['policy'],policy_module.permission_document(self.workspace,executable=self.cli))
+        self.assertEqual(plan['policy']['filesystem'][plan['executable_pin']['path']],'read')
+        self.assertNotIn(str(self.cli.parent),plan['policy']['filesystem'])
+        self.run.assert_not_called()
+
+    def test_profile_requires_an_explicit_canonical_executable_path(self):
+        for helper in (policy_module.permission_document,policy_module.permission_arguments):
+            with self.assertRaises(TypeError):helper(self.workspace)
+            for invalid in ('/',':minimal','tools/codex',str(self.cli)+'/../codex',str(self.cli)+'/',str(self.cli)+'\n'):
+                with self.subTest(helper=helper.__name__,path=invalid):
+                    self.refuse(lambda:helper(self.workspace,executable=invalid))
+        quoted=str(self.cli)+'"quoted,network={enabled=true}'
+        arguments=policy_module.permission_arguments(self.workspace,executable=quoted)
+        self.assertIn(json.dumps(quoted)+'="read"',arguments[-1])
+        self.assertTrue(arguments[-1].endswith(',network={enabled=false}}'))
+        self.run.assert_not_called()
+
+    def test_legacy_or_widened_profile_and_forged_executable_never_convert(self):
+        for mutation in ('legacy','parent_read','extra_read','executable_directory','other_executable'):
+            with self.subTest(mutation=mutation):
+                self.setUp();self.prepare()
+                path=self.state/'planner-plan.json';plan=decode(path.read_bytes())
+                filesystem=plan['policy']['filesystem']
+                if mutation=='legacy':filesystem.pop(str(self.cli))
+                elif mutation=='parent_read':
+                    filesystem.pop(str(self.cli));filesystem[str(self.cli.parent)]='read'
+                elif mutation=='extra_read':filesystem[str(self.root)]='read'
+                else:
+                    replacement=self.cli.parent if mutation=='executable_directory' else self.interpreter
+                    plan['executable']=str(replacement)
+                    plan['policy']=policy_module.permission_document(self.workspace,executable=replacement)
+                encoded=canonical(plan);path.write_bytes(encoded)
+                self.refuse(lambda:LinuxPlannerPolicy(self.state),'linux_planner_policy_changed')
+                self.assertEqual(path.read_bytes(),encoded)
+                self.assertIsNone(decode((self.state/'planner-qualification.json').read_bytes()))
+                self.run.assert_not_called()
+
+    def test_directory_symlink_and_noncanonical_executable_refuse_preparation(self):
+        link=self.cli.parent/'codex-link';link.symlink_to(self.cli)
+        alias=self.root/'tool-alias';alias.symlink_to(self.cli.parent)
+        for index,executable in enumerate((self.cli.parent,link,alias/self.cli.name,str(self.cli.parent)+'/../tools/'+self.cli.name)):
+            with self.subTest(executable=executable):
+                self.refuse(lambda:prepare_linux_planner_policy(self.root/('invalid-'+str(index)),
+                    workspace=self.workspace,checkout=self.checkout,executable=executable,
+                    interpreter=self.interpreter,cli_version=self.version))
+        self.run.assert_not_called()
+
+    def test_qualified_executable_scope_and_symlink_replacement_cannot_be_adopted(self):
+        self.prepare()
+        with LinuxPlannerPolicy(self.state) as policy:
+            policy.qualify();self.run.reset_mock()
+            self.refuse(lambda:policy.validate_for(self.interpreter,self.workspace),'linux_planner_policy_scope_mismatch')
+            held=self.cli.with_name('held-codex');self.cli.rename(held);self.cli.symlink_to(held)
+            self.refuse(lambda:policy.validate_for(self.cli,self.workspace),'linux_planner_policy_changed')
+            self.run.assert_not_called()
+
+    def test_exec_and_exact_resume_keep_policy_configuration_before_resume(self):
+        self.prepare()
+        with LinuxPlannerPolicy(self.state) as policy:
+            policy.qualify();self.run.reset_mock()
+            arguments=policy.validate_for(self.cli,self.workspace)
+            for session in (None,'11111111-2222-4333-8444-555555555555'):
+                with self.subTest(session=session):
+                    command=_arguments(ProbeSettings(self.cli),self.cli,session,arguments)
+                    prefix=[str(self.cli),'exec',*arguments]+(['resume'] if session else [])
+                    self.assertEqual(command[:len(prefix)],prefix)
+                    self.assertEqual(command[len(prefix)],'--ignore-user-config')
+                    self.assertNotIn('--permission-profile',command)
+                    self.assertNotIn('--include-managed-config',command)
+                    self.assertNotIn('--sandbox',command)
+                    self.assertEqual(command[-2:] if session else command[-1:], [session,'-'] if session else ['-'])
+            self.run.assert_not_called()
 
     def test_fresh_directory_exclusive_and_partial_never_converted(self):
         self.state.mkdir(mode=0o700)
