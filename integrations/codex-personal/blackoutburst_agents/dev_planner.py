@@ -14,7 +14,7 @@ import uuid
 
 from .codex_turn import execute_turn
 from .context_cache import validate_artifact, ContextCacheError
-from .dev_fence import DevelopmentFence, canonical_anchor
+from .dev_fence import DevelopmentFence, canonical_anchor, fence_wait_revision
 from .dev_journal import decode
 from .dev_manifest import (DevelopmentError, absolute_directory, canonical, check_content,
                            digest, identity, opaque, relative_path, sha256)
@@ -306,10 +306,21 @@ class DevelopmentPlanner:
 
     def _fresh(self, state, action=None, *, inspection=False):
         self._local_fresh(state, inspection=inspection)
-        self._grant(action)
-        # A full remote snapshot may take time. It never extends local budgets
-        # or hides a stop/path replacement that happened while it was read.
-        self._local_fresh(state, inspection=inspection)
+        self._fresh_after_fence_wait(lambda:self._grant(action),
+            lambda:self._local_fresh(state, inspection=inspection))
+
+    @staticmethod
+    def _fresh_after_fence_wait(collect, local, *, since=None):
+        # Only reads/checks repeat. No effect, budget, deadline or TTL is reset.
+        revision = since
+        for _ in range(3):
+            if revision is None or fence_wait_revision() != revision:
+                revision = fence_wait_revision()
+                collect()
+            local()
+            if fence_wait_revision() == revision:
+                return
+        raise DevelopmentError('fence_busy')
 
     def _linux_capture_local(self, state):
         """Local and already-owned Runtime guards, including after file reads."""
@@ -345,7 +356,7 @@ class DevelopmentPlanner:
     def _linux_capture_token(self):
         backend = self.broker.test_backend
         return (self._linux_capture_shared(), self.authorization, self._base_authorize,
-                self.broker.authorize_scope, backend, backend.authorize_scope)
+                self.broker.authorize_scope, backend, backend.authorize_scope, fence_wait_revision())
 
     @staticmethod
     def _same_capture_callback(first, current):
@@ -355,7 +366,8 @@ class DevelopmentPlanner:
         return first is current
 
     def _linux_capture_identity(self, token):
-        if (type(token) is not tuple or len(token) != 6 or type(token[0]) is not bool
+        if (type(token) is not tuple or len(token) != 7 or type(token[0]) is not bool
+                or type(token[6]) is not int or token[6] < 0
                 or token[1] is not self.authorization
                 or not self._same_capture_callback(token[2], self._base_authorize)
                 or not self._same_capture_callback(token[3], self.broker.authorize_scope)
@@ -374,6 +386,13 @@ class DevelopmentPlanner:
         """
         token = self._linux_capture_token()
         self._linux_capture_local(state)
+        self._fresh_after_fence_wait(lambda:self._linux_capture_collect(token),
+            lambda:self._linux_capture_local(state))
+        self._linux_capture_identity(token)
+        return (*token[:6],fence_wait_revision())
+
+    def _linux_capture_collect(self, token):
+        self._linux_capture_identity(token)
         if token[0]:
             try:
                 grant = self.authorization()
@@ -384,24 +403,34 @@ class DevelopmentPlanner:
         else:
             self.broker._authorize('repo.read_file')
             self.broker._authorize('repo.run_test')
-            # The exact planner broker callback just validated fresh grants.
-            # Only that known producer may also prove the backend's same bound
-            # adapter. A different callback must run in full before source IO.
+            # Opaque callbacks keep their complete authorization path.
             if not (self._linux_broker_callback_exact() and self._linux_backend_shared()):
                 self.broker.test_backend._authorize()
-        self._linux_capture_local(state)
-        self._linux_capture_identity(token)
-        return token
+
+    def _linux_capture_after_wait(self, state, local, since):
+        """Concrete grants-only refresh after a late snapshot metadata wait."""
+        token = self._linux_capture_token()
+        if token[0] is not True:
+            raise DevelopmentError('planner_authorization_changed')
+        def check():
+            self._linux_capture_local(state)
+            local()
+            self._linux_capture_identity(token)
+        self._fresh_after_fence_wait(lambda:self._linux_capture_collect(token),check,since=since)
 
     def _linux_capture_complete(self, state, token):
         # Local object identities only, not a grant or a reusable observation.
         # Hold them for this single call so even True->True or False->False
         # replacement cannot change the capture's authority or callback path.
         shared = self._linux_capture_identity(token)
-        if not shared:
-            self._fresh(state, 'repo.run_test')
-            if not self._linux_backend_shared():self.broker.test_backend._authorize()
-        self._linux_capture_local(state)
+        def collect():
+            if shared:
+                self._linux_capture_collect(token)
+            else:
+                self._fresh(state, 'repo.run_test')
+                if not self._linux_backend_shared():self.broker.test_backend._authorize()
+        self._fresh_after_fence_wait(collect,lambda:self._linux_capture_local(state),
+            since=token[6] if shared else None)
         self._linux_capture_identity(token)
 
     def _linux_context_fresh(self, state):
@@ -414,15 +443,16 @@ class DevelopmentPlanner:
         if self.broker.enabled is not True:
             raise DevelopmentError('broker_disabled')
         self._local_fresh(state)
-        if token[0]:
-            self._grant('repo.run_test')
-        else:
-            self._fresh(state, 'repo.run_test')
-            if self._base_authorize(self.broker.manifest['scope'], 'repo.run_test',
-                                    self.broker.manifest['resource']) is not True:
-                raise DevelopmentError('planner_authorization_changed')
-            if not self._linux_backend_shared():self.broker.test_backend._authorize()
-        self._local_fresh(state)
+        def collect():
+            if token[0]:
+                self._grant('repo.run_test')
+            else:
+                self._fresh(state, 'repo.run_test')
+                if self._base_authorize(self.broker.manifest['scope'], 'repo.run_test',
+                                        self.broker.manifest['resource']) is not True:
+                    raise DevelopmentError('planner_authorization_changed')
+                if not self._linux_backend_shared():self.broker.test_backend._authorize()
+        self._fresh_after_fence_wait(collect,lambda:self._local_fresh(state))
         if self.broker.enabled is not True:
             raise DevelopmentError('broker_disabled')
         self._linux_capture_identity(token)

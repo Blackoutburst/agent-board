@@ -238,6 +238,11 @@ class LinuxExecutionContext:
         self.planner._linux_capture_complete(self.state, shared)
         self._check()
 
+    def refresh_after_fence_wait(self, local, since):
+        self._check()
+        self.planner._linux_capture_after_wait(self.state,local,since)
+        self._check()
+
     def close(self):
         self._active = False
 
@@ -270,6 +275,9 @@ class _ExecutionCapturePermit:
     def capture_complete(self, snapshot, shared):
         require(snapshot._capture_permit is self and snapshot._broker is self.broker)
         self.context.capture_complete(shared)
+    def refresh_after_fence_wait(self, snapshot, since):
+        require(snapshot._capture_permit is self and snapshot._broker is self.broker)
+        self.context.refresh_after_fence_wait(snapshot._held_metadata,since)
 
 
 class LinuxExecutionAttempt:
