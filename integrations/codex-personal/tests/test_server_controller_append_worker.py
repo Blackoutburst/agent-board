@@ -8,6 +8,7 @@ import pytest
 
 from blackoutburst_agents.board_reader import BoardReadError
 from blackoutburst_agents.host_config import digest
+from blackoutburst_agents.host_config import HostError
 from blackoutburst_agents.message_append_coordinator import MessagesAppendCoordinator
 from blackoutburst_agents.message_append_protocol import _ascii_hash, PIN_FIELDS
 from blackoutburst_agents.server_control_protocol import catalog_fence
@@ -30,6 +31,7 @@ class ClosedAppendTransport:
         self.f=f;self.calls=[];self.worker=None;self.controller=None
         self.phase='requested';self.proof=None;self.catalog_version=1
         self.lost_complete=False;self.lost_prepare=False;self.pause_prepare=None;self.fail_poll=0
+        self.visible=True;self.fail_candidate=False
         self.new=candidate(f)
         old=f.host.managed_target('primary');entry=f.catalog[0]
         cmd=dict(id='real-old-stop',seq=1,instance_id=old['instance_id'],action='stop',
@@ -73,7 +75,7 @@ class ClosedAppendTransport:
             if self.fail_poll:
                 self.fail_poll-=1;raise BoardReadError('timeout')
             return dict(schema='server-messages-append-poll-v1',host_id='fixture-host',
-                requests=[] if self.phase=='complete' else [self.record()])
+                requests=[] if self.phase=='complete' or not self.visible else [self.record()])
         if name=='poll_instance_commands':
             return deepcopy(dict(host_id='fixture-host',host_version=1,enabled=True,last_seen_at=2.,
                 catalog_version=self.catalog_version,instances=self.instances,
@@ -131,8 +133,11 @@ def controller(f,client):
         def tick(self,**kwargs):ticks.append(True);raise AssertionError('B must never tick or open a feed')
     def factory(worker):
         worker._require_lock();client.worker=worker
+        def fixed_candidate(record,old):
+            if client.fail_candidate:raise HostError('messages_append_prepared_slot_unconfirmed')
+            return deepcopy(client.new)
         return MessagesAppendCoordinator(worker,client,source_release_sha256='b'*64,
-            candidate_factory=lambda record,old:deepcopy(client.new),source_guard=lambda:None)
+            candidate_factory=fixed_candidate,source_guard=lambda:None)
     c=ServerController(f.host,client,append_factory=factory,supervisor_factory=NeverTick,lock_directory=f.root/'locks')
     client.controller=c
     return c,ticks
@@ -237,5 +242,19 @@ def test_empty_queue_recovers_after_metadata_loss_without_old_activation_replay(
         assert c._append_hold and not f.host.managed_target('primary')['enabled']
         for _ in range(3):c.step()
         assert not c._append_hold and not f.host.managed_target('primary')['enabled']
+        assert not any(n.endswith('_server_messages_append') for n,a,t in client.calls)
+    finally:assert c.shutdown()
+
+
+def test_cancel_before_prepare_releases_hold_only_after_worker_confirms_no_intent(roster):
+    f=roster;client=ClosedAppendTransport(f);client.fail_candidate=True;c,ticks=controller(f,client)
+    try:
+        c.start_worker();drive(c,lambda:c._append_failure=='slot_unavailable')
+        assert c._append_hold and f.host._messages_append_version()==4
+        client.visible=False;c.step()
+        wait_for(lambda:not c._append_hold)
+        c.step()
+        assert c._append_record is None and f.host._messages_append_version()==4
+        assert not ticks and not f.host.control()['enabled']
         assert not any(n.endswith('_server_messages_append') for n,a,t in client.calls)
     finally:assert c.shutdown()

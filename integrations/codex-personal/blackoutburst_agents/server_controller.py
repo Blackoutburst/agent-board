@@ -198,6 +198,19 @@ class ServerController:
                                     if record is not None:
                                         with self._mutex:
                                             self._append_invalidated=True;self._append_failure='requires_reconciliation'
+                                if (not advance and self._append_queue_empty and self._append_metadata_seen
+                                        and record is not None and not self._append_startup_blocked
+                                        and self._append_idle(worker)):
+                                    # A human may cancel before preparation.
+                                    # Only this acquired worker can confirm that
+                                    # no local intent requires exact recovery.
+                                    try:retained=self._append_coordinator.pending_hint()
+                                    except (HostError,BoardReadError,OSError):retained=record
+                                    if retained is None:
+                                        with self._mutex:
+                                            self._append_record=None;self._append_hold=False
+                                            self._append_failure=None;self._append_invalidated=False;self._append_complete=False
+                                        continue
                                 if advance:
                                     try:
                                         if self._append_invalidated:raise HostError('messages_append_stop_changed')
@@ -293,7 +306,7 @@ class ServerController:
                 if old is not None and old['request']['request_id']!=record['request']['request_id']:
                     raise HostError('messages_append_request_changed')
                 changed=old is None or old['request']['revision']!=record['request']['revision']
-                if old is None:self._append_invalidated=False
+                if old is None:self._append_invalidated=False;self._append_complete=False
                 self._append_record=deepcopy(record);self._append_hold=True
                 self._commands={};self._until=0.
                 if first or changed or (self._append_failure=='connection_lost' and self.clock()>=self._append_retry_at):
