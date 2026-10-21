@@ -61,7 +61,7 @@ def test_true_mcp_sdk_confirms_closed_bound_denial_and_no_execution(browser):
     assert 'execution' not in result and 'cleanup' not in json.dumps(result)
     assert not any(word in json.dumps(result) for word in ('SYNTHETIC_PRIVATE_HUMAN','Bearer','token'))
     with browser[1]._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==16
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 17
         denied=db.execute('SELECT * FROM runtime_admission_refusals').fetchall()
         assert len(denied)==1 and json.loads(denied[0]['response'])==result
         assert tuple(db.execute('SELECT * FROM runtime_executions').fetchone())==old
@@ -225,7 +225,7 @@ def test_schema14_upgrade_preserves_all_existing_execution_bytes_and_ids(browser
         claims=[tuple(row) for row in db.execute('SELECT * FROM tickets')]
     upgraded=Board(board.data_dir)
     with upgraded._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==16
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 17
         assert [tuple(row) for row in db.execute('SELECT * FROM runtime_executions')]==executions
         assert [tuple(row) for row in db.execute('SELECT * FROM tickets')]==claims
         assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0]==0

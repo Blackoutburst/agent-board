@@ -17,7 +17,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
 - Markdown renders in project text, task descriptions/criteria/progress/results, conversations and human requests; editors retain the original source.
 - Task files persist with the description, separately from discussion attachments.
-- Durable activity, transactional migration from schemas 1–12 to 13, backups and verification tools.
+- Durable activity, transactional migration from schemas 1–16 to 17, backups and verification tools.
 - Owner execution limits and a private Runtime view for participating executors, with explicit stop requests and cleanup confirmation.
 - Dated, owner-private Codex subscription observations per connection, with explicit unknown/stale states and no automatic permission or model changes.
 
@@ -68,9 +68,11 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Source release: `2.16.3`; database schema: `16` (check `/health` for the installed version)
+- Source candidate: `2.17.0`; database schema: `17` (check `/health` for the installed version)
 
-Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12. Source supporting only schema 12 cannot run against schema 13. Source supporting only schema 13 cannot run against schema 14. Source supporting only schema 14 cannot run against schema 15; never discard refusal tombstones during rollback. Source supporting only schema 15 cannot run against schema 16. Code rollback must retain the schema-16 database, its draft barriers and every admission refusal, using compatible source; never restore an older database to roll back this release.
+Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12. Source supporting only schema 12 cannot run against schema 13. Source supporting only schema 13 cannot run against schema 14. Source supporting only schema 14 cannot run against schema 15; never discard refusal tombstones during rollback. Source supporting only schema 15 cannot run against schema 16. Source supporting only schema 16 cannot run against schema 17. Code rollback must retain the schema-17 database, both request barriers, append proofs/statuses and every admission refusal, using compatible source; never restore an older database to roll back this release.
+
+Board 2.17.0 and adapter 0.31.0 add an explicit [inactive message-target append](docs/SERVER-MESSAGES-APPEND.md) for an already paired personal slot. The 70-tool catalogue includes its six closed manager operations. Installation starts no service or model. A hierarchical server team with managers, coders, reviewers, writers and parallel task execution remains separate work.
 
 ## Design reference
 

@@ -38,7 +38,7 @@ with httpx.Client(base_url=url) as client, tempfile.TemporaryDirectory(prefix='b
         process=subprocess.run([sys.executable,str(folder/'connect.py'),'--stdio','--client',client_kind,'--config-dir',str(folder)],
             input='\n'.join(json.dumps(r) for r in requests)+'\n',text=True,capture_output=True,timeout=45,check=True)
         responses={item['id']:item for item in map(json.loads,process.stdout.splitlines())}
-        assert len(responses[2]['result']['tools'])==64
+        assert len(responses[2]['result']['tools'])==70
         assert {'get_development_frame', 'inspect_profile_refresh', 'refresh_agent_session'} <= {
             tool['name'] for tool in responses[2]['result']['tools']}
         inbox=responses[3]['result']

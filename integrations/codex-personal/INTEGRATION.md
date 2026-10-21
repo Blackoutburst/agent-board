@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence de cette source : board **2.16.3**, schéma **16**, adaptateur **0.32.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence de cette source : board **2.17.0**, schéma **17**, adaptateur **0.32.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 
 Les qualifications natives historiques 0.26 restent attachées à leurs octets et pins. La fondation de bail Linux ajoutée en 0.27 ne les adopte pas et n’active aucun backend ou planner Linux ; sa preuve noyau synthétique reste limitée à Ubuntu UID 1000. La préparation d’entrée Linux 0.28 reste un autre lot inerte : son journal privé neuf schema 2 ne migre ni ne reprend les états 0.24/0.26/0.27. Les qualifications natives 0.27 restent attachées à leur source exacte et ne qualifient pas 0.28. Le [contrat de préparation](LINUX_INPUT_ADMISSION.md) détaille ses réservations durables et ses refus. Une version de distribution ne constitue pas une qualification ou une preuve de déploiement.
@@ -82,9 +82,11 @@ les sources finales précède tout nouveau pilote. Voir [DEVELOPMENT_FRAMES.md](
 et [SUPERVISED_TESTS.md](SUPERVISED_TESTS.md).
 
 La [fondation des bindings de lancement](MESSAGE_LAUNCH_BINDINGS.md), ajoutée en
-0.30.6, vérifie uniquement la cohérence des origines de configuration et conserve
-les hashes des anciennes cibles lors d’un append structurel. Aucun contrôleur,
-journal, migration, appel Board ou parcours de connexion ne l’utilise encore.
-Elle ne prouve ni source installée, ni autorisation, ni appairage, ni nettoyage.
-Host4 et Message3 restent inchangés ; leur futur raccord B demandera un nouveau
-marqueur de journal et une qualification distincte.
+0.30.6, conserve les hashes des anciennes cibles lors d’un append structurel.
+Depuis 0.31.0, le raccord [B/Host5](MESSAGE_APPEND_HOST5.md) l’utilise dans le
+véritable worker propriétaire, avec source protégée, slot personnel préparé et
+verrous enfants réels. Une opération finie ajoute une cible inactive ; les
+hashes seuls ne prouvent ni autorisation, ni appairage, ni nettoyage. La source
+compatible et le remplacement explicite du catalogue C0 doivent être installés
+et terminés séparément avant B. Ce raccord ne livre pas encore l’équipe cloud
+hiérarchique ni l’exécution parallèle de tâches de développement.
