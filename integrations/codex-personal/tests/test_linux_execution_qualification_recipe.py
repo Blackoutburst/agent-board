@@ -30,11 +30,11 @@ class RecipeTests(unittest.TestCase):
             '--expected-uid','1000','--root',str(self.root/'new'),'--output',str(self.root/'report.json')])
 
     def test_inventory_requires_exact_full_roster_and_retains_bytes_without_import(self):
-        self.assertEqual(len(recipe.ALLOWED_SOURCES),56)
+        self.assertEqual(len(recipe.ALLOWED_SOURCES),59)
         self.assertEqual(recipe.ALLOWED_SOURCES,tuple(sorted(set(recipe.ALLOWED_SOURCES))))
         # The owner adds twelve transitive source pins in the integrated tree.
         # This source-only branch still has the reviewed44-name base policy;
-        # the recipe itself refuses until its56-name roster matches exactly.
+        # The recipe refuses until its complete 59-name roster matches exactly.
         self.assertLessEqual(set(LINUX_EXECUTION_SOURCES),set(recipe.ALLOWED_SOURCES))
         before=set(sys.modules)
         inventory,sources=recipe.load_sources(str(self.package),str(self.inventory),self.expected)
