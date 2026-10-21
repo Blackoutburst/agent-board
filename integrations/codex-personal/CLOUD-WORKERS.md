@@ -15,7 +15,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Préparation Git, sélection et qualifications Linux par job | API explicite, sans dispatch automatique |
 | Commit scellé et PR brouillon | API explicite, avec garde de tests et reprise des effets ambigus |
 | Revue indépendante | Worker et raccord Linux explicites |
-| Unité serveur du pool | À raccorder et à valider dans son environnement définitif |
+| Unité serveur du pool | Installateur séparé et lot fini implémentés ; installation inactive et qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
 | Attribution hiérarchique et rôle rédacteur | À implémenter et à valider de bout en bout |
 
@@ -40,6 +40,14 @@ conserve ces reçus synthétiques et leurs limites. La régression complète du 
 couvre 2 599 tests réussis : quatorze tests réseau ont nécessité localhost
 autorisé et la fixture de fermeture des clients a été mise en conformité avec
 les entrées de profil familial déjà exigées par le produit.
+
+Le composé `f8cf6a775827728cd96e4aa556bc68799369eb63` ajoute le
+[lanceur serveur fini](../../deploy/worker_pool/README.md). Ses 47 tests ont
+passé sous Linux sans saut, puis le scénario à quatre profils distincts a passé
+avec les véritables verrous `/proc`, seize réservations nettoyées et huit tours
+simulés. Les neuf contrôles du backend et les cinq de la politique passent sur
+sa fermeture de 65 sources. L’[observation datée](docs/linux-finite-pool-fixtures-2026-10-21.json)
+conserve ces résultats ; ils ne qualifient pas la future unité propriétaire.
 
 Ces observations datées ne qualifient pas une installation propriétaire. Chaque
 job doit être préparé dans l’unité définitive, avec ses outils, sources,
