@@ -82,13 +82,22 @@ It refuses unrelated records, changed scope, absent stores and boolean-only
 claims. Cleanup may succeed while the private result still needs review; that
 settles only Pool capacity.
 
-Current composition has a known concurrency obstacle: `DevelopmentFence` uses a
-nonblocking lock on the canonical fence. Concurrent `prepare/run/_fresh` checks
-can return `fence_busy`; the adapter preserves that refusal and retains ambiguity.
-The four-real-worker test remains an expected failure only when that exact reason
-is observed, pending the separately reviewed fence fix. A second test proves local
-factory overlap and separate identities/clients/journals, without claiming four
-reliable model executions. Tests otherwise use the real Pool, worker, Board,
-Runtime, protected client loader and in-process ASGI with synthetic policy,
-backend, source receipts and text turns. No native qualification, model, account,
-network, listener or service has been exercised by this lot.
+The driver explicitly enters the reviewed `standalone_fence_wait()` context on
+its owner thread for each prepare/run/cleanup verification. This opt-in bounds
+only local canonical metadata contention; other callers retain nonblocking
+behavior, and another process holding the fence still refuses. Family controller
+operations are refused in this adapter, including reconciliation. Waits do not
+extend grant/source TTLs or authorize replay; the core refreshes the relevant
+current grants after a wait and fails closed when its retry bound is exhausted.
+The required SDK installation must include this opt-in API and its reviewed
+planner/source refresh changes; no fallback to old sources is provided.
+
+The composed test exercises four actual Pool threads with four explicitly
+authorized local resources, real prepare/run/fresh checks and real Board/Runtime
+SQLite reservations. A double barrier observes four correlated running Runtime
+executions and four reported active operations; all sixteen reservations then
+finish with verified cleanup, eight synthetic text turns run exactly once, Pool
+capacity settles and all four tickets remain in progress. It contains no xfail.
+These are synthetic policy/backend/source observations and text turns, including
+an in-process ASGI client path. No model, native qualification, owner account,
+production network, listener or service has been exercised by this lot.

@@ -267,12 +267,11 @@ class PoolDevelopmentTests(unittest.TestCase):
             root=self.base/'pool'/'workers'/job['worker_id']
             self.assertTrue((root/'work'/'work-journal.sqlite3').is_file())
             self.assertTrue((root/'runtime'/'runtime.sqlite3').is_file())
-        # The existing global DevelopmentFence is fail-closed on NB contention;
-        # this proves factory overlap, not four reliable/native model turns.
+        # This particular check measures factory overlap and separate stores;
+        # the next test asserts the complete four-operation Runtime path.
         self.assertTrue(all(job['state'] in ('settled','retained') for job in result))
 
-    def test_four_real_prepare_run_fresh_rounds_keep_existing_fence_obstacle_visible(self):
-        import pytest
+    def test_four_real_prepare_run_fresh_rounds_confirm_correlated_runtime_and_cleanup(self):
         jobs=[self.selected()[0] for _ in range(4)]
         barrier=threading.Barrier(4); seen=set(); lock=threading.Lock(); observations=[]
         def during(session,callbacks):
@@ -291,11 +290,21 @@ class PoolDevelopmentTests(unittest.TestCase):
                     if error.code!='operation_not_found':raise
                     reasons.extend(self.prepare_errors)
                 else:reasons.append(op['payload'].get('reason'))
-        if 'fence_busy' in reasons:
-            pytest.xfail('Existing canonical nonblocking DevelopmentFence contention; retained, no replay')
+        self.assertNotIn('fence_busy',reasons)
         self.assertEqual(len({tid for _,tid in self.calls}),4)
         self.assertEqual(observations,[(4,4)]*4)
-        self.assertTrue(all(job['state']=='settled' for job in result),result)
+        self.assertTrue(all(job['state']=='settled' and job['outcome']=='complete' and job['cleanup_confirmed'] is True
+                            for job in result),result)
+        expected={development_work_id(job['id']):job['session_id'] for job in jobs}
+        executions=self.board.get_runtime(self.human)['executions']
+        self.assertEqual(len(executions),16)
+        self.assertTrue(all(row['session_id']==expected[row['work_id']] and row['state']=='finished'
+                            and row['cleanup_confirmed'] is True for row in executions))
+        count=len(self.calls);self.assertEqual(count,8)
+        self.assertEqual(self.pool.dispatch_pending(),[]);self.assertEqual(len(self.calls),count)
+        self.assertEqual(self.pool.status()['capacity_held'],0)
+        self.assertTrue(all(self.board.get_ticket(self.human,self.data[job['session_id']]['ticket']['id'])['ticket']['status']=='in_progress'
+                            for job in jobs))
 
     def test_selection_session_scope_and_closed_fields_refuse_before_registration(self):
         job,data=self.selected(bind=False)

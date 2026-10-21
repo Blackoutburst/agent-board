@@ -13,6 +13,7 @@ from .development_pool_selection import (DevelopmentSelections, REVISION, fail,
                                          file_document)
 from .development_worker import DevelopmentBoardWorker, execution_factories
 from .dev_journal import PrivateDirectory, decode
+from .dev_fence import standalone_fence_wait
 from .dev_manifest import canonical, digest
 from .dev_planner import _directory_pin
 from .dev_planner_journal import PlannerBudgets
@@ -140,6 +141,7 @@ class DevelopmentPoolDriver:
                     'runtime': context.journals['runtime'],
                     **{name: pin['path'] for name, pin in bound['pins'].items()}}
         if (op['scope'] != bound['selection']['scope'] or config.get('kind') != 'development'
+                or config.get('controller_scope') is not None
                 or config.get('execution_profile') != 'linux-python-execution-v1'
                 or config.get('manifest_hash') != bound['documents']['manifest']['sha256']
                 or config.get('linux_execution_plan_sha256') != bound['documents']['backend_plan']['sha256']
@@ -192,7 +194,8 @@ class DevelopmentPoolDriver:
         with ExitStack() as resources:
             worker = self._open(resources, context, bound, existing=True)
             worker.client.adopt_registration()
-            self._cleanup(worker, context, bound, reconcile=True)
+            with standalone_fence_wait():
+                self._cleanup(worker, context, bound, reconcile=True)
         return PoolOutcome(context.operation_id, context.session_id, 'needs_review', True)
 
     def _verify_cleanup(self, context, outcome):
@@ -202,7 +205,8 @@ class DevelopmentPoolDriver:
         with ExitStack() as resources:
             worker = self._open(resources, context, bound, existing=True)
             worker.client.adopt_registration()
-            return self._cleanup(worker, context, bound, reconcile=False)
+            with standalone_fence_wait():
+                return self._cleanup(worker, context, bound, reconcile=False)
 
 
 
@@ -225,11 +229,12 @@ class _DevelopmentRun:
             private.create('development-prepare-intent.json', canonical({
                 'operation_id': context.operation_id, 'session_id': context.session_id,
                 'selection_sha256': digest(canonical(self.bound))}))
-        self.worker.prepare(scope=selection['scope'], request_id='pool-' + context.operation_id,
-            instruction=self.bound['instruction'], broker_directory=selection['broker_directory'],
-            backend_directory=selection['backend_directory'],
-            planner_policy_directory=selection['planner_policy_directory'], model=selection['model'],
-            budgets=PlannerBudgets(**selection['budgets']), operation_id=context.operation_id)
+        with standalone_fence_wait():
+            self.worker.prepare(scope=selection['scope'], request_id='pool-' + context.operation_id,
+                instruction=self.bound['instruction'], broker_directory=selection['broker_directory'],
+                backend_directory=selection['backend_directory'],
+                planner_policy_directory=selection['planner_policy_directory'], model=selection['model'],
+                budgets=PlannerBudgets(**selection['budgets']), operation_id=context.operation_id)
         self.driver._operation(self.worker, context, self.bound)
         self.companion = _StopCompanion(context)
         self.companion.start()
@@ -237,10 +242,13 @@ class _DevelopmentRun:
         with PrivateDirectory(context.journals['queue']) as private:
             private.create('development-run-intent.json', canonical({
                 'operation_id': context.operation_id, 'session_id': context.session_id}))
-        result = self.worker.run(context.operation_id)
+        with standalone_fence_wait():
+            result = self.worker.run(context.operation_id)
         self.companion.close(); self.companion = None
         cleaned = False
-        try: cleaned = self.driver._cleanup(self.worker, context, self.bound, reconcile=True)
+        try:
+            with standalone_fence_wait():
+                cleaned = self.driver._cleanup(self.worker, context, self.bound, reconcile=True)
         except Exception: pass  # Unknown is retained; never manufacture cleanup.
         status = 'complete' if result.get('status') == 'review_ready' else 'needs_review'
         with PrivateDirectory(context.journals['queue']) as private:
