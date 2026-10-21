@@ -207,6 +207,7 @@ class OwnerClientLifecycleTests(unittest.TestCase):
 
     def test_family_closes_every_slot_and_partial_construction(self):
         state = {'configuration': {'scope': {'board_endpoint': Client.endpoint}, 'registrations': {},
+            'inputs': {slot: {'execution_profile': 'darwin'} for slot in SLOTS},
             'provisional_scopes': {slot: {'board_session_id': slot} for slot in SLOTS},
             'pins': {slot: {'journal': {'path': str(self.root / slot / 'work')}} for slot in SLOTS},
             'child_stores': {slot: {kind: {'path': str(self.root / slot / kind)} for kind in ('runs', 'runtime')} for slot in SLOTS},
