@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import select
 import signal
 import socket
 import stat
@@ -293,6 +294,15 @@ def input_contents(raw, snapshot_sha256):
     return result
 
 
+def read_source_release(channel):
+    """Wait on the existing channel without renewing the SOURCE window."""
+    descriptor = channel.fileno()
+    require(select.select([descriptor], [], [], STARTUP_SECONDS)[0], 'linux_source_ack_missing')
+    raw = os.read(descriptor, 1025)
+    require(0 < len(raw) <= 1024, 'linux_source_ack_missing')
+    return raw
+
+
 def validate_source_release(raw,nonce,*,_clock=None):
     """Check the original dated frame in the namespace, without resetting it."""
     from .dev_test_supervisor import _control_clock,_validate_control_window
@@ -457,7 +467,7 @@ def inner(packet):
         os.write(channel.fileno(), canonical({'stage': 'ready', 'nonce': packet['nonce'],
             'runtime_sha256': digest(canonical(packet['runtime'])), 'script_sha256': digest(script),
             'input_packet_sha256': digest(raw), 'checks': checks}))
-        source_release=os.read(channel.fileno(),1025)
+        source_release=read_source_release(channel)
         channel.close()
         os.closerange(3, 64)
         allowed = {'json': json, 'pathlib': sys.modules['pathlib']}
