@@ -355,7 +355,12 @@ class HostMessagesAppendMixin:
         denied=[]
         def readonly(action,first,second,database,trigger):
             if action in (sqlite3.SQLITE_SELECT,sqlite3.SQLITE_READ,sqlite3.SQLITE_FUNCTION,sqlite3.SQLITE_RECURSIVE):return sqlite3.SQLITE_OK
-            if action==sqlite3.SQLITE_PRAGMA and (second is None or first.lower() in ('table_info','table_xinfo','index_info','index_xinfo','index_list','foreign_key_list')):return sqlite3.SQLITE_OK
+            if action==sqlite3.SQLITE_PRAGMA:
+                name=first.lower()
+                if name in ('table_info','table_xinfo','index_info','index_xinfo','index_list','foreign_key_list'):return sqlite3.SQLITE_OK
+                # No-argument PRAGMAs may still write pages (for example
+                # incremental_vacuum). Permit only required metadata reads.
+                if second is None and name in ('user_version','schema_version','application_id'):return sqlite3.SQLITE_OK
             denied.append(action);return sqlite3.SQLITE_DENY
         connections=(self._db,children.messages.db,children.runs._db,children.runtime.db)
         try:
