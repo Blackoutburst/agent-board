@@ -49,14 +49,24 @@ def prepare(e,r,key='b-prepare',**changes):
     args=dict(host_id=e[5]['id'],request_id=r['request_id'],expected_revision=1,operation_id=str(uuid.uuid4()),
         **{k:format(i+1,"x")*64 for i,k in enumerate(HASH_KEYS)},idempotency_key=key)
     args.update(changes)
-    return e[0].prepare_server_messages_append(e[3],**args),args
+    proof=e[0].prepare_server_messages_append(e[3],**args)
+    from blackoutburst_agents.message_append_protocol import response
+    assert response('prepare_server_messages_append',proof,args)==proof
+    row=e[0].get_server_messages_append(e[1],e[5]['id'],r['request_id'])
+    assert row['proof']==proof
+    return row,args
 
 
 def later(e,r,phase,key=None,**changes):
     args=dict(host_id=e[5]['id'],request_id=r['request_id'],expected_revision=r['revision'],proof=r['proof'],idempotency_key=key or 'b-'+phase)
     if phase=='commit': args['entry']=dict(catalog_key='target-b',profile_id=r['profile_id'],profile_version=r['profile_version'],mode='messages',launchspec_sha256='b'*64)
     args.update(changes)
-    return getattr(e[0],phase+'_server_messages_append')(e[3],**args),args
+    proof=getattr(e[0],phase+'_server_messages_append')(e[3],**args)
+    from blackoutburst_agents.message_append_protocol import response
+    assert response(phase+'_server_messages_append',proof,args)==proof
+    row=e[0].get_server_messages_append(e[1],e[5]['id'],r['request_id'])
+    assert row['proof']==proof
+    return row,args
 
 
 def cancel(e,r,key='b-cancel'):
@@ -83,12 +93,12 @@ def test_real_phases_exact_replay_and_inactive_membership(ready):
         old_row=dict(db.execute('SELECT * FROM server_instances WHERE id=?',(old['id'],)).fetchone())
         old_commands=[dict(x) for x in db.execute('SELECT * FROM server_instance_commands')]
     prepared,pa=prepare(e,r); assert prepared['revision']==2 and not prepared['can_cancel']
-    assert b.prepare_server_messages_append(raw,**pa)==prepared
+    assert b.prepare_server_messages_append(raw,**pa)==prepared['proof']
     with pytest.raises(BoardError): cancel(e,prepared)
     pre,pr=later(e,prepared,'precommit');assert pre['revision']==3
     committed,co=later(e,pre,'commit');assert committed['revision']==4 and committed['barrier_held']
-    assert b.commit_server_messages_append(raw,**co)==committed
-    assert b.prepare_server_messages_append(raw,**pa)==prepared  # historic delivery only
+    assert b.commit_server_messages_append(raw,**co)==committed['proof']
+    assert b.prepare_server_messages_append(raw,**pa)==prepared['proof']  # historic delivery only
     with b._connection() as db:
         assert dict(db.execute('SELECT * FROM server_instances WHERE id=?',(old['id'],)).fetchone())==old_row
         assert [dict(x) for x in db.execute('SELECT * FROM server_instance_commands')]==old_commands
@@ -97,7 +107,7 @@ def test_real_phases_exact_replay_and_inactive_membership(ready):
         assert new['cleanup_confirmed']==0 and new['command_id'] is None and new['generation']==0
     complete,ca=later(e,committed,'complete');assert complete['revision']==5 and not complete['barrier_held']
     assert complete['connection_status']==complete['model_catalog_status']==complete['model_access_status']=='not_attested'
-    assert b.complete_server_messages_append(raw,**ca)==complete
+    assert b.complete_server_messages_append(raw,**ca)==complete['proof']
     assert b.get_runtime(h)['active_count']==0
     assert b.list_server_messages_appends(h,host['id'])['requests']==[complete]
     assert b.poll_server_messages_appends(raw,host['id'])['requests']==[]
@@ -307,10 +317,10 @@ def test_raw_tool_arguments_are_closed_without_coercion(name,args):
 def test_cold_replay_each_phase_without_repeating_audit_or_membership(ready):
     e,p,v=ready;r=create(e,v);r,pa=prepare(e,r);r,pr=later(e,r,'precommit');r,co=later(e,r,'commit');r,ca=later(e,r,'complete')
     b=Board(e[0].data_dir);before=snapshot(b)
-    assert b.prepare_server_messages_append(e[3],**pa)['state']=='prepared'
-    assert b.precommit_server_messages_append(e[3],**pr)['state']=='precommit'
-    assert b.commit_server_messages_append(e[3],**co)['state']=='committed'
-    assert b.complete_server_messages_append(e[3],**ca)==r
+    assert b.prepare_server_messages_append(e[3],**pa)['phase']=='prepared'
+    assert b.precommit_server_messages_append(e[3],**pr)['phase']=='precommit'
+    assert b.commit_server_messages_append(e[3],**co)['phase']=='committed'
+    assert b.complete_server_messages_append(e[3],**ca)==r['proof']
     assert snapshot(b)==before
 
 
@@ -361,7 +371,7 @@ def test_postcommit_does_not_turn_receipt_into_fresh_catalogue_authority(ready):
     e,p,v=ready;b,h,_,raw,_,host,*_=e;r=create(e,v);r,_=prepare(e,r);r,_=later(e,r,'precommit');r,args=later(e,r,'commit')
     # A real Stop remains legal, but changes the append's pinned fence.
     command(e,'stop','human-stop-new',instance=b.get_server_host(h,host['id'])['instances'][0])
-    assert b.commit_server_messages_append(raw,**args)==r
+    assert b.commit_server_messages_append(raw,**args)==r['proof']
     before=snapshot(b)
     with pytest.raises(BoardError,match='catalog_changed'):later(e,r,'complete')
     assert snapshot(b)==before
@@ -370,7 +380,7 @@ def test_postcommit_does_not_turn_receipt_into_fresh_catalogue_authority(ready):
 def test_prepare_replay_is_exact_same_key_and_body_not_adoption(ready):
     e,p,v=ready;b=e[0];r=create(e,v);prepared,args=prepare(e,r)
     before=snapshot(b)
-    assert b.prepare_server_messages_append(e[3],**args)==prepared
+    assert b.prepare_server_messages_append(e[3],**args)==prepared['proof']
     with pytest.raises(BoardError,match='changed'):
         b.prepare_server_messages_append(e[3],**{**args,'idempotency_key':'another-key'})
     with pytest.raises(BoardError,match='idempotency_conflict'):
@@ -397,7 +407,7 @@ def test_receipt_pin_corruption_is_not_an_adopted_historical_proof(ready):
     e,p,v=ready;b=e[0];r=create(e,v);r,args=prepare(e,r);r,_=later(e,r,'precommit')
     with b._tx() as db:
         old=json.loads(db.execute("SELECT response FROM server_messages_append_receipts WHERE operation='prepared'").fetchone()[0])
-        old['proof']['children_roster_sha256']='f'*64
+        old['children_roster_sha256']='f'*64
         from server_instances import _json
         db.execute("UPDATE server_messages_append_receipts SET response=? WHERE operation='prepared'",(_json(old),))
     before=snapshot(b)
@@ -436,4 +446,55 @@ def test_grant_final_publication_also_refuses_an_unexpected_write(ready,monkeypa
         return result
     monkeypatch.setattr(b,'_audit',injected);before=snapshot(b)
     with pytest.raises(BoardError,match='postcondition'):grant(e,enabled=False,key='revoke-with-fault')
+    assert snapshot(b)==before
+
+
+def test_real_Board_to_ServerControlClient_composition_returns_proof23(ready):
+    from blackoutburst_agents.server_control_client import ServerControlClient
+    from blackoutburst_agents.message_append_protocol import PROOF_FIELDS
+    e,p,v=ready;b,h,_,raw,_,host,*_=e;r=create(e,v)
+    client=object.__new__(ServerControlClient)
+    calls=[]
+    client._initialize=lambda:None
+    def dispatch(name,args):
+        calls.append(name)
+        return getattr(b,name)(raw,**args)
+    client._tool=dispatch
+    polled=client.call('poll_server_messages_appends',dict(host_id=host['id'],limit=1))
+    assert polled['requests'][0]['request']==r
+    args=dict(host_id=host['id'],request_id=r['request_id'],expected_revision=1,operation_id=str(uuid.uuid4()),
+        **{k:format(n+1,'x')*64 for n,k in enumerate(HASH_KEYS)},idempotency_key='client-prepare')
+    proof=client.call('prepare_server_messages_append',args)
+    assert set(proof)==set(PROOF_FIELDS.split()) and proof['phase']=='prepared'
+    for name in ('precommit','commit','complete'):
+        args=dict(host_id=host['id'],request_id=r['request_id'],expected_revision=proof['request_revision'],proof=proof,idempotency_key='client-'+name)
+        if name=='commit':args['entry']=dict(catalog_key='target-b',profile_id=p['id'],profile_version=p['version'],mode='messages',launchspec_sha256='b'*64)
+        proof=client.call(name+'_server_messages_append',args)
+        assert set(proof)==set(PROOF_FIELDS.split())
+    view=b.get_server_messages_append(h,host['id'],r['request_id'])
+    assert view['proof']==proof and view['state']=='complete' and view['barrier_held'] is False
+    assert calls==['poll_server_messages_appends','prepare_server_messages_append','precommit_server_messages_append','commit_server_messages_append','complete_server_messages_append']
+
+
+@pytest.mark.parametrize('which',['configuration','catalog'])
+def test_noop_pins_refused_by_Board_and_SDK_before_preparation(ready,which):
+    from blackoutburst_agents.message_append_protocol import arguments
+    from blackoutburst_agents.host_config import HostError
+    e,p,v=ready;r=create(e,v);args=dict(host_id=e[5]['id'],request_id=r['request_id'],expected_revision=1,operation_id=str(uuid.uuid4()),
+        **{k:format(n+1,'x')*64 for n,k in enumerate(HASH_KEYS)},idempotency_key='noop')
+    args['new_'+which+'_sha256']=args['old_'+which+'_sha256']
+    before=snapshot(e[0])
+    with pytest.raises(HostError):arguments('prepare_server_messages_append',args)
+    with pytest.raises(BoardError):e[0].prepare_server_messages_append(e[3],**args)
+    assert snapshot(e[0])==before
+
+
+def test_non_codex_binding_is_not_offered_as_a_supported_slot(ready):
+    e,p,v=ready;b,h,_,_,_,host,*_=e
+    with b._tx() as db:
+        db.execute("UPDATE agent_profile_bindings SET agent_kind='other' WHERE profile_id=?",(p['id'],))
+        db.execute("UPDATE sessions SET agent_kind='other' WHERE agent_id=?",(p['id'],))
+    assert b.get_server_messages_append_context(h,host['id'],p['id'])['slots']==[]
+    before=snapshot(b)
+    with pytest.raises(BoardError,match='slot_changed'):create(e,v)
     assert snapshot(b)==before

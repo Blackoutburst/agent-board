@@ -70,6 +70,8 @@ def validate_proof(value):
     _exact(value, PROOF_KEYS)
     if value['schema'] != PROOF_SCHEMA or type(value['phase']) is not str or value['phase'] not in PHASES:
         _fail('invalid_server_messages_append_proof')
+    if (value['old_configuration_sha256']==value['new_configuration_sha256']
+        or value['old_catalog_sha256']==value['new_catalog_sha256']): _fail('invalid_server_messages_append_proof')
     _uuid(value['operation_id'])
     for key in ('request_id','owner_id','host_id','device_id'): _opaque(value[key])
     for key in ('grant_version','request_revision','expected_host_version','expected_catalog_version'): _number(value[key])
@@ -89,6 +91,8 @@ def validate_messages_append_arguments(name, args):
         _exact(args, common | {'operation_id'} | set(HASH_KEYS))
         _uuid(args['operation_id'])
         for key in HASH_KEYS: _sha(args[key])
+        if (args['old_configuration_sha256']==args['new_configuration_sha256']
+            or args['old_catalog_sha256']==args['new_catalog_sha256']): _fail('invalid_server_messages_append_payload')
         if args['expected_revision'] != 1 or type(args['expected_revision']) is not int: _fail('invalid_server_messages_append_revision')
     elif name in ('precommit_server_messages_append','commit_server_messages_append','complete_server_messages_append'):
         _exact(args, common | {'proof'} | ({'entry'} if name == 'commit_server_messages_append' else set()),16384)
@@ -235,7 +239,7 @@ class ServerMessagesAppendMixin:
         if db.execute('''SELECT 1 FROM agent_profile_bindings b JOIN sessions s
             ON s.device_id=b.device_id AND s.agent_id=b.profile_id AND s.agent_kind=b.agent_kind
             JOIN devices d ON d.id=b.device_id AND d.owner_id=s.owner_id AND d.revoked_at IS NULL
-            WHERE b.profile_id=? AND s.owner_id=? AND s.profile_version=? AND
+            WHERE b.profile_id=? AND s.owner_id=? AND s.profile_version=? AND b.agent_kind='codex' AND
             (typeof(s.id)!='text' OR length(CAST(s.id AS BLOB))>800 OR typeof(b.agent_kind)!='text'
              OR length(CAST(b.agent_kind AS BLOB))>800 OR typeof(b.identity_key)!='text' OR length(CAST(b.identity_key AS BLOB))>800)
             LIMIT 1''',(profile['id'],host['owner_id'],profile['version'])).fetchone():
@@ -243,7 +247,7 @@ class ServerMessagesAppendMixin:
         rows=db.execute('''SELECT b.profile_id,s.profile_version,b.device_id,s.id AS session_id,b.agent_kind,b.identity_key
             FROM agent_profile_bindings b JOIN sessions s ON s.device_id=b.device_id AND s.agent_id=b.profile_id AND s.agent_kind=b.agent_kind
             JOIN devices d ON d.id=b.device_id AND d.owner_id=s.owner_id AND d.revoked_at IS NULL
-            WHERE b.profile_id=? AND s.owner_id=? AND s.profile_version=? ORDER BY b.device_id,s.id,b.agent_kind,b.identity_key LIMIT 17''',
+            WHERE b.profile_id=? AND s.owner_id=? AND s.profile_version=? AND b.agent_kind='codex' ORDER BY b.device_id,s.id,b.agent_kind,b.identity_key LIMIT 17''',
             (profile['id'],host['owner_id'],profile['version'])).fetchall()
         if len(rows)>16: _fail('server_messages_append_slot_limit',409)
         slots=[]
@@ -293,12 +297,14 @@ class ServerMessagesAppendMixin:
             historical=dict(request)
             phase='requested' if operation=='request' else 'cancelled' if operation=='cancel' else operation
             historical.update(state=phase,revision=1 if phase=='requested' else 2 if phase=='cancelled' else PHASES[phase])
-            if phase in ('requested','cancelled'): historical['proof']=None
+            if phase in ('requested','cancelled'):
+                historical['proof']=None
+                if value!=_view(historical): _fail('server_messages_append_corrupt',409)
             else:
-                historical['proof']=_json(value.get('proof'))
-            if value!=_view(historical): _fail('server_messages_append_corrupt',409)
-            if phase in PHASES:
-                current=_decode(request)[2]; proof=value['proof']
+                validate_proof(value)
+                historical['proof']=_json(value)
+                if _decode(historical)[2]!=value: _fail('server_messages_append_corrupt',409)
+                current=_decode(request)[2]; proof=value
                 invariant=PROOF_KEYS-{'phase','request_revision','instance_id','catalog_version','instances_sha256'}
                 if current is None or any(proof[k]!=current[k] for k in invariant): _fail('server_messages_append_corrupt',409)
                 if phase=='prepared':
@@ -342,8 +348,10 @@ class ServerMessagesAppendMixin:
         # Last operation is a read. Never return a contradicted durable proof.
         if operation=='grant':
             if _grant_view(current,self._messages_append_state(db,current)[0])!=result: _fail('server_messages_append_postcondition_failed',409)
-        elif _view(self._messages_append_record(db,current,result['request_id']))!=result:
-            _fail('server_messages_append_postcondition_failed',409)
+        else:
+            record=self._messages_append_record(db,current,result['request_id'])
+            final_result=_decode(record)[2] if operation in PHASES else _view(record)
+            if final_result!=result: _fail('server_messages_append_postcondition_failed',409)
         return result
 
     def get_server_messages_append_grant(self, actor, host_id):
@@ -549,7 +557,7 @@ class ServerMessagesAppendMixin:
             db.execute('UPDATE server_messages_append_requests SET revision=?,state=?,proof=? WHERE id=?',
                 (PHASES[phase],phase,_json(proof),row['id']))
             result=self._messages_append_remember(db,actor,host,phase,args['idempotency_key'],args,
-                _view(self._messages_append_record(db,host,row['id'])),snapshot,changes,expected_host=expected_host,expected_rows=expected_rows)
+                _decode(self._messages_append_record(db,host,row['id']))[2],snapshot,changes,expected_host=expected_host,expected_rows=expected_rows)
             current=self._server_host(db,actor,host['id'])
             self._messages_append_authority(db,current,body,slot)
             self._messages_append_fence(db,current,body,proof)
