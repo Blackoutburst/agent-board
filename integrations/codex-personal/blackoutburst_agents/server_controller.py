@@ -49,6 +49,7 @@ class ServerController:
         self.append_factory=append_factory
         self._append_coordinator=None;self._append_record=None;self._append_hold=False
         self._append_complete=False;self._append_failure=None;self._append_invalidated=False
+        self._append_startup_blocked=False
         self._append_epoch=0;self._append_attempted=0;self._append_retry_at=0.;self._append_metadata_seen=False
         self._append_status_sent=set();self._append_status_next={};self._append_queue_empty=False;self._stops={}
 
@@ -163,6 +164,7 @@ class ServerController:
                             except (HostError,BoardReadError,OSError) as error:
                                 with self._mutex:
                                     self._append_hold=True;self._append_failure=self._append_reason(error)
+                                    self._append_startup_blocked=True
                                 if not self._append_idle(worker):worker.stop('needs_review')
                         supervisor=self.factory(worker)
                         supervisor.message_feed_ready=self._message_feed_ready
@@ -190,6 +192,12 @@ class ServerController:
                                     and self._append_coordinator is not None)
                                 if advance:self._append_attempted=epoch;self._busy=True
                             if held:
+                                control=worker.control()
+                                if control['enabled'] or any(worker.managed_target(t['id'])['enabled'] for t in control['configuration']['targets']):
+                                    worker.stop('needs_review' if record is not None else 'authorization_changed')
+                                    if record is not None:
+                                        with self._mutex:
+                                            self._append_invalidated=True;self._append_failure='requires_reconciliation'
                                 if advance:
                                     try:
                                         if self._append_invalidated:raise HostError('messages_append_stop_changed')
@@ -297,6 +305,11 @@ class ServerController:
                 # A complete reply may have been lost after it left the poll
                 # queue. Only the worker's retained exact intent may retry it.
                 self._append_epoch+=1;self._append_retry_at=self.clock()+5
+            elif self._append_record is None and not self._append_startup_blocked:
+                # A failed metadata read is not an append intent. A later
+                # closed empty queue restores ordinary control; a previous
+                # activation has already been stopped and is never replayed.
+                self._append_hold=False;self._append_failure=None
         self._wake.set()
 
     def _report_append_failure(self):
@@ -455,6 +468,7 @@ class ServerController:
                     with self._mutex:
                         self._append_hold=True;self._commands={};self._until=0.
                         self._append_failure=self._append_reason(error)
+                    self._stop_authority()
             snapshot=self.client.call('poll_instance_commands',{'host_id':self.host_id,'limit':20})
             self._owned_call('managed_settings')
             response('poll_instance_commands',snapshot)

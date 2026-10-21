@@ -29,7 +29,7 @@ class ClosedAppendTransport:
     def __init__(self,f):
         self.f=f;self.calls=[];self.worker=None;self.controller=None
         self.phase='requested';self.proof=None;self.catalog_version=1
-        self.lost_complete=False;self.lost_prepare=False;self.pause_prepare=None
+        self.lost_complete=False;self.lost_prepare=False;self.pause_prepare=None;self.fail_poll=0
         self.new=candidate(f)
         old=f.host.managed_target('primary');entry=f.catalog[0]
         cmd=dict(id='real-old-stop',seq=1,instance_id=old['instance_id'],action='stop',
@@ -70,6 +70,8 @@ class ClosedAppendTransport:
     def call(self,name,args):
         self.calls.append((name,deepcopy(args),threading.get_ident()))
         if name=='poll_server_messages_appends':
+            if self.fail_poll:
+                self.fail_poll-=1;raise BoardReadError('timeout')
             return dict(schema='server-messages-append-poll-v1',host_id='fixture-host',
                 requests=[] if self.phase=='complete' else [self.record()])
         if name=='poll_instance_commands':
@@ -215,3 +217,25 @@ def test_real_Stop_during_prepared_RPC_settles_and_invalidates_B(roster):
         assert len([1 for n,a,t in client.calls if n=='report_server_messages_append_status'])==count
         assert not ticks and not f.host.control()['enabled']
     finally:release.set();assert c.shutdown()
+
+
+def test_empty_queue_recovers_after_metadata_loss_without_old_activation_replay(roster):
+    f=roster;client=ClosedAppendTransport(f);client.phase='complete'
+    c,_=controller(f,client)
+    class Idle:
+        def __init__(self,worker):pass
+        def tick(self,**kwargs):return {'status':'idle'}
+    c.factory=Idle
+    try:
+        c.start_worker();c.step()
+        i=client.instances[0];i['version']+=1;i['generation']+=1
+        cmd=dict(i['current_command'],id='new-human-start',seq=2,action='start',budget=1,
+            instance_version=i['version'],generation=i['generation'],revision=1,status='queued')
+        i.update(command_id=cmd['id'],current_command=cmd,desired_state='running',can_start=True,control_reason='')
+        c.step();wait_for(lambda:f.host.managed_target('primary')['enabled'])
+        client.fail_poll=1;c.step()
+        assert c._append_hold and not f.host.managed_target('primary')['enabled']
+        for _ in range(3):c.step()
+        assert not c._append_hold and not f.host.managed_target('primary')['enabled']
+        assert not any(n.endswith('_server_messages_append') for n,a,t in client.calls)
+    finally:assert c.shutdown()
