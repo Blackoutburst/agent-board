@@ -150,8 +150,13 @@ after the durable `pushing`/`creating` intent, the concrete authority observes t
 real current Board policy, exact sealed context and original live claim. It
 checks policy again after the context reads and checks local Stop/pins. Only
 local source/test/transport/intent revalidation follows that observation before
-the command. A refusal is outside the effect's uncertain-response handler and
-cannot be swallowed into a successful publication. No registration, renewal,
+the command. A final closed `confirm_local` bracket then revalidates the bound
+operation/manifest/pins and reads the actual worker Stop marker last, with no
+RPC or later proof/transport read before the mutation. The real command launcher
+repeats that final bracket after its own tool/environment checks, against a
+single-use exact argv/intent frame. A local refusal is propagated rather than
+classified as a lost network reply and cannot be swallowed into a successful
+publication. No registration, renewal,
 Runtime effect, test, model or qualification is performed by this guard.
 
 This provides fresh observations at mutation boundaries, not an atomic

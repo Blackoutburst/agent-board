@@ -82,6 +82,39 @@ class DevelopmentGitAuthorityTests(unittest.TestCase):
         with self.assertRaises(DevelopmentError): self.publish(f)
         self.assertEqual((f.pushes,f.posts),(0,0))
 
+    def test_stop_during_final_local_transport_blocks_push_and_post(self):
+        for effect in ('push','post'):
+            with self.subTest(effect=effect):
+                f = self.fixture(); transport = f.publisher._transport; fired = []
+                def stop_after_transport(private,value):
+                    result = transport(private,value)
+                    if value['phase'] == ('pushing' if effect=='push' else 'creating') and not fired:
+                        fired.append(True); f.worker.stop(f.operation)
+                    return result
+                f.publisher._transport = stop_after_transport
+                with self.assertRaises(DevelopmentError): self.publish(f)
+                self.assertEqual(fired,[True]); self.assertEqual(f.posts,0)
+                self.assertEqual(f.pushes,0 if effect=='push' else 1)
+
+    def test_stop_during_real_command_environment_never_launches_mutation(self):
+        for effect in ('push','post'):
+            with self.subTest(effect=effect):
+                f = self.fixture(); command = f.publisher._command; fired = []; launches = []
+                def route(argv,**options):
+                    mutate = options.get('git') and argv[1]=='push' if effect=='push' else not options.get('git') and argv[1:7]==['api','--hostname','github.com','--method','POST','repos/Blackoutburst/agent-board/pulls']
+                    if not mutate: return command(argv,**options)
+                    environment = f.publisher._environment
+                    def stop_after_environment(**values):
+                        result = environment(**values); f.worker.stop(f.operation); fired.append(True); return result
+                    with patch.object(f.publisher,'_environment',side_effect=stop_after_environment), \
+                         patch('blackoutburst_agents.git_publication.subprocess.Popen') as launch:
+                        try: return GitHubDraftPublisher._command(f.publisher,argv,**options)
+                        finally: launches.append(launch.call_count)
+                f.publisher._command = route
+                with self.assertRaises(DevelopmentError): self.publish(f)
+                self.assertEqual(fired,[True]); self.assertEqual(launches,[0]); self.assertEqual(f.posts,0)
+                self.assertEqual(f.pushes,0 if effect=='push' else 1)
+
     def test_authority_cannot_be_added_removed_or_replaced_on_retry(self):
         f = self.fixture(); result = self.publish(f)
         old = f.publisher

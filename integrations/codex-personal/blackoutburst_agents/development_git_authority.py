@@ -90,3 +90,22 @@ class DevelopmentGitPublicationAuthority:
             return True
         except DevelopmentError: raise
         except Exception: fail('development_git_authority_unavailable')
+
+    def confirm_local(self, *, operation_id, grant, request):
+        """Final local bracket after every source/transport/intent read.
+
+        No Board request follows the previously fresh authorization. The final
+        observation here is the real local Stop marker, after pin/config reads.
+        """
+        try:
+            op,manifest = self._read()
+            if (operation_id != self.operation_id or self._descriptor(op,manifest) != self.pin
+                    or type(grant) is not dict or grant.get('owner_id') != op['scope']['owner_id']
+                    or grant.get('base_commit') != manifest['base_sha']
+                    or type(request) is not dict or request.get('operation_id') != operation_id
+                    or request.get('grant') != grant or request.get('scope') != manifest['scope']
+                    or request.get('authority') != self.pin): fail()
+            self.worker._local_control(operation_id)
+            return True
+        except DevelopmentError: raise
+        except Exception: fail('development_git_authority_unavailable')

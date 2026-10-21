@@ -37,6 +37,10 @@ def fail(code='git_publication_invalid'):
     raise DevelopmentError(code)
 
 
+class _AuthorityRefusal(DevelopmentError):
+    """A pre-launch local refusal, never an uncertain remote response."""
+
+
 def sha(value):
     if type(value) is not str or not re.fullmatch('[0-9a-f]{40}', value): fail('git_publication_sha_refused')
     return value
@@ -87,7 +91,7 @@ class GitHubDraftPublisher:
         self.deliveries, self.workspaces = deliveries, deliveries.workspaces
         self.root, self.git, self.gh = _path(publication_root), _path(git_executable), _path(gh_executable)
         self.python = _path(python_executable or Path(sys.executable).resolve())
-        self.authority, self.authority_pin = authority, None
+        self.authority, self.authority_pin, self._mutation_authority = authority, None, None
         if authority is not None:
             # Lazy: the generic standalone publisher need not import the Board
             # worker. No callable/subclass/model-provided grant is accepted.
@@ -186,7 +190,9 @@ class GitHubDraftPublisher:
             descriptors.extend(os.pipe()); descriptors.extend(os.pipe())
             status_read,status_write,life_read,life_write = descriptors
             launcher = [str(self.python),'-I','-S','-B',str(self.guardian),str(status_write),str(life_read),'--',*argv]
-            process = subprocess.Popen(launcher,cwd=cwd,env=self._environment(git=git),stdin=subprocess.DEVNULL,
+            environment = self._environment(git=git)
+            self._confirm_launch(argv,cwd=cwd,git=git)
+            process = subprocess.Popen(launcher,cwd=cwd,env=environment,stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,umask=0o077,
                 pass_fds=(status_write,life_read))
             os.close(status_write); descriptors.remove(status_write)
@@ -236,6 +242,29 @@ class GitHubDraftPublisher:
                 process.stdout.close(); process.stderr.close()
             for descriptor in descriptors: os.close(descriptor)
             if cleanup_error: fail('git_publication_command_unconfirmed')
+
+    def _confirm_launch(self, argv, *, cwd, git):
+        push = git and len(argv)>1 and argv[1]=='push'
+        post = not git and len(argv)>6 and argv[1:7]==['api','--hostname',HOST,'--method','POST',API+'/pulls']
+        if self.authority is None or not (push or post): return
+        pending,self._mutation_authority = self._mutation_authority,None
+        try:
+            if pending is None: fail('git_publication_authority_unconfirmed')
+            operation_id,request,phase = pending
+            root = self.root/operation_id
+            expected = ([str(self.git),'push','--porcelain','--no-verify',
+                '--force-with-lease=refs/heads/'+request['branch']+':',REMOTE,
+                request['delivery_sha']+':refs/heads/'+request['branch']] if push else
+                [str(self.gh),'api','--hostname',HOST,'--method','POST',API+'/pulls','--input',str(root/'create-pr.json')])
+            if argv!=expected or Path(cwd)!=(root/'transport' if push else root) or phase!=('pushing' if push else 'creating'):
+                fail('git_publication_authority_unconfirmed')
+            with PrivateDirectory(root) as private:
+                value = self._read(private)
+                if value['request']!=request or value['phase']!=phase: fail('git_publication_record_changed')
+            if self.authority.confirm_local(operation_id=operation_id,grant=self.grant,request=request) is not True:
+                fail('git_publication_authority_refused')
+        except DevelopmentError as error: raise _AuthorityRefusal(error.code) from None
+        except Exception: raise _AuthorityRefusal('git_publication_authority_unconfirmed') from None
 
     def _api(self, path, *, cwd, method='GET', input_file=None):
         argv = [str(self.gh),'api','--hostname',HOST,'--method',method,path]
@@ -374,6 +403,9 @@ class GitHubDraftPublisher:
         self._source(operation_id,workspace_private,delivery_private,value['request']['delivery_sha'])
         self._transport(private,value)
         if self._read(private) != value: fail('git_publication_record_changed')
+        if self.authority.confirm_local(operation_id=operation_id,grant=self.grant,request=value['request']) is not True:
+            fail('git_publication_authority_refused')
+        self._mutation_authority = operation_id,copied(value['request']),value['phase']
 
     def publish(self, *, operation_id, delivery_sha, title, body):
         _operation(operation_id); sha(delivery_sha)
@@ -418,6 +450,7 @@ class GitHubDraftPublisher:
                             self._command([str(self.git),'push','--porcelain','--no-verify',
                                 '--force-with-lease=refs/heads/'+request['branch']+':',REMOTE,
                                 delivery_sha+':refs/heads/'+request['branch']],cwd=private.path/'transport',git=True)
+                        except _AuthorityRefusal: raise
                         except DevelopmentError: pass
                         if self._remote(private,value) != delivery_sha: fail('git_publication_push_retained')
                     self._source(operation_id,workspace_private,delivery_private,delivery_sha)
@@ -437,6 +470,7 @@ class GitHubDraftPublisher:
                         self._save(private,value,'creating')
                         self._authorize_effect(operation_id,workspace_private,delivery_private,private,value)
                         try: self._api(API+'/pulls',cwd=private.path,method='POST',input_file=private.path/'create-pr.json')
+                        except _AuthorityRefusal: raise
                         except DevelopmentError: pass
                         found = self._lookup_pr(private,value)
                         if found is None: fail('git_publication_create_retained')
