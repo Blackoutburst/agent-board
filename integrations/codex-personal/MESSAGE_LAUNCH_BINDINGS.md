@@ -1,5 +1,7 @@
 # Bindings de lancement messages — fondation pure
 
+Source SDK **0.30.6** ; aucun raccord d’exécution ni déploiement propriétaire.
+
 `message_launch_bindings.py` vérifie uniquement la **cohérence structurelle** de données. Il ne lit ni n’écrit aucun fichier/journal, n’interroge aucun service et ne crée aucune permission, migration ou transition d’append. Aucun autre composant produit ne l’utilise dans ce lot. Les fonctions ne valident ni le propriétaire réel, ni la release installée, ni la fraîcheur du catalogue, ni l’appairage, ni un nettoyage.
 
 ## Entrées et résultats
@@ -42,7 +44,7 @@ Les seed/append comparent aussi le catalogue du prédécesseur fourni par l’ap
 
 ## Préconditions du futur raccord B
 
-Le caller devra établir séparément les sources/outils protégés, le vrai owner/endpoint/host_instance, la configuration/fichiers vivants, les bindings Board, les Stop humains et l’absence d’enfants/deliveries en attente. Une mise à jour de source explicite devra précéder B si la release courante ne correspond pas au catalogue existant. Ancien lecteur, journal, coordinateur source-only et entrée protégée devront refuser le nouveau profil tant que leur raccord n’est pas revu.
+Le caller devra établir séparément les sources/outils protégés, le vrai owner/endpoint/host_instance, la configuration/fichiers vivants, les bindings Board, les Stop humains et l’absence d’enfants/deliveries en attente. Une mise à jour de source explicite devra précéder B si la release courante ne correspond pas au catalogue existant. Host4 et Message3 restent inchangés dans cette source. Un futur raccord B devra introduire un marqueur de journal plus récent que Host4 ; les anciens lecteurs, coordinateurs source-only et entrées protégées devront le refuser avant mutation. Aucun marqueur nouveau n’est créé ici.
 
 **Les barrières A et B devront s’exclure symétriquement dans la même transaction Board** : create_A refuse une barrière B active et l’admission B refuse A. Ce contrôle n’existe pas dans ce module sans Board. Les demandes/grants A `metadata_request_only_v1` ne deviennent jamais des ordres/grants B ; un nouvel acte humain et une reprise durable explicite restent nécessaires.
 

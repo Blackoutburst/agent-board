@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence de cette source : board **2.16.2**, schéma **16**, adaptateur **0.30.5**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence de cette source : board **2.16.2**, schéma **16**, adaptateur **0.30.6**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 
 Les qualifications natives historiques 0.26 restent attachées à leurs octets et pins. La fondation de bail Linux ajoutée en 0.27 ne les adopte pas et n’active aucun backend ou planner Linux ; sa preuve noyau synthétique reste limitée à Ubuntu UID 1000. La préparation d’entrée Linux 0.28 reste un autre lot inerte : son journal privé neuf schema 2 ne migre ni ne reprend les états 0.24/0.26/0.27. Les qualifications natives 0.27 restent attachées à leur source exacte et ne qualifient pas 0.28. Le [contrat de préparation](LINUX_INPUT_ADMISSION.md) détaille ses réservations durables et ses refus. Une version de distribution ne constitue pas une qualification ou une preuve de déploiement.
@@ -78,3 +78,11 @@ La configuration scelle ce choix et refuse tout repli automatique. Le protocole
 natif daté conserve le TTL de 1,5 seconde ; mesurer le chemin réel et qualifier
 les sources finales précède tout nouveau pilote. Voir [DEVELOPMENT_FRAMES.md](DEVELOPMENT_FRAMES.md)
 et [SUPERVISED_TESTS.md](SUPERVISED_TESTS.md).
+
+La [fondation des bindings de lancement](MESSAGE_LAUNCH_BINDINGS.md), ajoutée en
+0.30.6, vérifie uniquement la cohérence des origines de configuration et conserve
+les hashes des anciennes cibles lors d’un append structurel. Aucun contrôleur,
+journal, migration, appel Board ou parcours de connexion ne l’utilise encore.
+Elle ne prouve ni source installée, ni autorisation, ni appairage, ni nettoyage.
+Host4 et Message3 restent inchangés ; leur futur raccord B demandera un nouveau
+marqueur de journal et une qualification distincte.
