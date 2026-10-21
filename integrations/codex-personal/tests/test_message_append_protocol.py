@@ -105,3 +105,19 @@ def test_client_does_not_register_or_coerce_string_payloads():
     assert calls==['initialize']
     with pytest.raises(BoardReadError):client.call('prepare_server_messages_append',json.dumps(prepare_args()))
     assert calls==['initialize']
+
+
+@pytest.mark.parametrize('reason',['PRIVATE_FAILURE_TEXT',[],{},None,True])
+def test_incapacity_report_cannot_carry_free_text_or_complex_content(reason):
+    a=dict(host_id='host',request_id='request',expected_revision=2,status='blocked',reason=reason,idempotency_key='status')
+    with pytest.raises(HostError):arguments('report_server_messages_append_status',a)
+
+
+def test_incapacity_report_is_data_only_and_correlated():
+    a=dict(host_id='host',request_id='request',expected_revision=2,status='blocked',reason='source_changed',idempotency_key='status')
+    value=dict(schema='server-messages-append-controller-status-v1',owner_id='owner',host_id='host',
+        device_id='manager',request_id='request',request_revision=2,status='blocked',reason='source_changed')
+    assert response('report_server_messages_append_status',value,a)==value
+    for key,new in [('request_id','other'),('request_revision',3),('status','ready'),('reason','slot_unavailable')]:
+        bad=deepcopy(value);bad[key]=new
+        with pytest.raises(HostError):response('report_server_messages_append_status',bad,a)

@@ -75,9 +75,9 @@ def existing_append_children(host,operation_id=None):
     from .message_journal import MessageJournal
     from .run_store import RunStore
     from .runtime_journal import RuntimeJournal
-    identities=(('messages','messages.sqlite3',0x42424D46,3),
-        ('message-runs','runs.sqlite3',0,2),('message-runtime','runtime.sqlite3',0x42425254,4))
-    for directory,filename,application,version in identities:
+    identities=(('messages','messages.sqlite3',0x42424D46,(1,2,3)),
+        ('message-runs','runs.sqlite3',0,(2,)),('message-runtime','runtime.sqlite3',0x42425254,(1,3,4)))
+    for directory,filename,application,versions in identities:
         path=host.directory/directory/filename
         # Do not create directories or silently migrate a missing/old journal.
         for ancestor in (path,*path.parents):
@@ -89,8 +89,11 @@ def existing_append_children(host,operation_id=None):
             if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid()
                     or stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1
                     or len(header)!=100 or header[:16]!=b'SQLite format 3\0'
-                    or int.from_bytes(header[60:64],'big')!=version
+                    or header[18:20]!=b'\x01\x01'
+                    or int.from_bytes(header[60:64],'big') not in versions
                     or int.from_bytes(header[68:72],'big')!=application):_fail('children_identity')
+            if any(Path(str(path)+suffix).exists() or Path(str(path)+suffix).is_symlink()
+                    for suffix in ('-journal','-wal','-shm')):_fail('children_identity')
         except OSError:_fail('children_identity')
         finally:
             if fd is not None:os.close(fd)
@@ -178,12 +181,36 @@ class MessagesAppendCoordinator:
         arguments(name,args)
         result=self.client.call(name,args)
         response(name,result,args)
-        if name=='complete_server_messages_append':
+        if name in ('prepare_server_messages_append','precommit_server_messages_append'):
+            self._old_membership(plan,result)
+        elif name in ('commit_server_messages_append','complete_server_messages_append'):
             self._completed_membership(plan,result)
         self._guard(record,plan)
         loaded=self._load(record)
         if loaded is None or loaded[1]!=pin:_fail('outbox_changed')
         return result
+
+    def _old_membership(self,plan,p):
+        from .server_control_protocol import response as control_response, catalog_fence
+        snapshot=self.client.call('poll_instance_commands',{'host_id':plan['host_id'],'limit':20})
+        control_response('poll_instance_commands',snapshot)
+        if (snapshot['host_id']!=plan['host_id'] or snapshot['host_version']!=p['expected_host_version']
+                or snapshot['catalog_version']!=p['expected_catalog_version']
+                or catalog_fence(snapshot['instances'])!=p['expected_instances_sha256']):
+            _fail('catalog_changed')
+        local={row['target_id']:row for row in plan['preserved']['managed_targets']}
+        expected={entry['catalog_key']:entry for entry in plan['old_catalog']}
+        actual={row['catalog_key']:row for row in snapshot['instances']}
+        if set(actual)!=set(local) or set(actual)!=set(expected):_fail('catalog_changed')
+        for key,row in actual.items():
+            command=row['current_command']
+            if (row['id']!=local[key]['instance_id'] or row['generation']!=local[key]['generation']
+                    or not row['active'] or any(row[field]!=value for field,value in expected[key].items())
+                    or row['desired_state']!='stopped' or row['observed_state']!='stopped'
+                    or not row['cleanup_confirmed'] or command is None or command['action']!='stop'
+                    or command['status']!='complete' or command['instance_version']!=row['version']
+                    or command['generation']!=row['generation'] or command['launchspec_sha256']!=row['launchspec_sha256']):
+                _fail('human_stop_required')
 
     def _completed_membership(self,plan,completion):
         # The completion receipt may be historical after a lost response. A
@@ -241,7 +268,10 @@ class MessagesAppendCoordinator:
         v=record['request']
         if loaded is None and v['state']!='requested':_fail('original_proposal_required')
         operation=None if loaded is None else loaded[0]['operation_id']
-        with self.children_factory(self.host,operation) as children:
+        # An inert outbox is not an intent. In particular a lost prepare reply
+        # leaves Host4 untouched and must not invent a consumed closure scope.
+        child_operation=operation if operation is not None and self.host.messages_append_record(operation_id=operation) is not None else None
+        with self.children_factory(self.host,child_operation) as children:
             if loaded is None:
                 c=self.host.control()
                 seed=c['instance_id']+':'+v['request_sha256']

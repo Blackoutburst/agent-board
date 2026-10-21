@@ -44,7 +44,8 @@ ROOT = Path(__file__).resolve().parent
 COOKIE = "board_session"
 MAX_BODY = 15 * 1024 * 1024
 APPEND_MANAGER_TOOLS = frozenset({'poll_server_messages_appends', 'prepare_server_messages_append',
-    'precommit_server_messages_append', 'commit_server_messages_append', 'complete_server_messages_append'})
+    'precommit_server_messages_append', 'commit_server_messages_append', 'complete_server_messages_append',
+    'report_server_messages_append_status'})
 
 
 class BoardMCP(FastMCP):
@@ -910,6 +911,16 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         """Confirm the same appended membership and release its barrier after exact local binding. Connection, cleanup and execution require their own observations and explicit controls."""
         return board.complete_server_messages_append(device_actor(), host_id, request_id,
             expected_revision=expected_revision, proof=proof, idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def report_server_messages_append_status(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Annotated[int, Field(strict=True, ge=1, le=5)], status: Literal['blocked'],
+            reason: Literal['slot_unavailable','source_changed','children_uncertain','connection_lost',
+                'request_changed','authorization_changed','local_state_conflict','local_io_failed',
+                'protocol_error','requires_reconciliation'], idempotency_key: ServerOpaque) -> dict:
+        """Report a closed inability code for this exact request revision. Metadata only: grants no execution, mutation of phase, authentication, ready state or cleanup. The existing manager device may report after work authority is withdrawn."""
+        return board.report_server_messages_append_status(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, status=status, reason=reason, idempotency_key=idempotency_key)
 
     @mcp.tool()
     async def poll_instance_commands(host_id: ServerOpaque,

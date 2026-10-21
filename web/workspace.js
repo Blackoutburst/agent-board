@@ -1033,6 +1033,18 @@ const Workspace = (() => {
   // Real append requests are separate from metadata-only draft A and its outbox.
   const appendSchemas = { grant: "server-messages-append-grant-v1", request: "server-messages-append-request-v1", cancel: "server-messages-append-cancel-v1" };
   const appendStates = { requested: "Ajout demandé", prepared: "Préparé localement", precommit: "Publication en préparation", committed: "Instance enregistrée", complete: "Ajout terminé · instance inactive", cancelled: "Demande annulée" };
+  const appendControllerReasons = {
+    slot_unavailable: "L’emplacement personnel préparé n’est pas disponible.",
+    source_changed: "La configuration installée doit être vérifiée avant de poursuivre.",
+    children_uncertain: "Une activité précédente doit être rapprochée avant de poursuivre.",
+    connection_lost: "Le serveur ne peut pas confirmer la réponse du tableau pour le moment.",
+    request_changed: "La demande a changé. Actualisez avant de poursuivre.",
+    authorization_changed: "Les autorisations ont changé. Vérifiez-les avant de poursuivre.",
+    local_state_conflict: "L’état du serveur doit être rapproché de cette demande.",
+    local_io_failed: "Le serveur ne peut pas conserver cette étape pour le moment.",
+    protocol_error: "Le serveur a reçu une réponse qu’il ne peut pas confirmer.",
+    requires_reconciliation: "Une vérification est nécessaire pour reprendre cette même demande."
+  };
   const appendBusy = new Set(), appendStorageKey = owner => `board-messages-append-v1:${owner}`;
   const appendBase = host => `/server-hosts/${workPath(host.id)}/messages-append`;
   function appendBodyValid(kind, body) {
@@ -1065,15 +1077,18 @@ const Workspace = (() => {
       : provisionText(value.instance_id) && serverInteger(value.catalog_version, 2) && provisionHash(value.instances_sha256);
   }
   function appendViewValid(value, owner, host) {
-    if (!provisionKeys(value, "schema,request_id,request_sha256,owner_id,host_id,device_id,revision,state,reason,barrier_held,profile_id,profile_version,provider_id,requested_model,slot_id,can_cancel,instance_id,proof,connection_status,model_catalog_status,model_access_status")
+    if (!provisionKeys(value, "schema,request_id,request_sha256,owner_id,host_id,device_id,revision,state,reason,barrier_held,profile_id,profile_version,provider_id,requested_model,slot_id,can_cancel,instance_id,proof,connection_status,model_catalog_status,model_access_status,controller_status,controller_reason")
         || value.schema !== "server-messages-append-view-v1" || value.owner_id !== owner || value.host_id !== host.id || value.device_id !== host.device_id
         || !provisionText(value.request_id) || !provisionHash(value.request_sha256) || !provisionText(value.profile_id)
         || !serverInteger(value.profile_version, 1) || !serverInteger(value.revision, 1) || !provisionHash(value.slot_id)
         || value.provider_id !== "codex_chatgpt" || !provisionText(value.requested_model)
         || !Object.hasOwn(appendStates, value.state) || typeof value.can_cancel !== "boolean" || typeof value.barrier_held !== "boolean"
-        || !["connection_status", "model_catalog_status", "model_access_status"].every(k => value[k] === "not_attested")) return false;
+        || !["connection_status", "model_catalog_status", "model_access_status"].every(k => value[k] === "not_attested")
+        || !(value.controller_status === "not_reported" && value.controller_reason === ""
+          || value.controller_status === "blocked" && typeof value.controller_reason === "string"
+            && Object.hasOwn(appendControllerReasons, value.controller_reason))) return false;
     if (value.state === "requested" || value.state === "cancelled") return value.proof === null && value.instance_id === null
-      && (value.state === "requested" ? value.revision === 1 && value.reason === "requested" && value.barrier_held === true
+      && (value.state === "requested" ? value.revision === 1 && value.reason === "requested" && value.barrier_held === true && value.can_cancel === true
         : value.revision === 2 && value.reason === "cancelled_by_owner" && value.barrier_held === false && value.can_cancel === false);
     return value.reason === value.state && value.revision === ({ prepared: 2, precommit: 3, committed: 4, complete: 5 })[value.state]
       && value.barrier_held === (value.state !== "complete") && value.can_cancel === false && appendProofValid(value.proof, value);
@@ -1091,7 +1106,7 @@ const Workspace = (() => {
         || value.provider_id !== profile.preferred_provider || value.requested_model !== (profile.preferred_model || null)
         || !Array.isArray(value.slots) || value.slots.length > 16 || new Set(value.slots.map(s => s?.slot_id)).size !== value.slots.length) return false;
     return value.slots.every(slot => provisionKeys(slot, "slot_id,device_id,session_id,agent_kind,identity_key,profile_id,profile_version")
-      && provisionHash(slot.slot_id) && ["device_id", "session_id", "agent_kind", "identity_key"].every(k => provisionText(slot[k]))
+      && provisionHash(slot.slot_id) && ["device_id", "session_id", "agent_kind", "identity_key"].every(k => provisionText(slot[k])) && slot.agent_kind === "codex"
       && slot.profile_id === value.profile_id && slot.profile_version === value.profile_version && serverInteger(slot.profile_version, 1))
       && serverInteger(value.expected_host_version, 1) && serverInteger(value.expected_catalog_version, 1) && serverInteger(value.grant_version)
       && provisionHash(value.expected_instances_sha256) && provisionHash(value.profile_sha256) && value.provider_id === "codex_chatgpt" && provisionText(value.requested_model);
@@ -1253,6 +1268,7 @@ const Workspace = (() => {
         el("h4", {}, profiles.find(p => p.owner_id === owner && p.id === row.profile_id)?.name || "Profil demandé", ` · v${row.profile_version}`),
         badge(appendStates[row.state], row.barrier_held ? "status-blocked" : ""),
         el("p", {}, `${provisionProviders[row.provider_id]} · ${row.requested_model || "Modèle non choisi"}`),
+        row.controller_status === "blocked" ? el("p", { class: "callout", role: "status" }, appendControllerReasons[row.controller_reason]) : null,
         el("p", { class: "small muted" }, "Connexion fournisseur, catalogue de modèles et accès au modèle : non vérifiés."),
         row.barrier_held ? el("p", { class: "callout" }, "L’ajout conserve son blocage des démarrages et redémarrages. Il ne lance aucun modèle.")
           : row.state === "complete" ? el("p", {}, "L’instance est inactive et son état reste à confirmer. Demandez d’abord « Arrêter » dans sa carte, puis attendez sa confirmation avant de choisir « Démarrer » avec un budget. La connexion fournisseur reste non vérifiée.") : null,

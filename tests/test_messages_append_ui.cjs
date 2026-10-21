@@ -19,12 +19,12 @@ const grant = { schema: 'server-messages-append-grant-view-v1', owner_id: owner,
 const context = { schema: 'server-messages-append-context-v1', owner_id: owner, host_id: host.id, device_id: host.device_id,
   expected_host_version: 1, expected_catalog_version: 1, expected_instances_sha256: hash, grant_version: 1,
   profile_id: profile.id, profile_version: 1, profile_sha256: hash, provider_id: profile.preferred_provider, requested_model: profile.preferred_model,
-  slots: [{ slot_id: hash, profile_id: profile.id, profile_version: 1, device_id: 'slot-device', session_id: 'slot-session', agent_kind: 'other', identity_key: 'slot-identity' }] };
+  slots: [{ slot_id: hash, profile_id: profile.id, profile_version: 1, device_id: 'slot-device', session_id: 'slot-session', agent_kind: 'codex', identity_key: 'slot-identity' }] };
 const body = { schema: 'server-messages-append-request-v1', ...Object.fromEntries(['expected_host_version','expected_catalog_version','expected_instances_sha256','grant_version','profile_id','profile_version','profile_sha256','provider_id','requested_model'].map(k => [k, context[k]])), slot_id: hash };
 const row = { schema: 'server-messages-append-view-v1', request_id: 'request', request_sha256: hash, owner_id: owner,
   host_id: host.id, device_id: host.device_id, revision: 1, state: 'requested', reason: 'requested', barrier_held: true,
   profile_id: profile.id, profile_version: 1, provider_id: profile.preferred_provider, requested_model: profile.preferred_model,
-  slot_id: hash, can_cancel: true, instance_id: null, proof: null, connection_status: 'not_attested', model_catalog_status: 'not_attested', model_access_status: 'not_attested' };
+  slot_id: hash, can_cancel: true, instance_id: null, proof: null, connection_status: 'not_attested', model_catalog_status: 'not_attested', model_access_status: 'not_attested', controller_status: 'not_reported', controller_reason: '' };
 let checks = 0;
 const yes = value => { assert.equal(value, true); checks++; }, no = value => { assert.equal(value, false); checks++; };
 yes(api.appendBodyValid('request', body)); yes(api.appendGrantValid(grant, owner, host)); yes(api.appendContextValid(context, owner, host, profile)); yes(api.appendViewValid(row, owner, host));
@@ -48,6 +48,9 @@ for (const [phase, revision] of [['prepared',2],['precommit',3],['committed',4],
 }
 const cancelled = { ...row, state: 'cancelled', reason: 'cancelled_by_owner', revision: 2, barrier_held: false, can_cancel: false };
 yes(api.appendViewValid(cancelled, owner, host)); no(api.appendViewValid({ ...cancelled, can_cancel: true }, owner, host));
+yes(api.appendViewValid({ ...row, controller_status: 'blocked', controller_reason: 'children_uncertain' }, owner, host));
+for (const patch of [{ controller_status: 'ready' }, { controller_status: 'blocked', controller_reason: 'PRIVATE_FAILURE_SENTINEL' }, { controller_status: 'blocked', controller_reason: {} }, { controller_status: 'not_reported', controller_reason: 'source_changed' }]) no(api.appendViewValid({ ...row, ...patch }, owner, host));
+no(api.appendContextValid({ ...context, slots: [{ ...context.slots[0], agent_kind: 'claude-code' }] }, owner, host, profile));
 yes(api.appendListValid({ schema: 'server-messages-append-list-v1', requests: [row], next_before: null }, owner, host));
 no(api.appendListValid({ schema: 'server-messages-append-list-v1', requests: [row, row], next_before: null }, owner, host));
 const saved = api.appendRecord(owner, host, 'request', body), original = JSON.stringify(saved);

@@ -23,7 +23,7 @@ const draftGrant = { schema: 'server-provision-draft-grant-view-v1', owner_id: o
 let rows = [], drafts = [], emptySlots = false, malformed = false, dropRequest = false, dropCancel = false, nextStatus = 0;
 let holdB = null, bHeld = 0, holdA = null, aHeld = 0, holdContext = null, contextHeld = false, created = 0, cancelled = 0;
 const slots = p => [1, 2].map((n) => ({ slot_id: String(n).repeat(64), device_id: 'slot-device-' + n,
-  session_id: 'slot-session-' + n, agent_kind: 'other', identity_key: 'slot-identity-' + n, profile_id: p.id, profile_version: p.version }));
+  session_id: 'slot-session-' + n, agent_kind: 'codex', identity_key: 'slot-identity-' + n, profile_id: p.id, profile_version: p.version }));
 const contextFor = p => ({ schema: 'server-messages-append-context-v1', owner_id: owner, host_id: host.id, device_id: device,
   expected_host_version: host.version, expected_catalog_version: host.catalog_version, expected_instances_sha256: hash,
   grant_version: grant.version, profile_id: p.id, profile_version: p.version, profile_sha256: hash,
@@ -32,7 +32,7 @@ const make = body => ({ schema: 'server-messages-append-view-v1', request_id: 'r
   owner_id: owner, host_id: host.id, device_id: device, revision: 1, state: 'requested', reason: 'requested', barrier_held: true,
   profile_id: body.profile_id, profile_version: body.profile_version, provider_id: body.provider_id, requested_model: body.requested_model,
   slot_id: body.slot_id, can_cancel: true, instance_id: null, proof: null, connection_status: 'not_attested',
-  model_catalog_status: 'not_attested', model_access_status: 'not_attested' });
+  model_catalog_status: 'not_attested', model_access_status: 'not_attested', controller_status: 'not_reported', controller_reason: '' });
 function phase(row, state) {
   const revision = { prepared: 2, precommit: 3, committed: 4, complete: 5 }[state], instance = revision >= 4 ? 'new-instance' : null;
   Object.assign(row, { state, reason: state, revision, barrier_held: state !== 'complete', can_cancel: false, instance_id: instance });
@@ -174,6 +174,11 @@ function draft() { return { schema: 'server-provision-draft-view-v1', request_id
     await section().getByRole('button', { name: 'Réessayer le même ajout', exact: true }).click(); await ready();
     assert.deepEqual(writes().at(-1).body, requestBody); assert.equal(created, 2); await section().getByText('Préparé localement', { exact: true }).waitFor();
     checks.push('B_true_A_false_union_and_exact_lost_request_retry', 'prepared_no_cancel_no_historical_receipt_authority');
+    active.controller_status = 'blocked'; active.controller_reason = 'children_uncertain'; await refresh();
+    await section().getByText('Une activité précédente doit être rapprochée avant de poursuivre.', { exact: true }).waitFor();
+    assert.ok(await start().isDisabled()); assert.equal(active.state, 'prepared');
+    active.controller_status = 'not_reported'; active.controller_reason = ''; await refresh();
+    checks.push('closed_controller_inability_visible_without_phase_or_cleanup_claim');
     initial.observed_state = 'needs_review'; initial.cleanup_confirmed = false; await refresh();
     assert.ok(await card('old-instance').getByRole('button', { name: 'Arrêter', exact: true }).isEnabled()); assert.ok(await start().isDisabled());
     checks.push('Stop_available_under_B_barrier'); initial.observed_state = 'stopped'; initial.cleanup_confirmed = true;
