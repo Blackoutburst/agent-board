@@ -35,6 +35,12 @@ Runtime corrélés simultanés, huit tours de texte simulés et seize réservati
 terminées avec nettoyage confirmé. Aucune connexion de modèle ni publication
 GitHub réelle n’a eu lieu dans ces tests.
 
+L’[observation publique datée](docs/linux-worker-fixtures-2026-10-21.json)
+conserve ces reçus synthétiques et leurs limites. La régression complète du SDK
+couvre 2 599 tests réussis : quatorze tests réseau ont nécessité localhost
+autorisé et la fixture de fermeture des clients a été mise en conformité avec
+les entrées de profil familial déjà exigées par le produit.
+
 Ces observations datées ne qualifient pas une installation propriétaire. Chaque
 job doit être préparé dans l’unité définitive, avec ses outils, sources,
 permissions, compte, environnement et suite de tests épinglés. La capacité du
