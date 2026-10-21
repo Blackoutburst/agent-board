@@ -44,6 +44,12 @@ from the actual ticket, requires a different author profile, and pins delivery,
 claim and permission epochs internally. No new wire argument or public receipt
 field is assumed. Private work identity includes `work_phase=review`, selection
 and operation ID, preventing coder or other-review provider conversation reuse.
+After truthful cleanup, and before sealing or reusing an opinion, the worker
+revalidates the exact existing Runtime reservation with its original key and
+work/turn arguments. The server checks its original review epoch even when
+current rights were revoked and restored between cancellation polls. A finished
+cleanup receipt alone never authorizes an opinion. Revalidation requires a
+correlated `retried` response and never starts another turn.
 
 A clean, tool-free completed turn must return strict JSON with exactly `verdict`
 (`accept`, `corrections`, or `limited`) and nonempty `text`. The private operation's

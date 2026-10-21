@@ -22,12 +22,13 @@ class Client:
     endpoint = 'https://board.test/mcp'
     def __init__(self, board, actor):
         self.board, self.actor, self.session_id = board, actor, actor['session_id']
-        self.calls, self.lost, self.before = [], set(), None
+        self.calls, self.arguments, self.lost, self.before = [], [], set(), None
     def register(self):
         # A real already-bound reviewer profile/session, never another identity.
         return self.board.register_agent(self.actor, self.session_id, 'Reviewer', ['python'], 'claude-code', True, 'reviewer')
     def call(self, name, arguments):
         self.calls.append(name)
+        self.arguments.append((name, deepcopy(arguments)))
         if self.before:
             self.before(name, arguments)
         value = getattr(self.board, name)(self.actor, **arguments)
@@ -108,7 +109,10 @@ def test_exact_review_finishes_runtime_and_keeps_only_private_opinion(review_cas
     assert 'board-review-' in case['store'].get_work(op['payload']['work_id'])['agent_id']
     assert len(case['calls']) == 1
     assert run(case)['cached'] is True
-    assert len(case['calls']) == 1 and case['client'].calls.count('reserve_execution') == 1
+    assert len(case['calls']) == 1 and case['client'].calls.count('start_execution') == 1
+    reservations = [args for name, args in case['client'].arguments if name == 'reserve_execution']
+    assert len(reservations) >= 2 and all(args == reservations[0] for args in reservations)
+    assert len(case['board'].get_runtime(case['human'])['executions']) == 1
 
 
 @pytest.mark.parametrize('guard', [None, lambda **_: False, lambda **_: {'verified': True}])
@@ -189,7 +193,8 @@ def test_lost_local_result_write_resumes_same_turn_and_runtime_without_model(rev
     case['journal'] = WorkJournal(directory)
     result = run(case)
     assert result['status'] == 'complete' and len(case['calls']) == 1
-    assert case['client'].calls.count('reserve_execution') == 1
+    reservations = [args for name, args in case['client'].arguments if name == 'reserve_execution']
+    assert all(args == reservations[0] for args in reservations)
     assert case['client'].calls.count('start_execution') == 1
 
 
@@ -286,3 +291,51 @@ def test_live_lease_during_and_after_turn_needs_no_second_full_turn_budget(revie
     case['during'] = during
     assert run(case)['status'] == 'complete'
     assert 'renew_ticket' not in case['client'].calls
+
+
+def revoke_restore(case):
+    board, human = case['board'], case['human']
+    board.set_policy(human, True, True, False, True, [], [])
+    board.set_policy(human, True, True, True, True, [], [])
+
+
+def test_rights_roundtrip_between_polls_preserves_cleanup_and_refuses_opinion(review_case):
+    case = review_case
+    case['during'] = lambda _callbacks: revoke_restore(case)
+    result = run(case)
+    assert result['status'] == 'needs_review'
+    assert 'opinion' not in case['journal'].get(result['operation_id'])['payload']
+    runtime = case['board'].get_runtime(case['human'])
+    assert runtime['active_count'] == 0 and len(runtime['executions']) == 1
+    assert runtime['executions'][0]['cleanup_confirmed'] is True
+    assert case['runtime'].list_status()[0]['phase'] == 'finished'
+    assert len(case['calls']) == 1 and ticket(case)['status'] == 'review'
+
+
+def test_cached_opinion_cannot_be_reused_after_hidden_rights_roundtrip(review_case):
+    case = review_case
+    first = run(case)
+    assert first['status'] == 'complete'
+    revoke_restore(case)
+    assert run(case)['status'] == 'needs_review'
+    assert len(case['calls']) == 1
+
+
+def test_rights_roundtrip_after_cleanup_and_lost_result_write_cannot_be_adopted(review_case):
+    case = review_case
+    original, once = case['journal'].update, [True]
+    def update(*args, **kwargs):
+        if kwargs.get('stage') == 'result_ready' and once:
+            once.pop()
+            revoke_restore(case)
+            raise OSError('PRIVATE_DISK_DETAIL')
+        return original(*args, **kwargs)
+    case['journal'].update = update
+    assert run(case)['status'] == 'pending'
+    directory = case['journal'].directory
+    case['journal'].close()
+    case['journal'] = WorkJournal(directory)
+    result = run(case)
+    assert result['status'] == 'needs_review'
+    assert 'opinion' not in case['journal'].get(result['operation_id'])['payload']
+    assert len(case['calls']) == 1 and case['client'].calls.count('start_execution') == 1

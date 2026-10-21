@@ -76,6 +76,42 @@ selects and continuously checks its review_scope from the actual live ticket.
             raise RuntimeControlError('runtime_scope_mismatch')
         return RuntimeJournal.configuration(self.scope, work['id'], turn_id, work['model'])
 
+    def confirm_review(self, work, turn_id):
+        """Reauthorize the original server pin, including historical revocations.
+
+        A finished cleanup view is not current review authority: its stop reason
+        is merely `finished`. Replay of the exact existing reservation runs the
+        server's original expected_scope check without starting another turn.
+        """
+        try:
+            config = self.configuration(work, turn_id)
+            self.operation = self.journal.find(config)
+            if (self.operation is None or self.operation['phase'] != 'finished'
+                    or self.operation['start_confirmed'] != 1):
+                raise ValueError
+            found = self.client.call('lookup_execution', {'idempotency_key': self.operation['key']})
+            if type(found) is not dict or found.get('found') is not True:
+                raise ValueError
+            existing = self.metadata(found.get('execution'))
+            if (existing['state'] != 'finished' or existing['cleanup_confirmed'] is not True
+                    or existing.get('outcome') != 'completed'):
+                raise ValueError
+            name, arguments = self.reservation(config)
+            result = self.client.call(name, arguments)
+            if type(result) is not dict or result.get('reserved') is not True or result.get('retried') is not True:
+                raise ValueError
+            current = self.metadata(result.get('execution'))
+            if current != existing:
+                raise ValueError
+        except Exception:
+            raise RuntimeControlError('review_authorization_requires_reconciliation') from None
+
+    def finish(self, work, turn_id, result):
+        # Cleanup remains permitted after scope loss. Only the separate opinion
+        # authority is refused; keep the truthful finished Runtime receipt.
+        super().finish(work, turn_id, result)
+        self.confirm_review(work, turn_id)
+
 
 def _opinion(text):
     def pairs(items):
@@ -134,6 +170,11 @@ class DeliveryReviewWorker:
 
     def _save(self, op, stage, **payload):
         return self.reader._save(op, stage, **payload)
+
+    def _runtime_proof(self, op):
+        guard = ReviewRuntimeGuard(self.runtime_journal, self.runtime_client, op['scope'],
+                                   op['configuration']['selection'], op['id'])
+        guard.confirm_review(self.run_store.get_work(op['payload']['work_id']), op['payload']['turn_id'])
 
     def _snapshot(self, op, *, remaining=0):
         scope, config = op['scope'], op['configuration']
@@ -204,6 +245,7 @@ class DeliveryReviewWorker:
                 try:
                     if op['stage'] == 'complete':
                         self._snapshot(op)
+                        self._runtime_proof(op)
                         return _receipt(op, cached=True)
                     return self._advance(op, should_cancel)
                 except (_Stop, ContextError, StoreError) as error:
@@ -283,9 +325,11 @@ class DeliveryReviewWorker:
         if op['stage'] == 'result_ready':
             BoardWorker._check_cancel(should_cancel)
             self._snapshot(op)
+            self._runtime_proof(op)
             opinion = _opinion(op['payload']['result_text'])
             op = self._save(op, 'publishing', opinion={**opinion, 'selection': config['selection']})
         if op['stage'] == 'publishing':
             self._snapshot(op)
+            self._runtime_proof(op)
             op = self._save(op, 'complete')  # Private opinion only; no remote publication.
         return _receipt(op)
