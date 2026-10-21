@@ -4,8 +4,24 @@ Ce module vérifie une connexion ChatGPT personnelle et fournit un exécutant lo
 
 Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connexion personnelle**. Les commandes [`runner`](RUNNER.md) ajoutent les tours de texte avec état durable, reprise exacte, déduplication et annulation. Les commandes [`context`](CONTEXT.md) lisent les sources d’un ticket via le MCP du board, les conservent localement et vérifient leur version avant un tour explicitement demandé. La commande [`worker`](WORKER.md) réserve un ticket choisi explicitement, exécute un tour textuel et publie sa réponse en revue, avec un journal des effets et une reprise après coupure. La commande [`events drain`](EVENTS.md) conserve les événements d’un ticket et peut soumettre un lot au worker sur demande explicite. La commande [`queue`](QUEUE.md) prévisualise les tickets éligibles et peut en sélectionner un seul dans un projet explicitement choisi. Aucun listener, orchestrateur général ou service cloud n’est activé par ce programme.
 
-La source 0.31.0 ajoute le raccord propriétaire [B/Host5](MESSAGE_APPEND_HOST5.md)
-pour ajouter une cible de messages inactive depuis un slot personnel déjà
+La source 0.32.0 compose le profil Linux explicite avec des
+[espaces Git séparés par travail](GIT_WORKSPACES.md) et un
+[worker de revue distinct de l’auteur](REVIEW-WORKER.md), un
+[pool durable de travailleurs](WORKER-POOL.md), son
+[pilote de développement](DEVELOPMENT-POOL.md) et son
+[préparateur Linux](LINUX-POOL-PREPARATION.md).
+Ces composants exigent les autorisations et les preuves locales de leur
+contrôleur. Le [raccord de livraison](DEVELOPMENT_POOL_DELIVERY.md) relie un
+résultat terminé aux [livraisons Git](GIT_DELIVERY.md), aux
+[PR brouillon](GIT_PUBLICATION.md) et au passage en revue du ticket.
+Un [installateur serveur séparé](../../deploy/worker_pool/README.md) prépare
+un service arrêté pour un lot explicite de quatre résultats privés.
+L’activation réelle et la hiérarchie manager/codeurs/reviewers/rédacteurs
+restent à livrer ; cette version ne certifie ni une équipe active ni plusieurs
+exécutions de modèles. Voir l’[état des travailleurs serveur](CLOUD-WORKERS.md).
+
+Depuis 0.31.0, le raccord propriétaire [B/Host5](MESSAGE_APPEND_HOST5.md) permet
+d’ajouter une cible de messages inactive depuis un slot personnel déjà
 appairé et préparé. Il exige la source compatible et le catalogue C0 explicitement
 remplacé, puis un grant humain distinct. Il ne lance ni service, ni modèle, ni
 connexion fournisseur. L’équipe serveur hiérarchique et son attribution/exécution
@@ -20,6 +36,8 @@ L’adaptateur 0.12 ajoute un [hôte local explicite](HOST.md) pour une liste fi
 L’adaptateur 0.13 ajoute les [primitives du broker de développement](DEVELOPMENT.md), désactivées par défaut : fichiers explicitement autorisés, lectures bornées, remplacement exact avec contrôle du hash, budgets durables et rapprochement après coupure. Cette bibliothèque reste séparée des commandes existantes ; elle ne fournit ni transport de modèle, ni shell, ni backend réel de tests. Un stage dont la propriété ne peut pas être prouvée reste conservé et bloque la reprise jusqu’à inspection humaine.
 
 L’adaptateur 0.14 ajoute un [backend natif de tests Python nommés](NATIVE_TESTS.md) et sa [supervision séparée](SUPERVISED_TESTS.md), sur option et après qualification locale. Le backend supervisé a été vérifié sur Mac avec des fichiers synthétiques, dont un crash du contrôleur suivi d’un nettoyage et d’un rapprochement sans réexécution. Linux reste non qualifié. Le parcours explicite de développement peut utiliser les tests qualifiés par leur nom ; aucune installation ne les active.
+
+L’adaptateur 0.30 raccorde un [profil Linux explicite](LINUX_EXECUTION.md) au broker, au planificateur et aux familles. Son journal schema 3 neuf conserve les charges et intentions avant effet ; les préparations schema 2 restent non exécutables. Le backend et la policy doivent être qualifiés séparément sur les octets finaux et le même environnement. Les tests simulés de ce lot ne constituent pas une qualification Linux, et aucun service ou sélection automatique n’est ajouté.
 
 Un [mode de réponse aux messages](MESSAGE_HOST.md) est disponible sur configuration explicite `schema_version: 2`, avec le flux confirmé et une portée Runtime de conversation. Le mode activité `schema_version: 1` reste distinct. Aucun listener permanent n’est installé ou activé.
 

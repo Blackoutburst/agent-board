@@ -19,8 +19,10 @@ from pathlib import Path
 import pwd
 import stat
 import threading
+import time
 import urllib.parse
 import uuid
+import weakref
 
 from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import DevelopmentError, absolute_directory, canonical, digest, identity, sha256
@@ -28,6 +30,90 @@ from .dev_manifest import DevelopmentError, absolute_directory, canonical, diges
 
 FAMILY_SLOTS = ('child_0', 'child_1', 'parent')
 MAX_FENCE_BYTES = 2 * 1024 * 1024
+FENCE_WAIT_SECONDS = 1.0
+_WAIT_CONTEXT = threading.local()
+_METADATA_GATES = weakref.WeakValueDictionary()
+_METADATA_GATES_LOCK = threading.Lock()
+
+
+@contextmanager
+def standalone_fence_wait():
+    """Protected standalone-driver scope, never selected by stored metadata."""
+    if getattr(_WAIT_CONTEXT, 'active', False):
+        raise DevelopmentError('fence_wait_context_invalid')
+    _WAIT_CONTEXT.active = True
+    try:
+        yield
+    finally:
+        _WAIT_CONTEXT.active = False
+
+
+def fence_wait_revision():
+    """An ephemeral observation that requires fresh checks, never authority."""
+    return getattr(_WAIT_CONTEXT, 'revision', 0)
+
+
+def _refuse_family_wait():
+    if getattr(_WAIT_CONTEXT, 'active', False):
+        raise DevelopmentError('fence_wait_family_forbidden')
+
+
+def _metadata_gate(anchor_identity):
+    with _METADATA_GATES_LOCK:
+        key = tuple(anchor_identity)
+        gate = _METADATA_GATES.get(key)
+        if gate is None:
+            gate = _MetadataGate()
+            _METADATA_GATES[key] = gate
+        return gate
+
+
+class _MetadataGate:
+    """Process-local metadata coordination; OS locks remain nonblocking.
+
+    Queued writers precede new readers. No network call or worker effect may
+    hold this gate. Separate fence handles still own separate flock OFDs.
+    """
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.readers = 0
+        self.writer = False
+        self.writers_waiting = 0
+
+    def acquire(self, *, shared, wait):
+        with self.condition:
+            def available():
+                return (not self.writer and not self.writers_waiting if shared
+                        else not self.writer and not self.readers)
+            contended = not available()
+            if contended and not wait:
+                raise DevelopmentError('fence_busy')
+            if not shared:
+                self.writers_waiting += 1
+            try:
+                deadline = time.monotonic() + FENCE_WAIT_SECONDS
+                while not available():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise DevelopmentError('fence_busy')
+                    self.condition.wait(remaining)
+                if shared:
+                    self.readers += 1
+                else:
+                    self.writer = True
+            finally:
+                if not shared:
+                    self.writers_waiting -= 1
+                    self.condition.notify_all()
+            return contended
+
+    def release(self, *, shared):
+        with self.condition:
+            if shared:
+                self.readers -= 1
+            else:
+                self.writer = False
+            self.condition.notify_all()
 
 
 def _uuid(value):
@@ -138,11 +224,17 @@ class DevelopmentFence:
     def __init__(self, *, _test_anchor=None):
         self.private = PrivateDirectory(_create_chain(canonical_anchor() if _test_anchor is None else _test_anchor))
         self._thread_lock = threading.Lock()
+        self._metadata_lock = _metadata_gate(self.private.identity)
         self.fd = None
         try:
-            self.fd = os.open('fence.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                              0o600, dir_fd=self.private.fd)
-            self.private.validate_file(self.fd)
+            if getattr(_WAIT_CONTEXT, 'active', False):
+                self._initialize_standalone()
+                return
+            with self._metadata():
+                self.private.verify()
+                self.fd = os.open('fence.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                  0o600, dir_fd=self.private.fd)
+                self.private.validate_file(self.fd)
             with self.lock():
                 try:
                     self.private.read('fence.json', 2 * 1024 * 1024)
@@ -159,6 +251,48 @@ class DevelopmentFence:
             self.close()
             raise
 
+    def _initialize_standalone(self):
+        # Existing anchors are reads. Never recreate a present invalid proof.
+        with self._metadata(shared=True):
+            self.private.verify()
+            try:
+                self.fd = os.open('fence.lock', os.O_RDWR | os.O_NOFOLLOW,
+                                  dir_fd=self.private.fd)
+            except FileNotFoundError:
+                pass
+            if self.fd is not None:
+                self.private.validate_file(self.fd)
+        if self.fd is not None:
+            with self.lock(readonly=True):
+                if self._initial_document_exists():
+                    return
+        else:
+            # No SH-to-EX upgrade: release the read gate and double-check
+            # creation under a distinct exclusive acquisition.
+            with self._metadata():
+                self.private.verify()
+                self.fd = os.open('fence.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                  0o600, dir_fd=self.private.fd)
+                self.private.validate_file(self.fd)
+        with self.lock():
+            if not self._initial_document_exists():
+                self.private.create('fence.json', canonical({'schema': 1, 'records': {}}))
+
+    def _initial_document_exists(self):
+        # Only ENOENT from this opening is absence. A present file that fails
+        # validation/read, disappears or changes after opening stays an error.
+        try:
+            descriptor = os.open('fence.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=self.private.fd)
+        except FileNotFoundError:
+            return False
+        try:
+            self.private.validate_file(descriptor)
+        finally:
+            os.close(descriptor)
+        self._read()
+        return True
+
     def close(self):
         if self.fd is not None:
             os.close(self.fd)
@@ -166,25 +300,44 @@ class DevelopmentFence:
         self.private.close()
 
     @contextmanager
-    def lock(self):
+    def _metadata(self, *, shared=False):
+        gated = False
+        try:
+            active = getattr(_WAIT_CONTEXT, 'active', False)
+            shared = shared and active
+            contended = self._metadata_lock.acquire(shared=shared, wait=active)
+            gated = True
+            if contended:
+                _WAIT_CONTEXT.revision = fence_wait_revision() + 1
+            yield
+        finally:
+            if gated:
+                self._metadata_lock.release(shared=shared)
+
+    @contextmanager
+    def lock(self, *, readonly=False):
         if not self._thread_lock.acquire(blocking=False):
             raise DevelopmentError('fence_busy')
         locked = False
         try:
-            try:
-                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                locked = True
-                self.private.verify()
-                current = os.stat('fence.lock', dir_fd=self.private.fd, follow_symlinks=False)
-                if identity(current) != identity(os.fstat(self.fd)):
-                    raise DevelopmentError('fence_lock_changed')
-                self.private.validate_file(self.fd)
-            except (OSError, TypeError):
-                raise DevelopmentError('fence_busy') from None
-            yield
+            shared = readonly and getattr(_WAIT_CONTEXT, 'active', False)
+            with self._metadata(shared=shared):
+                try:
+                    try:
+                        fcntl.flock(self.fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+                        locked = True
+                        self.private.verify()
+                        current = os.stat('fence.lock', dir_fd=self.private.fd, follow_symlinks=False)
+                        if identity(current) != identity(os.fstat(self.fd)):
+                            raise DevelopmentError('fence_lock_changed')
+                        self.private.validate_file(self.fd)
+                    except (OSError, TypeError):
+                        raise DevelopmentError('fence_busy') from None
+                    yield
+                finally:
+                    if locked:
+                        fcntl.flock(self.fd, fcntl.LOCK_UN)
         finally:
-            if locked:
-                fcntl.flock(self.fd, fcntl.LOCK_UN)
             self._thread_lock.release()
 
     @staticmethod
@@ -435,6 +588,7 @@ class DevelopmentFence:
 
     def reserve_family(self, reservations_by_slot, descriptor):
         """Reserve all three exact roots with one lock and atomic replacement."""
+        _refuse_family_wait()
         with self.lock():
             state = self._read()
             with self._family_snapshot(reservations_by_slot, descriptor) as (document, records, current):
@@ -463,6 +617,7 @@ class DevelopmentFence:
 
     def verify_family(self, reservations, descriptor, targets):
         """Verify known private prefixes; never adopt targets from fence rows."""
+        _refuse_family_wait()
         with self.lock():
             state = self._read()
             with self._family_snapshot(reservations, descriptor) as (document, records, current):
@@ -482,6 +637,7 @@ class DevelopmentFence:
         return self._change_family(proof, 'planner', parent_binding=parent_binding)
 
     def _change_family(self, proof, stage, parent_binding=None):
+        _refuse_family_wait()
         try:
             descriptor = proof['descriptor']
             _descriptor(descriptor)
@@ -589,19 +745,23 @@ class DevelopmentFence:
             return operation_id, True
 
     def inspect_checkout(self, root_identity):
-        with self.lock():
+        with self.lock(readonly=True):
             values=[value for value in self._read()['records'].values()
                     if value['binding']['root_identity']==list(root_identity)]
+            if values and 'family' in values[0]:
+                _refuse_family_wait()
             return None if not values else decode(canonical(values[0]))
 
     def inspect_binding(self, scope, root_identity):
         """Local metadata only, for refusing a conflicting parent before MCP."""
-        with self.lock():
+        with self.lock(readonly=True):
             found=self._read()['records'].get(self.key(scope,root_identity))
+            if found is not None and 'family' in found:
+                _refuse_family_wait()
             return None if found is None else decode(canonical(found))
 
     def verify(self, binding, operation_id):
-        with self.lock():
+        with self.lock(readonly=True):
             found = self._read()['records'].get(self.key(binding['scope'], binding['root_identity']))
             if found is not None and 'family' in found:
                 raise DevelopmentError('canonical_family_required')

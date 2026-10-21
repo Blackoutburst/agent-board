@@ -21,6 +21,20 @@ _INPUTS={'broker_directory','backend_directory','planner_policy_directory','mode
 _CHILD={'session_id','role','title','description','acceptance_criteria','files','root'}
 
 
+def execution_profile(request):
+    """One explicitly sealed pair for the family; legacy omission stays Darwin."""
+    from .development_worker import execution_factories
+    if (type(request) is not dict or type(request.get('parent')) is not dict
+            or type(request.get('children')) is not list or len(request['children'])!=2
+            or any(type(child) is not dict for child in request['children'])):
+        raise DevelopmentError('invalid_family_plan')
+    profile=request['parent'].get('execution_profile','darwin')
+    execution_factories(profile)
+    if any(child.get('execution_profile','darwin')!=profile for child in request['children']):
+        raise DevelopmentError('family_execution_profile_mismatch')
+    return profile
+
+
 def root_sources(client,scope,manifest,registration,*,children=(),baseline=None,clock):
     """Root claim stays live while only known family dependency changes are allowed."""
     authority=DevelopmentAuthorization(client,scope=scope,manifest=manifest,registration=registration,clock=clock)
@@ -78,8 +92,9 @@ def build_configuration(request,workflows,registrations,*,clock):
     request=deepcopy(request);scope=request['scope'];_scope(scope)
     protocol=read_protocol(request.get('read_protocol',LEGACY))
     parent=request['parent']
-    if type(parent) is not dict or set(parent)!=_INPUTS:
+    if type(parent) is not dict or set(parent) not in (_INPUTS,_INPUTS|{'execution_profile'}):
         raise DevelopmentError('invalid_family_plan')
+    profile=execution_profile(request)
     manifest,manifest_hash=manifest_document(parent['broker_directory'])
     root=workflows['parent']
     root.client.adopt_registration()
@@ -97,7 +112,7 @@ def build_configuration(request,workflows,registrations,*,clock):
     public=[];allocated=set();sessions={scope['board_session_id']}
     for index,child in enumerate(request['children']):
         slot='child_'+str(index)
-        if type(child) is not dict or set(child)!=_INPUTS|_CHILD:
+        if type(child) is not dict or set(child) not in (_INPUTS|_CHILD,_INPUTS|_CHILD|{'execution_profile'}):
             raise DevelopmentError('invalid_family_plan')
         if child['session_id'] in sessions:raise DevelopmentError('family_session_overlap')
         sessions.add(child['session_id']);inputs[slot]=child
@@ -118,6 +133,12 @@ def build_configuration(request,workflows,registrations,*,clock):
     sum_turns=sum_actions=sum_wall=0
     for slot,item in inputs.items():
         worker=workflows[slot]
+        if profile!='darwin':
+            from .development_worker import execution_factories
+            selected_factories=execution_factories(profile)
+            if (worker.backend_factory is not selected_factories['backend_factory']
+                    or worker.policy_factory is not selected_factories['policy_factory']):
+                raise DevelopmentError('family_execution_profile_mismatch')
         for key in ('broker_directory','backend_directory','planner_policy_directory'):
             path=Path(item[key])
             if not path.is_absolute() or '..' in path.parts:raise DevelopmentError('invalid_family_directory')

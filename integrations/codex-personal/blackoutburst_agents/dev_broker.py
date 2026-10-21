@@ -3,7 +3,8 @@
 Only complete UTF-8 replacements of existing allowlisted files are supported.
 The controller must own an isolated checkout: flock serializes broker writers,
 but portable rename is not a CAS against an unrelated noncooperating writer.
-There is deliberately no shell, real test backend, listener or CLI integration.
+Only an explicitly qualified named backend receives a controller request.
+There is no shell, listener or model-selected executable.
 """
 from __future__ import annotations
 
@@ -336,10 +337,14 @@ class DevelopmentBroker:
             manifest_hash=self.journal.manifest_hash, request_hash=operation['request_hash'],
             admission_sha256=digest(canonical(operation['admission'])), backend_admission=proof)
 
-    def run_test(self, key, name, *, _before_dispatch=None, _refusal_reason=None):
+    def run_test(self, key, name, *, _before_dispatch=None, _refusal_reason=None, _linux_context=None):
         if any(callback is not None and not callable(callback)
                for callback in (_before_dispatch, _refusal_reason)):
             raise DevelopmentError('invalid_test_admission')
+        if self.journal._linux_execution_profile:
+            return self._run_linux_test(key, name, _linux_context, _before_dispatch)
+        if _linux_context is not None:
+            raise DevelopmentError('linux_execution_context_mismatch')
         previous = self.admit_test(key, name)
         if previous is not None:
             return previous
@@ -413,6 +418,70 @@ class DevelopmentBroker:
                 if files is not None:
                     files.close()
 
+    def _run_linux_test(self, key, name, context, before_dispatch):
+        from .linux_test_backend import (LinuxExecutionContext, SupervisedLinuxNamedPythonBackend,
+                                         prepare_execution_attempt_locked)
+        if type(context) is not LinuxExecutionContext or type(self.test_backend) is not SupervisedLinuxNamedPythonBackend:
+            raise DevelopmentError('linux_execution_context_required')
+        context._check(self, key, name)
+        previous = self.admit_test(key, name)
+        if previous is not None:
+            with self.journal.lock() as state:
+                record = state['linux_execution'].get(self._operation_id(key))
+                if previous['result'] == 'passed' and (record is None or record['phase'] != 'broker_admitted'
+                        or record['reservation']['workflow_id'] != context.workflow_id
+                        or record['admitted_snapshot_sha256'] != context.step['source_snapshot']['sha256']):
+                    raise DevelopmentError('linux_execution_proof_mismatch')
+            context.close()
+            return previous
+        with self.journal.lock() as state:
+            operation = state['operations'][self._operation_id(key)]
+            try:
+                with prepare_execution_attempt_locked(self, context=context, key=key, name=name) as attempt:
+                    self._qualified_test(name)
+                    if before_dispatch is not None:
+                        before_dispatch()
+                    attempt.authorize()
+                    record = state['linux_execution'][operation['id']]
+                    operation['admission']['dispatch'] = 'dispatched'
+                    record['phase'] = 'dispatched'
+                    self.journal.save(state)  # Never call backend after an ambiguous save.
+                    self._test_admissions.discard(operation['id'])
+                    native = self.test_backend.run(attempt)
+                    attempt.after_result(native)
+                # The context exit performed the fifth capture and fresh guards.
+                record = state['linux_execution'][operation['id']]
+                record['native_receipt_sha256'] = digest(canonical(native))
+                if native['cleanup']['cleanup_confirmed'] is not True or native['source_released'] is not True:
+                    raise DevelopmentError('linux_native_cleanup_unconfirmed')
+                record.update(phase='broker_admitted',
+                    admitted_snapshot_sha256=record['reservation']['planner_snapshot_sha256'])
+                outcome = 'passed' if native['reason'] == 'completed' and native['exit_code'] == 0 else (
+                    'failed' if native['reason'] == 'script_failed' else 'cancelled')
+                return self._finish(state, operation, outcome, name=name, cleanup_confirmed=True,
+                    output_bytes=native['output_bytes'], output_sha256=native['output_sha256'])
+            except Exception as error:
+                record = state['linux_execution'].get(operation['id'])
+                if record is not None and record['phase'] != 'broker_admitted':
+                    record['phase'] = 'needs_review'
+                reason = getattr(error, 'code', 'linux_execution_unconfirmed')
+                if type(reason) is not str or re.fullmatch('[a-z][a-z0-9_]{0,99}', reason) is None:
+                    reason = 'linux_execution_unconfirmed'
+                try:
+                    if operation['admission']['dispatch'] == 'pending' and operation['id'] in self._test_admissions:
+                        self._finish(state, operation, 'not_started', name=name, cleanup_confirmed=True,
+                            started=False, reason=reason, manifest_hash=self.journal.manifest_hash,
+                            request_hash=operation['request_hash'],
+                            admission_sha256=digest(canonical(operation['admission'])))
+                        self._test_admissions.discard(operation['id'])
+                    elif operation['phase'] == 'intent':
+                        self._finish(state, operation, 'needs_review', name=name)
+                except (DevelopmentError, OSError):
+                    pass  # Preserve durable ambiguity; never repair/retry a write.
+                raise
+            finally:
+                context.close()
+
     def reconcile(self, key):
         """Read exact recorded effects; never apply a patch or rerun a test."""
         operation_id = self._operation_id(key)
@@ -422,6 +491,9 @@ class DevelopmentBroker:
                 raise DevelopmentError('operation_not_found')
             if state['schema'] == 2 or operation['kind'] == 'linux_input':
                 raise DevelopmentError('linux_input_reconciliation_forbidden')
+            if state['schema'] == 3 and operation['kind'] == 'test' and operation['phase'] != 'complete':
+                # A native observation cannot reconstruct the lost live snapshot.
+                raise DevelopmentError('linux_execution_identity_cleanup_required')
             self._authorize('repo.patch_file' if operation['kind'] == 'patch' else 'repo.run_test')
             if operation['phase'] == 'complete':
                 return dict(operation['receipt'])

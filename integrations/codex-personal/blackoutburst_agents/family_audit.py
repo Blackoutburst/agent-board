@@ -18,6 +18,17 @@ MAX_CANDIDATE_BYTES=8192
 MAX_AUDIT_BYTES=8*1024*1024
 
 
+def _execution_profile(broker,config):
+    if type(broker) is dict and broker.get('schema')==3:
+        if (config.get('execution_profile')!='linux-python-execution-v1'
+                or config.get('linux_execution_plan_sha256')!=broker.get('linux_execution_plan_sha256')):
+            raise DevelopmentError('family_test_proof_changed')
+        return True
+    if type(broker) is not dict or broker.get('schema')!=1 or 'execution_profile' in config:
+        raise DevelopmentError('family_input_preparation_is_not_test_proof')
+    return False
+
+
 def manifest_document(directory):
     with PrivateDirectory(directory) as private:
         manifest=validate_manifest(decode(private.read('manifest.json',128*1024)))
@@ -71,8 +82,7 @@ def audit_workflow(worker,operation_id,*,manifest_hash,authorize,expected_hashes
     # checkout inspection. Input preparations are never family test evidence.
     with PrivateDirectory(op['configuration']['pins']['broker']['path']) as private:
         profile=decode(private.read('state.json',2*1024*1024))
-    if type(profile) is not dict or profile.get('schema') != 1:
-        raise DevelopmentError('family_input_preparation_is_not_test_proof')
+    _execution_profile(profile,op['configuration'])
     if authorize() is not True:raise DevelopmentError('family_authorization_changed')
     worker._pin_controller(op)
     if op['stage'] not in ('complete','result_ready'):
@@ -104,8 +114,7 @@ def audit_workflow(worker,operation_id,*,manifest_hash,authorize,expected_hashes
     validator=object.__new__(DevelopmentJournal)
     validator._manifest=manifest;validator.manifest_hash=manifest_hash
     validator.validate_state(broker)
-    if broker['schema'] != 1:
-        raise DevelopmentError('family_input_preparation_is_not_test_proof')
+    linux=_execution_profile(broker,config)
     if any(type(entry) is not dict or entry.get('phase')!='complete' for entry in broker['operations'].values()):
         raise DevelopmentError('family_cleanup_unconfirmed')
     review=receipt['review']
@@ -129,6 +138,14 @@ def audit_workflow(worker,operation_id,*,manifest_hash,authorize,expected_hashes
                     or test.get('operation_id')!=proof['operation_id']
                     or digest(canonical(test))!=proof['receipt_sha256']):
                 raise ValueError
+            if linux:
+                record=broker['linux_execution'][operation['id']]
+                if (record['phase']!='broker_admitted'
+                        or record['reservation']['workflow_id']!=operation_id
+                        or record['admitted_snapshot_sha256']!=snapshot['snapshot_sha256']
+                        or record['native_receipt_sha256'] is None
+                        or record['request']['plan_sha256']!=config['linux_execution_plan_sha256']):
+                    raise ValueError
         except (KeyError,TypeError,ValueError,UnicodeError):
             raise DevelopmentError('family_test_proof_changed') from None
     work_id=development_work_id(operation_id)

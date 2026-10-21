@@ -6,6 +6,7 @@ No process, fork, host qualification, model or RPC is used.
 """
 import fcntl
 import os
+import threading
 from unittest.mock import patch
 
 from blackoutburst_agents.dev_journal import _parse_lock_fdinfo
@@ -14,6 +15,7 @@ from blackoutburst_agents.dev_journal import _parse_lock_fdinfo
 class LockObservationFixture:
     def __init__(self, case):
         self.handles, self.locks = {}, {}
+        self.mutex = threading.RLock()
         self.open, self.close, self.dup, self.flock = os.open, os.close, os.dup, fcntl.flock
         for target, replacement in [('os.open', self._open), ('os.close', self._close),
                 ('os.dup', self._dup), ('fcntl.flock', self._flock),
@@ -23,28 +25,43 @@ class LockObservationFixture:
             context.start();case.addCleanup(context.stop)
 
     def _open(self, *args, **kwargs):
-        descriptor = self.open(*args, **kwargs)
-        self.handles[descriptor] = object()
-        return descriptor
+        with self.mutex:
+            descriptor = self.open(*args, **kwargs)
+            self.handles[descriptor] = object()
+            return descriptor
 
     def _dup(self, descriptor):
-        duplicate = self.dup(descriptor)
-        self.handles[duplicate] = self.handles[descriptor]
-        return duplicate
+        with self.mutex:
+            token = self.handles[descriptor]
+            duplicate = self.dup(descriptor)
+            self.handles[duplicate] = token
+            return duplicate
 
     def _close(self, descriptor):
-        self.close(descriptor)
-        token = self.handles.pop(descriptor, None)
-        if token is not None and token not in self.handles.values():self.locks.pop(token, None)
+        # Keep close + removal atomic with a Python open/dup reusing that number.
+        with self.mutex:
+            self.close(descriptor)
+            token = self.handles.pop(descriptor, None)
+            if token is not None and token not in self.handles.values():self.locks.pop(token, None)
 
     def _flock(self, descriptor, operation):
+        from blackoutburst_agents.dev_manifest import DevelopmentError
+        with self.mutex:
+            token = self.handles[descriptor]
+        # A real blocking flock must never prevent another thread from unlock.
         result = self.flock(descriptor, operation)
-        token = self.handles[descriptor]
-        if operation == fcntl.LOCK_UN:self.locks.pop(token, None)
-        else:self.locks[token] = (operation & ~fcntl.LOCK_NB, os.getpid())
+        with self.mutex:
+            if self.handles.get(descriptor) is not token:
+                raise DevelopmentError('fixture_changed_fd')
+            if operation == fcntl.LOCK_UN:self.locks.pop(token, None)
+            else:self.locks[token] = (operation & ~fcntl.LOCK_NB, os.getpid())
         return result
 
     def observe(self, descriptor, *, pid, expected):
+        with self.mutex:
+            return self._observe(descriptor, pid=pid, expected=expected)
+
+    def _observe(self, descriptor, *, pid, expected):
         from blackoutburst_agents.dev_manifest import identity, DevelopmentError
         info = os.fstat(descriptor)
         if identity(info) != expected:raise DevelopmentError('fixture_changed_fd')

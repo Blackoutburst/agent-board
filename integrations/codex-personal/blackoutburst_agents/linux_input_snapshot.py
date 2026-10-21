@@ -20,7 +20,7 @@ import unicodedata
 import uuid
 
 from .dev_broker import DevelopmentBroker
-from .dev_fence import DevelopmentFence
+from .dev_fence import DevelopmentFence, fence_wait_revision
 from .dev_journal import DevelopmentJournal, decode
 from .dev_manifest import (DevelopmentError, RepositoryFiles, canonical,
                            check_content, digest, identity, relative_path,
@@ -258,6 +258,15 @@ class LinuxInputSnapshot:
         self.revalidate()
 
     def _held(self):
+        revision = fence_wait_revision()
+        self._held_metadata()
+        if fence_wait_revision() != revision and self._broker.journal._linux_execution_profile:
+            from .linux_test_backend import _ExecutionCapturePermit
+            if type(self._capture_permit) is not _ExecutionCapturePermit:
+                _error('linux_execution_capture_permit_invalid')
+            self._capture_permit.refresh_after_fence_wait(self,revision)
+
+    def _held_metadata(self):
         if (not self._active or threading.get_ident() != self._thread
                 or not self._broker.journal._in_lock):
             _error('linux_input_snapshot_not_held')
@@ -274,12 +283,20 @@ class LinuxInputSnapshot:
 
     def _capture(self):
         self._held()
+        shared = None
+        if self._broker.journal._linux_execution_profile:
+            from .linux_test_backend import _ExecutionCapturePermit
+            if type(self._capture_permit) is not _ExecutionCapturePermit:
+                _error('linux_execution_capture_permit_invalid')
+            self._capture_permit.take(self)
+            shared = self._capture_permit.authorize_capture(self)
+            self._held()
         if self._broker.journal._linux_input_profile:
             from .linux_input_admission import _CapturePermit
             if type(self._capture_permit) is not _CapturePermit:
                 _error('linux_input_capture_permit_invalid')
             self._capture_permit.take(self)
-        if self._authorize_reads or self._broker.journal._linux_input_profile:
+        if not self._broker.journal._linux_execution_profile and (self._authorize_reads or self._broker.journal._linux_input_profile):
             self._broker._authorize('repo.read_file')
             self._broker._authorize('repo.run_test')
             self._held()
@@ -330,6 +347,8 @@ class LinuxInputSnapshot:
                     'files': entries, 'planner_snapshot': projection}
         validate_input_snapshot(document, manifest=manifest, planner_snapshot=self._planner_snapshot)
         self._held()
+        if self._broker.journal._linux_execution_profile:
+            self._capture_permit.capture_complete(self, shared)
         return document, contents
 
     def document(self):

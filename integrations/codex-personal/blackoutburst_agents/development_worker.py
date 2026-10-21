@@ -27,6 +27,17 @@ from .planner_policy import PlannerPolicy
 from .work_journal import JournalError
 
 
+def execution_factories(profile='darwin'):
+    """Closed explicit selection, never inferred from platform or a model."""
+    if profile == 'darwin':
+        return {'backend_factory': SupervisedNativeNamedPythonBackend, 'policy_factory': PlannerPolicy}
+    if profile == 'linux-python-execution-v1':
+        from .linux_test_backend import SupervisedLinuxNamedPythonBackend
+        from .linux_planner_policy import LinuxPlannerPolicy
+        return {'backend_factory': SupervisedLinuxNamedPythonBackend, 'policy_factory': LinuxPlannerPolicy}
+    raise DevelopmentError('development_execution_profile_invalid')
+
+
 class DevelopmentBoardWorker:
     def __init__(self, journal, store, runtime_journal, client, control_client, *,
                  backend_factory=SupervisedNativeNamedPythonBackend, policy_factory=PlannerPolicy,
@@ -166,6 +177,17 @@ class DevelopmentBoardWorker:
             policy.validate_for(policy.executable, policy.workspace)  # Offline pins only.
             backend = self.backend_factory(backend_path, manifest=manifest.manifest, authorize_scope=authorize)
             stack.callback(backend.close)
+            if manifest._linux_execution_profile:
+                from .linux_test_backend import SupervisedLinuxNamedPythonBackend
+                from .linux_planner_policy import LinuxPlannerPolicy
+                if (type(backend) is not SupervisedLinuxNamedPythonBackend or type(policy) is not LinuxPlannerPolicy
+                        or backend.environment != policy.environment):
+                    raise DevelopmentError('development_linux_pair_mismatch')
+            elif getattr(backend, 'kind', None) == 'linux-python-execution-v1':
+                raise DevelopmentError('development_linux_journal_required')
+            elif not self.allow_fixture and (type(backend) is not SupervisedNativeNamedPythonBackend
+                    or type(policy) is not PlannerPolicy):
+                raise DevelopmentError('development_backend_policy_mismatch')
             if (not manifest.manifest['tests'] or any(not backend.qualified_for(manifest.manifest_hash,suite)
                     for suite in manifest.manifest['tests'])):
                 raise DevelopmentError('development_backend_unqualified')
@@ -173,8 +195,11 @@ class DevelopmentBoardWorker:
 
     @staticmethod
     def _backend_pin(backend):
-        return digest(canonical({'backend_id':backend.backend_id, 'plan_hash':backend.document['plan_hash'],
-                                  'supervision':backend.supervision}))
+        value={'backend_id':backend.backend_id, 'plan_hash':backend.document['plan_hash'],
+               'supervision':backend.supervision}
+        if getattr(backend,'kind',None)=='linux-python-execution-v1':
+            value['kind']='linux-python-execution-v1'
+        return digest(canonical(value))
 
     def prepare(self, *, scope, request_id, instruction, broker_directory, backend_directory,
                 planner_policy_directory, model, budgets=None, operation_id=None, registration=None):
@@ -242,6 +267,9 @@ class DevelopmentBoardWorker:
                 config={'schema':1,'kind':'development','instruction':instruction,'model':model,'budgets':limits,
                     'pins':pins,'manifest_hash':manifest.manifest_hash,'policy_hash':policy.fingerprint,
                     'backend_hash':self._backend_pin(backend)}
+                if manifest._linux_execution_profile:
+                    config.update(execution_profile='linux-python-execution-v1',
+                                  linux_execution_plan_sha256=backend.document['plan_hash'])
                 if self.controller_scope is not None:
                     config['controller_scope']=deepcopy(self.controller_scope)
                 if prior is not None and prior['configuration']!=config:
@@ -263,6 +291,12 @@ class DevelopmentBoardWorker:
                 or config['manifest_hash']!=manifest.manifest_hash or config['policy_hash']!=policy.fingerprint
                 or config['backend_hash']!=self._backend_pin(backend)):
             raise DevelopmentError('development_configuration_changed')
+        if manifest._linux_execution_profile:
+            if (config.get('execution_profile')!='linux-python-execution-v1'
+                    or config.get('linux_execution_plan_sha256')!=backend.document['plan_hash']):
+                raise DevelopmentError('development_linux_configuration_changed')
+        elif 'execution_profile' in config:
+            raise DevelopmentError('development_execution_profile_changed')
         for pin in config['pins'].values():
             if _directory_pin(pin['path'])!=pin:
                 raise DevelopmentError('development_directory_changed')
@@ -434,16 +468,7 @@ class DevelopmentBoardWorker:
                     authorization.claim_id=op['payload']['claim_id']
                 # Qualification is an offline check. Before claim, the callback
                 # verifies explicit grants without asserting a nonexistent lease.
-                def allowed(scope,action,resource):
-                    try:
-                        if 'context' in op['payload']:
-                            grant=authorization()
-                            return (scope==grant['scope'] and action in grant['actions'] and resource in grant['resources'])
-                        policy=authorization._policy()
-                        return (scope==authorization.manifest['scope'] and action in policy['actions']
-                            and resource==authorization.manifest['resource'] and resource in policy['resources'])
-                    except Exception:
-                        return False
+                allowed=authorization.allowed
                 with self._resources(pins['broker']['path'],pins['backend']['path'],pins['planner_policy']['path'],
                                      authorize=allowed) as resources:
                     manifest,policy,backend=resources
@@ -570,16 +595,19 @@ class DevelopmentBoardWorker:
         return {**self._public(op,reason='development_stop_requested'),'stop_requested':True}
 
     @staticmethod
-    def _audit_text(op):
+    def _audit_text(op, delivery=None):
         review=op['payload']['planner_receipt']['review']
-        return ('Development snapshot '+op['id']+'\n'
+        text=('Development snapshot '+op['id']+'\n'
                 'Inspection timestamp: '+str(review['inspected_at'])+'\n'
                 'Base: '+review['diff']['base_sha']+'\n'
                 'Source snapshot SHA256: '+review['snapshot_sha256']+'\n'
                 'Passed named suites: '+', '.join(sorted(review['tests']))+'\n'
                 'Dated audit only; verify current hashes before accepting or applying changes.')
+        if delivery is not None:
+            text+='\nDelivery commit: '+delivery['delivery_sha']+'\nDraft pull request: '+delivery['pull_request']['url']
+        return text
 
-    def publish(self, operation_id, *, audit_outcome=False):
+    def publish(self, operation_id, *, audit_outcome=False, delivery_publication=None):
         """Explicit publication of dated evidence in review, never done."""
         if type(audit_outcome) is not bool:
             raise DevelopmentError('invalid_development_publication')
@@ -587,14 +615,25 @@ class DevelopmentBoardWorker:
         with self.journal.lock(op['scope']):
             op=self.journal.get(operation_id)
             self._pin_controller(op)
+            if delivery_publication is not None:
+                from .development_delivery import DevelopmentPublishedDelivery
+                if (type(delivery_publication) is not DevelopmentPublishedDelivery
+                        or delivery_publication.proof.worker is not self
+                        or delivery_publication.proof.operation_id != operation_id):
+                    raise DevelopmentError('invalid_development_publication')
+            retained=op['payload'].get('publication')
+            if retained is not None and (retained.get('delivery') is None) != (delivery_publication is None):
+                raise DevelopmentError('development_publication_conflict')
             if op['stage']=='complete':
+                if delivery_publication is not None and delivery_publication.verify(self,operation_id,op['scope']) != retained['delivery']:
+                    raise DevelopmentError('development_publication_conflict')
                 return self._public(op)
             if op['stage'] not in ('result_ready','publishing'):
                 raise DevelopmentError('development_not_ready_for_publication')
             self.client.adopt_registration()
             try:
+                delivery=None if delivery_publication is None else delivery_publication.verify(self,operation_id,op['scope'])
                 if op['stage']=='result_ready':
-                    from .dev_journal import DevelopmentJournal
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
                         authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
                             registration=op['payload']['registration'],clock=self.clock,
@@ -605,19 +644,21 @@ class DevelopmentBoardWorker:
                     authorization.claim_id=op['payload']['claim_id']
                     authorization()
                     ticket=authorization.snapshot(require_claim=True)['ticket']
-                    text=self._audit_text(op)
+                    text=self._audit_text(op,delivery)
                     evidence=ticket['evidence']+('\n\n' if ticket['evidence'] else '')+text
                     outcome=('Development audit ready for review; source snapshot SHA256: '+
                         op['payload']['planner_receipt']['review']['snapshot_sha256']) if audit_outcome else ticket['outcome']
                     changes={'status':'review','outcome':outcome,'evidence':evidence,'release_claim':True}
                     op=self._save(op,'publishing',publication={'expected_version':ticket['version'],'changes':changes,
-                        'audit_outcome':audit_outcome})
+                        'audit_outcome':audit_outcome,'delivery':delivery})
                 intent=op['payload']['publication']
-                if intent.get('audit_outcome',False) is not audit_outcome:
+                if intent.get('audit_outcome',False) is not audit_outcome or intent.get('delivery') != delivery:
                     raise DevelopmentError('development_publication_conflict')
                 response=self.client.call('get_ticket',{'ticket_id':op['scope']['ticket_id']})
                 ticket=response['ticket']
                 if ticket['version']==intent['expected_version'] and ticket['claimant'] is not None:
+                    if delivery_publication is not None and delivery_publication.verify(self,operation_id,op['scope']) != intent['delivery']:
+                        raise DevelopmentError('development_publication_conflict')
                     # Revalidate full live authority/context even when retrying
                     # an exact optimistic publication intent.
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:

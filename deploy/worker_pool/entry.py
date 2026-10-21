@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Installed explicit finite batch entry, with no Host or automatic activation."""
+import argparse
+import json
+import os
+from pathlib import Path
+import platform
+import pwd
+import signal
+import stat
+import sys
+import threading
+
+if __package__:
+    from . import package as p
+else:
+    sys.path.insert(0,str(Path(__file__).resolve().parent))
+    import pool_package as p
+
+
+def owner_context(manifest,owner):
+    if owner!=manifest['unix_owner'] or os.geteuid()==0:p.fail('pool_owner_login_required')
+    account=pwd.getpwnam(owner)
+    if (account.pw_uid!=os.geteuid() or account.pw_uid!=os.getuid()
+            or account.pw_gid!=os.getegid() or account.pw_gid!=os.getgid()
+            or any(group!=account.pw_gid for group in os.getgroups())
+            or os.environ.get('HOME') not in (None,account.pw_dir)
+            or os.environ.get('CODEX_HOME') or str(Path(sys.executable))!=manifest['python']['path']
+            or platform.system()!='Linux' or platform.machine()!=manifest['architecture']):p.fail('pool_owner_context_mismatch')
+    if any(os.environ.get(key) for key in ('OPENAI_API_KEY','OPENAI_BASE_URL','AZURE_OPENAI_API_KEY',
+            'ANTHROPIC_API_KEY','SSH_AUTH_SOCK','GH_TOKEN','GITHUB_TOKEN')):p.fail('pool_owner_environment_refused')
+    info=p.no_symlinks(account.pw_dir).stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=account.pw_uid or stat.S_IMODE(info.st_mode)!=0o700:p.fail('pool_owner_context_mismatch')
+    return account
+
+
+def in_installed_unit(manifest,release,account):
+    unit=p.unit_name(manifest['unix_owner']);path=p.UNIT_DIR/unit
+    p.protected(path)
+    expected=p.render_unit(p.read_regular(release/'unit.service.in').decode(),manifest,release,account.pw_dir).encode()
+    if p.read_regular(path)!=expected:p.fail('pool_installed_unit_changed')
+    raw=current_cgroup().decode('utf-8','strict')
+    if not any(unit in line.split(':',2)[-1].split('/') for line in raw.splitlines()):p.fail('pool_installed_unit_required')
+
+
+def current_cgroup():
+    """Only this live PID's procfs data: pseudo-files legitimately have size 0."""
+    pid=os.getpid();descriptors=[]
+    try:
+        proc=os.open('/proc',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);descriptors.append(proc)
+        process=os.open(str(pid),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=proc);descriptors.append(process)
+        parent=os.fstat(process)
+        fd=os.open('cgroup',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=process);descriptors.append(fd)
+        before=os.fstat(fd)
+        def pin(value):return value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1:p.fail('pool_cgroup_unconfirmed')
+        chunks=[];size=0
+        while size<=65536:
+            raw=os.read(fd,min(8192,65537-size))
+            if not raw:break
+            chunks.append(raw);size+=len(raw)
+        if (not 0<size<=65536 or os.getpid()!=pid or pin(before)!=pin(os.fstat(fd))
+                or pin(before)!=pin(os.stat('cgroup',dir_fd=process,follow_symlinks=False))
+                or pin(parent)!=pin(os.stat(str(pid),dir_fd=proc,follow_symlinks=False))):p.fail('pool_cgroup_unconfirmed')
+        return b''.join(chunks)
+    finally:
+        for descriptor in reversed(descriptors):os.close(descriptor)
+
+
+def ensure_development_anchor(account):
+    """Create only absent canonical directories; inspect no journal/lock contents."""
+    base=p.no_symlinks(account.pw_dir);descriptors=[];created=[];chain=[]
+    def check(info):
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o700:
+            p.fail('pool_anchor_directory_untrusted')
+    def identity(info):return info.st_dev,info.st_ino,info.st_uid,info.st_mode
+    def held():
+        for index,(fd,name,pin) in enumerate(chain):
+            current=os.stat(base if index==0 else name,**({} if index==0 else {'dir_fd':chain[index-1][0]}),follow_symlinks=False)
+            if identity(os.fstat(fd))!=pin or identity(current)!=pin:p.fail('pool_anchor_directory_changed')
+    try:
+        fd=os.open(base,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);descriptors.append(fd)
+        info=os.fstat(fd);check(info);chain.append((fd,None,identity(info)));path=base
+        for name in ('.local','state','blackoutburst-agents','development'):
+            held()
+            try:os.mkdir(name,0o700,dir_fd=fd);os.fsync(fd);created.append(str(path/name))
+            except FileExistsError:pass
+            fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);descriptors.append(fd)
+            info=os.fstat(fd);check(info);chain.append((fd,name,identity(info)));path=path/name
+        held()
+        return {'status':'anchor_directories_ready','anchor':str(path),'created':created,'changed_existing':False}
+    finally:
+        for descriptor in reversed(descriptors):os.close(descriptor)
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--release',required=True);parser.add_argument('--owner',required=True)
+    parser.add_argument('action',choices=('batch-plan','run-batch','init-development-anchor'));parser.add_argument('--batch')
+    args=parser.parse_args(argv)
+    try:
+        release=p.absolute(args.release);manifest=p.verify_release(release);account=owner_context(manifest,args.owner)
+        if args.action=='init-development-anchor':
+            result=ensure_development_anchor(account);print(json.dumps(result,sort_keys=True,separators=(',',':')));return 0
+        root=p.owner_root(args.owner)
+        sys.path.insert(0,str(release/'source'))
+        from blackoutburst_agents.finite_pool_batch import FiniteLinuxPoolBatch,load_batch
+        if args.batch is None:p.fail('pool_batch_configuration_required')
+        batch_path=p.absolute(args.batch)
+        if not batch_path.is_relative_to(root/'config'):p.fail('pool_configuration_path_refused')
+        if args.action=='batch-plan':
+            batch,pin=load_batch(batch_path,root=root,owner_id=manifest['board_owner'],board_endpoint=manifest['board_endpoint'],
+                max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
+            result={'status':'plan','batch_id':batch['batch_id'],'configuration_sha256':pin['sha256'],
+                'jobs':[{key:job[key] for key in ('name','agent_id','project_id','ticket_id','resource','model')} for job in batch['jobs']],
+                'activated':False,'execution_qualified':False}
+        else:
+            in_installed_unit(manifest,release,account)
+            stop=threading.Event()
+            previous={number:signal.signal(number,lambda *_:stop.set()) for number in (signal.SIGTERM,signal.SIGINT)}
+            try:
+                batch=FiniteLinuxPoolBatch(root,owner_id=manifest['board_owner'],board_endpoint=manifest['board_endpoint'],
+                    executable=release/'tools/codex',cli_version='codex-cli '+manifest['codex_version'],
+                    interpreter=manifest['python']['path'],unshare='/usr/bin/unshare',
+                    max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
+                result=batch.run(batch_path,should_stop=stop.is_set)
+            finally:
+                for number,handler in previous.items():signal.signal(number,handler)
+        print(json.dumps(result,sort_keys=True,separators=(',',':')))
+        return 0 if result['status'] in ('complete','plan') else 3
+    except Exception:
+        print('{"status":"needs_review","reason":"finite_pool_entry_refused"}')
+        return 3
+
+if __name__=='__main__':raise SystemExit(main())

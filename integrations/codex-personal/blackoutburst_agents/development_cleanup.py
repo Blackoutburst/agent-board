@@ -11,14 +11,24 @@ from .dev_planner_journal import PlannerJournal
 from .dev_runtime import DevelopmentRuntimeGuard,ToolRuntimeGuard,development_work_id
 
 
-def _effect_receipt(step,manifest,broker):
-    if broker.get('schema') != 1:
+def _execution_profile(broker,config):
+    if broker.get('schema') == 3:
+        if (config.get('execution_profile') != 'linux-python-execution-v1'
+                or config.get('linux_execution_plan_sha256') != broker.get('linux_execution_plan_sha256')):
+            raise DevelopmentError('development_cleanup_identity_changed')
+        return True
+    if broker.get('schema') != 1 or 'execution_profile' in config:
         raise DevelopmentError('development_input_preparation_is_not_cleanup_proof')
+    return False
+
+
+def _effect_receipt(step,manifest,broker,*,configuration=None,workflow_id=None):
+    linux=_execution_profile(broker,configuration or {})
     action=parse_action(canonical(step['action']).decode('utf-8'),manifest,65536)
     kind=action['kind'];receipt=step['receipt']
     if kind in ('patch','test'):
         entry=broker['operations'].get(digest(step['action_key'].encode('ascii')))
-        if entry is None or entry['kind']!=kind or entry['phase']!='complete':
+        if entry is None or entry['kind']!=kind:
             raise DevelopmentError('development_cleanup_receipt_missing')
         if kind=='patch':
             request={'kind':'patch','path':action['path'],'before_sha256':action['expected_sha256'],
@@ -29,6 +39,25 @@ def _effect_receipt(step,manifest,broker):
             request={'kind':'test',**suites[0]}
         if entry['request_hash']!=digest(canonical(request)):
             raise DevelopmentError('development_cleanup_identity_changed')
+        if linux and kind=='test':
+            record=broker['linux_execution'].get(entry['id'])
+            if record is None:
+                # Only this process's pre-dispatch receipt proves non-launch.
+                if entry['phase']!='complete' or entry['receipt'].get('result')!='not_started':
+                    raise DevelopmentError('development_cleanup_receipt_missing')
+            else:
+                if (record['reservation']['workflow_id']!=workflow_id
+                        or record['reservation']['action_key_sha256']!=digest(step['action_key'].encode('ascii'))
+                        or record['reservation']['action_sha256']!=digest(canonical(action))):
+                    raise DevelopmentError('development_cleanup_identity_changed')
+                if record['phase']!='broker_admitted':
+                    from .linux_test_backend import lookup_linux_native_cleanup
+                    lookup_linux_native_cleanup(configuration['pins']['backend']['path'],manifest=manifest,
+                        record=record,operation_id=entry['id'],workflow_id=workflow_id,
+                        expected_plan_sha256=configuration['linux_execution_plan_sha256'])
+                    return 'blocked'  # Cleanup is not a recovered source/test admission.
+        if entry['phase']!='complete':
+            raise DevelopmentError('development_cleanup_receipt_missing')
         raw=entry['receipt']
         if kind=='test' and raw.get('cleanup_confirmed') is not True:
             raise DevelopmentError('development_cleanup_receipt_missing')
@@ -75,8 +104,9 @@ def reconcile_cleanup(worker,operation_id):
             planner=decode(private.read('planner.json',2*1024*1024))
             manifest=validate_manifest(decode(private.read('manifest.json',128*1024)))
             broker=decode(private.read('state.json',2*1024*1024))
-        if type(broker) is not dict or broker.get('schema') != 1:
+        if type(broker) is not dict:
             raise DevelopmentError('development_input_preparation_is_not_cleanup_proof')
+        _execution_profile(broker,config)
         if (digest(canonical(manifest))!=config['manifest_hash'] or planner.get('operation_id')!=operation_id
                 or planner.get('configuration',{}).get('scope')!=scope
                 or planner['configuration'].get('manifest_hash')!=config['manifest_hash']
@@ -125,7 +155,8 @@ def reconcile_cleanup(worker,operation_id):
             # Validate all unsettled local effects before attempting any finish.
             statuses={}
             for guard,tool_work,record in tools:
-                if record['phase']!='finished':statuses[record['id']]=_effect_receipt(step,manifest,broker)
+                if record['phase']!='finished':statuses[record['id']]=_effect_receipt(step,manifest,broker,
+                    configuration=config,workflow_id=operation_id)
             for turn in stored['turns']:
                 if turn['status'] not in ('completed','blocked','cancelled'):
                     raise DevelopmentError('development_cleanup_receipt_missing')

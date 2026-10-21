@@ -365,6 +365,7 @@ class DevelopmentJournal:
         self._lock_pin = None
         self._lock_state,self._state_hash = None,None
         self._linux_input_profile = False
+        self._linux_execution_profile = False
         self._process_id = os.getpid()
         try:
             raw = self.private.read('manifest.json', MAX_MANIFEST_BYTES)
@@ -423,7 +424,10 @@ class DevelopmentJournal:
                 self.validate_state(state)
                 if self._linux_input_profile and state['schema'] != 2:
                     raise DevelopmentError('linux_input_state_changed')
+                if self._linux_execution_profile and state['schema'] != 3:
+                    raise DevelopmentError('linux_execution_state_changed')
                 self._linux_input_profile = state['schema'] == 2
+                self._linux_execution_profile = state['schema'] == 3
                 self._lock_pin = (self._lock_fd,self.private.fd,identity(current),self.private.identity)
                 self._lock_state,self._state_hash = state,digest(canonical(state))
                 yield state
@@ -463,6 +467,13 @@ class DevelopmentJournal:
         return lease._validate(self)
 
     def validate_state(self, state):
+        if type(state) is dict and type(state.get('schema')) is int and state.get('schema') == 3:
+            from .linux_execution_state import validate_state
+            try:
+                validate_state(self, state)
+            except (DevelopmentError, KeyError, TypeError, ValueError):
+                raise DevelopmentError('journal_corrupt') from None
+            return
         if type(state) is dict and type(state.get('schema')) is int and state.get('schema') == 2:
             self._validate_linux_input_state(state)
             return
@@ -655,6 +666,11 @@ class DevelopmentJournal:
 
     def save(self, state):
         self.validate_state(state)
+        if self._linux_execution_profile or state['schema'] == 3:
+            if state['schema'] != 3:
+                raise DevelopmentError('linux_execution_state_changed')
+            from .linux_execution_state import guard_save
+            guard_save(self, state)
         if self._linux_input_profile or state['schema'] == 2:
             if state['schema'] != 2:
                 raise DevelopmentError('linux_input_state_changed')
@@ -663,7 +679,7 @@ class DevelopmentJournal:
         if len(encoded) > MAX_STATE_BYTES:
             raise DevelopmentError('journal_full')
         self.private.replace('state.json', encoded)
-        if state['schema'] == 2:
+        if state['schema'] in (2, 3):
             self._state_hash = digest(encoded)
 
     def charge(self, state, *, operations=1, read_bytes=0, patch_bytes=0, tests=0):

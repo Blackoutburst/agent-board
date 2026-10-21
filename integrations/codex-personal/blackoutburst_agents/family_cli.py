@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .board_reader import BoardReadError
 from .client_lifecycle import own_client
-from .development_worker import DevelopmentBoardWorker
+from .development_worker import DevelopmentBoardWorker, execution_factories
 from .dev_journal import PrivateDirectory,decode
 from .dev_manifest import DevelopmentError
 from .dev_test_supervisor import _ancestor_identities
@@ -76,6 +76,8 @@ def _preflight(args,spec):
     if (type(request) is not dict or type(request.get('children')) is not list
             or len(request['children'])!=2):raise DevelopmentError('invalid_family_configuration')
     read_protocol(request.get('read_protocol',LEGACY))
+    from .family_plan import execution_profile
+    execution_profile(request)
     parent,_=manifest_document(request['parent']['broker_directory'])
     roots={'parent':_directory_pin(parent['root']),**{
         'child_'+str(i):_directory_pin(child['root']) for i,child in enumerate(request['children'])}}
@@ -170,7 +172,9 @@ def run(args):
                     client.adopt_registration()
                     if command=='prepare':registrations[slot]=item['registration']
                     control=own_client(stack,RuntimeBoardClient.from_worker(client))
-                    workflows[slot]=DevelopmentBoardWorker(work,store,runtime,client,control)
+                    planned=(request['parent'] if slot=='parent' else request['children'][int(slot[-1])]) if command=='prepare' else config['inputs'][slot]
+                    factories=execution_factories(planned.get('execution_profile','darwin'))
+                    workflows[slot]=DevelopmentBoardWorker(work,store,runtime,client,control,**factories)
                 worker=DevelopmentFamilyWorker(journal,workflows,registrations=registrations)
                 if command=='prepare':
                     # Determine roots from supplied manifests before any connection

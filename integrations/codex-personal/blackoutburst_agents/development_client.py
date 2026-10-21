@@ -4,7 +4,7 @@ import os
 import math
 from pathlib import Path
 from .board_reader import BoardReadError, _connection_data, _json, _text, MAX_CONNECTION_BYTES
-from .dev_manifest import absolute_directory, identity, signature
+from .dev_manifest import absolute_directory, canonical, identity, signature
 from .dev_journal import PrivateDirectory
 from .worker_client import WorkerBoardClient, _arguments
 
@@ -69,6 +69,24 @@ class DevelopmentBoardClient(WorkerBoardClient):
                     or not _text(args['project_id'],200) or args['limit'] != 1 or type(args['limit']) is not int):
                 raise BoardReadError('invalid_arguments')
             values = copy.deepcopy(args)
+        elif name == 'release_ticket':
+            # Assignment maintenance only: no arbitrary release/status API is
+            # added to the ordinary worker channel.
+            if (type(args) is not dict or set(args) != {'ticket_id','expected_version',
+                    'idempotency_key','reason','status','unassign_self'}
+                    or type(args['ticket_id']) is not str or not _text(args['ticket_id'],200)
+                    or type(args['idempotency_key']) is not str or not _text(args['idempotency_key'],200)
+                    or type(args['expected_version']) is not int or not 1 <= args['expected_version'] < 2**63
+                    or type(args['reason']) is not str or not args['reason'].strip()
+                    or len(args['reason']) > 20000 or '\x00' in args['reason']
+                    or type(args['status']) is not str or args['status'] != 'review' or args['unassign_self'] is not True):
+                raise BoardReadError('invalid_arguments')
+            try:
+                values = copy.deepcopy(args)
+                # Validate encoding/envelope bound before touching transport.
+                if len(canonical(values)) > MAX_CONNECTION_BYTES-1024: raise ValueError
+            except Exception:
+                raise BoardReadError('invalid_arguments') from None
         elif name in ('get_ticket', 'get_thread', 'claim_ticket', 'renew_ticket', 'update_ticket'):
             values = _arguments(name, args)
         else:

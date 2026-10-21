@@ -1,0 +1,38 @@
+[Unit]
+Description=Blackoutburst explicit finite pool for @USER@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=@USER@
+Group=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@PYTHON@ -I -B @RELEASE@/pool_entry.py --release @RELEASE@ --owner @USER@ run-batch --batch @ROOT@/config/batch.json
+Restart=no
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=@STOP@
+RuntimeMaxSec=@LIFETIME@
+SendSIGKILL=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@ROOT@ @NORMAL_HOME@/.codex @NORMAL_HOME@/.local/state/blackoutburst-agents/development
+InaccessiblePaths=-/home/ubuntu -/root -@NORMAL_HOME@/.config/blackoutburst-agent-host -@NORMAL_HOME@/.config/blackoutburst-board -@NORMAL_HOME@/.local/state/blackoutburst-agents/host -@NORMAL_HOME@/workspaces
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+TasksMax=@TASKS@
+MemoryMax=@MEMORY@
+MemoryHigh=@MEMORY_HIGH@
+CPUQuota=@CPU@%
+UnsetEnvironment=OPENAI_API_KEY OPENAI_BASE_URL AZURE_OPENAI_API_KEY ANTHROPIC_API_KEY SSH_AUTH_SOCK GH_TOKEN GITHUB_TOKEN CODEX_HOME PYTHONPATH PYTHONHOME
+
+[Install]
+WantedBy=multi-user.target
