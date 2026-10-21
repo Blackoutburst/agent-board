@@ -132,7 +132,7 @@ def validate_current_plan(plan):
     total = 0
     for path, pin in plan['runtime'].items():
         _, current = read_public(path, root_owned=True, expected=pin,
-            maximum=min(64*1024*1024,128*1024*1024-total))
+            maximum=min(64*1024*1024,128*1024*1024-total),allow_empty=True)
         total += current['size']
         require(total <= 128 * 1024 * 1024, 'linux_execution_runtime_limit')
     return plan

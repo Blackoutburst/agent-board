@@ -41,10 +41,11 @@ def require(ok, reason='linux_namespace_invalid'):
         raise ProbeError(reason)
 
 
-def read_public(path, *, root_owned=False, maximum=64 * 1024 * 1024, expected=None, namespace=False):
+def read_public(path, *, root_owned=False, maximum=64 * 1024 * 1024, expected=None, namespace=False, allow_empty=False):
     """Canonical path and held nofollow chain; only explicit public runtime files."""
     path = Path(path)
-    require(type(namespace) is bool and (not namespace or os.getpid() == 1 and os.geteuid() == 0))
+    require(type(namespace) is bool and type(allow_empty) is bool
+            and (not namespace or os.getpid() == 1 and os.geteuid() == 0))
     require(path.is_absolute() and '..' not in path.parts and len(path.parts) <= 128)
     nodes, leaf = [], None
     try:
@@ -57,7 +58,7 @@ def read_public(path, *, root_owned=False, maximum=64 * 1024 * 1024, expected=No
         leaf = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=nodes[-1][0])
         before = os.fstat(leaf)
         require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
-                and 0 < before.st_size <= maximum and not before.st_mode & 0o022
+                and (0 if allow_empty else 1) <= before.st_size <= maximum and not before.st_mode & 0o022
                 and (namespace or (before.st_uid == 0 if root_owned else before.st_uid in (0, os.geteuid()))))
         data = bytearray()
         while len(data) <= maximum:
@@ -118,7 +119,7 @@ def public_runtime():
     require(1 <= len(paths) <= MAX_RUNTIME_FILES, 'linux_runtime_inventory_limit')
     result, size = {}, 0
     for path in sorted(paths):
-        _, pin = read_public(path, root_owned=True,maximum=min(64*1024*1024,MAX_RUNTIME_BYTES-size))
+        _, pin = read_public(path, root_owned=True,maximum=min(64*1024*1024,MAX_RUNTIME_BYTES-size),allow_empty=True)
         size += pin['size']
         require(size <= MAX_RUNTIME_BYTES, 'linux_runtime_inventory_limit')
         result[path] = pin
@@ -319,7 +320,7 @@ def rootfs(libc, directory, runtime, contents):
     (base / 'readonly-canary').write_bytes(b'synthetic')
     names = []
     for index, (path, pin) in enumerate(runtime.items()):
-        read_public(path, expected=pin, namespace=True)
+        read_public(path, expected=pin, namespace=True, allow_empty=True)
         target = base / 'runtime' / str(index)
         target.touch(mode=0o444)
         mount(libc, path, target, 1 << 12)
