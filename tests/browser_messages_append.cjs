@@ -175,7 +175,7 @@ function draft() { return { schema: 'server-provision-draft-view-v1', request_id
     assert.deepEqual(writes().at(-1).body, requestBody); assert.equal(created, 2); await section().getByText('Préparé localement', { exact: true }).waitFor();
     checks.push('B_true_A_false_union_and_exact_lost_request_retry', 'prepared_no_cancel_no_historical_receipt_authority');
     active.controller_status = 'blocked'; active.controller_reason = 'children_uncertain'; await refresh();
-    await section().getByText('Une activité précédente doit être rapprochée avant de poursuivre.', { exact: true }).waitFor();
+    await section().getByText('Dernier signal d’erreur reçu : Une activité précédente nécessitait une vérification. Ce signal est conservé dans l’historique ; la carte de l’instance indique son état actuel.', { exact: true }).waitFor();
     assert.ok(await start().isDisabled()); assert.equal(active.state, 'prepared');
     active.controller_status = 'not_reported'; active.controller_reason = ''; await refresh();
     checks.push('closed_controller_inability_visible_without_phase_or_cleanup_claim');

@@ -1034,16 +1034,16 @@ const Workspace = (() => {
   const appendSchemas = { grant: "server-messages-append-grant-v1", request: "server-messages-append-request-v1", cancel: "server-messages-append-cancel-v1" };
   const appendStates = { requested: "Ajout demandé", prepared: "Préparé localement", precommit: "Publication en préparation", committed: "Instance enregistrée", complete: "Ajout terminé · instance inactive", cancelled: "Demande annulée" };
   const appendControllerReasons = {
-    slot_unavailable: "L’emplacement personnel préparé n’est pas disponible.",
-    source_changed: "La configuration installée doit être vérifiée avant de poursuivre.",
-    children_uncertain: "Une activité précédente doit être rapprochée avant de poursuivre.",
-    connection_lost: "Le serveur ne peut pas confirmer la réponse du tableau pour le moment.",
-    request_changed: "La demande a changé. Actualisez avant de poursuivre.",
-    authorization_changed: "Les autorisations ont changé. Vérifiez-les avant de poursuivre.",
-    local_state_conflict: "L’état du serveur doit être rapproché de cette demande.",
-    local_io_failed: "Le serveur ne peut pas conserver cette étape pour le moment.",
-    protocol_error: "Le serveur a reçu une réponse qu’il ne peut pas confirmer.",
-    requires_reconciliation: "Une vérification est nécessaire pour reprendre cette même demande."
+    slot_unavailable: "L’emplacement personnel préparé n’était pas disponible.",
+    source_changed: "La configuration installée devait être vérifiée.",
+    children_uncertain: "Une activité précédente nécessitait une vérification.",
+    connection_lost: "La réponse du tableau n’a pas pu être confirmée.",
+    request_changed: "Un changement de la demande a été détecté.",
+    authorization_changed: "Un changement des autorisations a été détecté.",
+    local_state_conflict: "Un écart entre le serveur et la demande a été détecté.",
+    local_io_failed: "Une étape n’a pas pu être enregistrée sur le serveur.",
+    protocol_error: "Une réponse du tableau n’a pas pu être validée.",
+    requires_reconciliation: "Une vérification de l’état a été demandée."
   };
   const appendBusy = new Set(), appendStorageKey = owner => `board-messages-append-v1:${owner}`;
   const appendBase = host => `/server-hosts/${workPath(host.id)}/messages-append`;
@@ -1268,7 +1268,8 @@ const Workspace = (() => {
         el("h4", {}, profiles.find(p => p.owner_id === owner && p.id === row.profile_id)?.name || "Profil demandé", ` · v${row.profile_version}`),
         badge(appendStates[row.state], row.barrier_held ? "status-blocked" : ""),
         el("p", {}, `${provisionProviders[row.provider_id]} · ${row.requested_model || "Modèle non choisi"}`),
-        row.controller_status === "blocked" ? el("p", { class: "callout", role: "status" }, appendControllerReasons[row.controller_reason]) : null,
+        row.controller_status === "blocked" ? el("p", { class: "callout", role: "status" },
+          `Dernier signal d’erreur reçu : ${appendControllerReasons[row.controller_reason]} Ce signal est conservé dans l’historique ; la carte de l’instance indique son état actuel.`) : null,
         el("p", { class: "small muted" }, "Connexion fournisseur, catalogue de modèles et accès au modèle : non vérifiés."),
         row.barrier_held ? el("p", { class: "callout" }, "L’ajout conserve son blocage des démarrages et redémarrages. Il ne lance aucun modèle.")
           : row.state === "complete" ? el("p", {}, "L’instance est inactive et son état reste à confirmer. Demandez d’abord « Arrêter » dans sa carte, puis attendez sa confirmation avant de choisir « Démarrer » avec un budget. La connexion fournisseur reste non vérifiée.") : null,
