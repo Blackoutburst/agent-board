@@ -25,6 +25,7 @@ from .linux_test_namespace import (MAX_INPUT_PACKET, MAX_PACKET, ProbeError,
 
 MAX_JOB_BYTES = 1024 * 1024
 CLEANUP_SECONDS = 2
+SOURCE_WINDOW_MARKER = 'source-window.ready'
 BOOTSTRAP = r'''
 import hashlib,importlib.abc,importlib.util,json,os,stat,sys
 root,pins,phase,target=sys.argv[1:]
@@ -189,6 +190,37 @@ def _source_authorized(control,window):
     require(window['validated_at'] <= now < window['deadline'],'linux_authorization_expired')
 
 
+def source_window_ready(private):
+    """Only a missing marker at open is pending; present evidence is strict.
+
+    The parent creates this empty marker after the complete window and directory
+    have been fsynced. Its existence carries no authorization: the window and
+    actual fresh control frame are still compared at the SOURCE boundary.
+    """
+    private.verify()
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(SOURCE_WINDOW_MARKER, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=private.fd)
+        except FileNotFoundError:
+            return False
+        private.validate_file(descriptor)
+        before = os.fstat(descriptor)
+        require(before.st_size == 0 and os.read(descriptor, 1) == b'')
+        after = os.fstat(descriptor)
+        linked = os.stat(SOURCE_WINDOW_MARKER, dir_fd=private.fd, follow_symlinks=False)
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        require(all(getattr(before, key) == getattr(after, key) == getattr(linked, key) for key in fields))
+        private.verify()
+        return True
+    except OSError:
+        raise DevelopmentError('linux_source_window_invalid') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def supervise(directory):
     from .linux_test_backend import load_supervisor_job, validate_native_receipt
     private, job, plan, state = load_supervisor_job(directory)
@@ -279,13 +311,9 @@ def supervise(directory):
         approved = False
         while _control_clock() < startup_deadline:
             require(control.authorized(), 'linux_authorization_expired')
-            try:
-                authorization = decode(private.read('source-window.json', 2048))
-            except DevelopmentError as error:
-                # A missing approval is ordinary while the live parent captures.
-                if not (private.path / 'source-window.json').exists():
-                    time.sleep(0.01); continue
-                raise
+            if not source_window_ready(private):
+                time.sleep(0.01); continue
+            authorization = decode(private.read('source-window.json', 2048))
             require(type(authorization) is dict and set(authorization) ==
                     {'nonce', 'challenge', 'request_sha256', 'window_sha256'}
                     and authorization['nonce'] == job['nonce'] and authorization['challenge'] == challenge

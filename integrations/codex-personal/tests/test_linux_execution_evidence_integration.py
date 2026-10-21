@@ -72,6 +72,7 @@ class EvidenceIntegrationTests(unittest.TestCase):
                             'control':window,'phase':'source_release_intent'}))
                         private.create('source-window.json',canonical({'nonce':nonce,'challenge':challenge,
                             'request_sha256':digest(canonical(request)),'window_sha256':digest(canonical(window))}))
+                        private.create('source-window.ready',b'')
                 else:
                     native_sha=None;private.create('state.json',canonical(ack))
             proof=evidence._base_proof(self.backend,case,request)

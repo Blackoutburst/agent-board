@@ -504,6 +504,8 @@ def read_native_observation(private,job,plan):
     native=validate_native_receipt(decode(raw),job,plan)
     require(canonical(native)==raw)
     if native['source_release_intent']:
+        from .linux_test_supervisor import source_window_ready
+        require(source_window_ready(private))
         admission=decode(private.read('source-admission.json',4096))
         approval=decode(private.read('source-window.json',2048))
         require(type(admission) is dict and set(admission)==
@@ -744,6 +746,10 @@ class SupervisedLinuxNamedPythonBackend:
                                     'challenge': state['source_challenge'],
                                     'request_sha256': digest(canonical(request)),
                                     'window_sha256': digest(canonical(fresh))}))
+                                # The final JSON name can be visible during its
+                                # write. Publish an empty no-replace marker only
+                                # after its bytes and directory entry are durable.
+                                private.create('source-window.ready', b'')
                                 _send_control_window(child.stdin.fileno(), fresh, previous=previous)
                                 previous, boundary_sent = fresh, True
                         else:

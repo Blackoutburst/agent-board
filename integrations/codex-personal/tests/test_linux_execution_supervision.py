@@ -89,6 +89,7 @@ class LinuxSupervisionTests(unittest.TestCase):
         if len(self.sequence)==2:
             with PrivateDirectory(self.directory) as private:
                 approval=decode(private.read('source-window.json',2048))
+                self.assertEqual(private.read('source-window.ready',1),b'')
                 self.assertEqual(approval['challenge'],'b'*32)
                 self.assertEqual(approval['window_sha256'],digest(canonical(window)))
             self.publish()
@@ -138,6 +139,26 @@ class LinuxSupervisionTests(unittest.TestCase):
         self.assertFalse(native['source_released']);self.assertEqual(len(self.sequence),1)
         self.assertFalse((self.directory/'source-window.json').exists())
         self.context.before_source.assert_called_once()
+
+    def test_marker_publication_does_not_renew_the_original_source_deadline(self):
+        from blackoutburst_agents.dev_test_supervisor import _send_control_window
+        original=PrivateDirectory.create
+        def create(private,name,data):
+            result=original(private,name,data)
+            if name=='source-window.ready':self.clock+=1.5
+            return result
+        def launch(*args,**kw):
+            child=self.launch(*args,**kw);child.stdin.close_callback=lambda:self.publish(False)
+            return child
+        def send(descriptor,window,**kw):
+            _send_control_window(descriptor,window,clock=lambda:self.clock,**kw)
+            self.sequence.append(window)
+        with patch('blackoutburst_agents.linux_test_backend.subprocess.Popen',side_effect=launch), \
+             patch('blackoutburst_agents.linux_test_backend._send_control_window',side_effect=send), \
+             patch.object(PrivateDirectory,'create',create):
+            native=self.run_job()
+        self.assertFalse(native['source_released']);self.assertEqual(len(self.sequence),1)
+        self.assertTrue((self.directory/'source-window.ready').exists())
 
     def test_ambiguous_popen_keeps_job_and_refuses_second_launch(self):
         with patch('blackoutburst_agents.linux_test_backend.subprocess.Popen',side_effect=OSError('synthetic')) as spawn:

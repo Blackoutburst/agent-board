@@ -284,6 +284,7 @@ class ConnectedExecutionTests(unittest.TestCase):
                 'control':window,'phase':'source_release_intent'}))
             private.create('source-window.json',canonical({'nonce':'a'*32,'challenge':'b'*32,
                 'request_sha256':digest(canonical(request)),'window_sha256':digest(canonical(window))}))
+            private.create('source-window.ready',b'')
             private.create('state.json',canonical({'schema':1,'nonce':'a'*32,
                 'request_sha256':digest(canonical(request)),'phase':'complete','boundary_sequence':3,
                 'source_challenge':'b'*32,'native_receipt_sha256':digest(raw)}))
