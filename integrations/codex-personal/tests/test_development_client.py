@@ -51,6 +51,34 @@ class DevelopmentClientTests(unittest.TestCase):
         with self.assertRaises((DevelopmentError,BoardReadError)):
             DevelopmentBoardClient.from_connection_file(alias,session_id='session')
 
+    def test_review_self_unassignment_has_one_closed_explicit_shape(self):
+        self.client.adopt_registration()
+        args=dict(ticket_id='ticket',expected_version=7,idempotency_key='handoff',
+            reason='Exact published delivery ready.',status='review',unassign_self=True)
+        self.client.call('release_ticket',args)
+        self.assertEqual(self.client._tool.call_args.args,
+            ('release_ticket',{**args,'session_id':'chosen-session'}))
+        self.assertEqual(args['expected_version'],7)
+
+    def test_release_cannot_change_status_claim_scope_or_expand_the_worker_channel(self):
+        from blackoutburst_agents.worker_client import WorkerBoardClient
+        self.client.adopt_registration()
+        args=dict(ticket_id='ticket',expected_version=7,idempotency_key='handoff',
+            reason='Exact published delivery ready.',status='review',unassign_self=True)
+        variants=[{**args,key:value} for key,value in [
+            ('expected_version',True),('expected_version',0),('expected_version',2**63),
+            ('unassign_self',False),('unassign_self',1),('status','todo'),('status','done'),
+            ('reason',' '),('reason','\x00'),('reason','\ud800'),('idempotency_key',''),
+            ('ticket_id',''),('session_id','other'),('assignee_agent_id','chosen-reviewer')]]
+        variants += [{key:value for key,value in args.items() if key!=omitted} for omitted in args]
+        for values in variants:
+            with self.subTest(keys=list(values)),self.assertRaises(BoardReadError):
+                self.client.call('release_ticket',values)
+        self.client._tool.assert_not_called()
+        with self.assertRaises(BoardReadError):
+            WorkerBoardClient.call(self.client,'release_ticket',args)
+        self.client._tool.assert_not_called()
+
     def test_credential_bytes_are_parsed_from_one_held_open(self):
         original=os.open;opens=[]
         def tracked(path,*args,**kwargs):
