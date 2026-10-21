@@ -323,7 +323,8 @@ def test_source_alternates_refused_before_git_or_copy(setup):
     assert not list(setup['work'].iterdir())
 
 
-@pytest.mark.parametrize('metadata', ['shallow', 'info/grafts', 'refs/replace/unused', 'objects/pack/unused.promisor'])
+@pytest.mark.parametrize('metadata', ['shallow', 'info/grafts', 'refs/replace/unused', 'objects/pack/unused.promisor',
+    'SHALLOW', 'info/GRAFTS', 'objects/info/ALTERNATES', 'objects/PACK/unused.PROMISOR', 'refs/REPLACE/unused'])
 @pytest.mark.parametrize('stage', ['source', 'ready'])
 def test_history_or_storage_overrides_are_refused_before_git(setup, monkeypatch, metadata, stage):
     if stage == 'ready':
@@ -449,6 +450,19 @@ def test_overlapping_roots_refused(setup):
     with pytest.raises(DevelopmentError, match='git_workspace_roots_overlap'):
         LocalGitWorkspaceController(setup['state'], grant=replace(setup['grant'],
             workspace_root=str(setup['source'])))
+
+
+@pytest.mark.parametrize('kind', ['repository-alias', 'repository-ancestor-alias', 'state-alias'])
+def test_physical_root_aliases_cannot_bypass_overlap_check(setup, kind):
+    original = setup['state'] if kind == 'state-alias' else setup['source']
+    alias = original.with_name(original.name.upper())
+    if not alias.exists() or not alias.samefile(original):
+        pytest.skip('requires a native case-insensitive filesystem')
+    if kind == 'repository-ancestor-alias':
+        (original / 'nested').mkdir(mode=0o700)
+        alias = alias / 'nested'
+    with pytest.raises(DevelopmentError, match='git_workspace_roots_overlap'):
+        LocalGitWorkspaceController(setup['state'], grant=replace(setup['grant'], workspace_root=str(alias)))
 
 
 @pytest.mark.parametrize('bad', ['../escape', '/outside', 'https://example.invalid/repo', '-command'])

@@ -18,6 +18,7 @@ import signal
 import stat
 import subprocess
 import time
+import unicodedata
 import uuid
 
 from .dev_journal import PrivateDirectory, decode
@@ -60,6 +61,25 @@ def _directory(path, *, private=False):
         return list(identity(info))
     finally:
         os.close(descriptor)
+
+
+def _ancestry(path):
+    """Physical ancestors also detect case/normalization aliases of roots."""
+    descriptor = None
+    try:
+        descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        result = [identity(os.fstat(descriptor))]
+        for name in path.parts[1:]:
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            result.append(identity(os.fstat(descriptor)))
+        return result
+    except (OSError, ValueError):
+        _fail('git_workspace_directory_refused')
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _file(path, maximum, *, executable=False):
@@ -134,6 +154,7 @@ def _unsupported_metadata(relative):
     Replacement objects are also disabled in the fixed Git environment; their
     metadata is refused rather than becoming an implicit alternate history.
     """
+    relative = unicodedata.normalize('NFC', relative).casefold()
     return (relative in {'commondir', 'shallow', 'info/grafts',
                          'objects/info/alternates', 'objects/info/http-alternates', 'refs/replace'}
             or relative.startswith('refs/replace/')
@@ -199,6 +220,9 @@ class LocalGitWorkspaceController:
                 or self.pins['repository_git'] != _directory(self.repository / '.git')
                 or self.pins['git_sha256'] != digest(_file(self.git, 64 * 1024 * 1024, executable=True))):
             _fail('git_workspace_pin_changed')
+        chains = [_ancestry(root) for root in (self.state_root, self.repository, self.workspace_root)]
+        if any(a[-1] in b or b[-1] in a for n, a in enumerate(chains) for b in chains[n + 1:]):
+            _fail('git_workspace_roots_overlap')
 
     def _source(self):
         self._roots()

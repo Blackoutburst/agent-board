@@ -18,8 +18,10 @@ Create `LocalGitWorkspaceController(state_root, grant=grant,
 git_executable='/usr/bin/git', timeout_seconds=30)`. The state and workspace
 roots must already be separate mode-0700 owned directories. The source must
 also be owned and not writable by another group/user. Root paths, the actual
-source `.git` directory and the trusted Git executable are pinned. The Git
-executable and the cooperative controller are trusted prerequisites; this
+source `.git` directory and the trusted Git executable are pinned. The roots
+are also compared through their physical ancestors, so case/normalization
+aliases cannot turn a separate declared path into an overlapping directory.
+The Git executable and the cooperative controller are trusted prerequisites; this
 component is not an OS sandbox against arbitrary same-user Python code.
 
 - `plan(operation_id=UUID, scope=...)` records the exact request. Its scope uses
@@ -40,6 +42,8 @@ component is not an OS sandbox against arbitrary same-user Python code.
   an observed substitution refuses the copy without touching working files.
   The same source/copy layout rule refuses shallow boundaries, grafts,
   replacement refs and promisor markers that could hide missing history.
+  Marker names use NFC/casefold aliases as well as physical path checks, so a
+  case-insensitive host cannot hide an override using an uppercase filename.
 - `status(operation_id)` returns recorded local metadata. It does **not** prove
   current process health, Board ownership, credentials or checkout validity.
 - `manifest_inputs(operation_id)` revalidates a ready checkout and returns
