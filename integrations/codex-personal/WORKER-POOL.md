@@ -77,6 +77,9 @@ Status separates `configured`, `live_threads`, `driver_calls`,
 `executing_reported`, `execution_unknown`, `capacity_held`, `retained`, `queued`,
 and persisted/unconfirmed Stop. `executing_reported` counts workers whose approved
 driver reports activity, not independently observed model processes. Four real
-threads and barriers in the synthetic tests prove local parallelism only. A real
-development/team adapter and all Linux/Git/delivery/service qualification remain
-separate prerequisites. No such adapter is included or activated by this tranche.
+threads and barriers in the synthetic tests prove local parallelism only. A
+concrete opt-in [development adapter](DEVELOPMENT-POOL.md) and
+[Linux job preparer](LINUX-POOL-PREPARATION.md) are available separately. They
+retain their own authority, native qualification and cleanup checks; the core
+does not supply or activate them. A service and a hierarchical team remain
+separate prerequisites.

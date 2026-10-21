@@ -6,10 +6,16 @@ Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connex
 
 La source 0.32.0 compose le profil Linux explicite avec des
 [espaces Git séparés par travail](GIT_WORKSPACES.md) et un
-[worker de revue distinct de l’auteur](REVIEW-WORKER.md).
+[worker de revue distinct de l’auteur](REVIEW-WORKER.md), un
+[pool durable de travailleurs](WORKER-POOL.md), son
+[pilote de développement](DEVELOPMENT-POOL.md) et son
+[préparateur Linux](LINUX-POOL-PREPARATION.md).
 Ces composants exigent les autorisations et les preuves locales de leur
-contrôleur. Le pool et son raccordement au service restent à livrer ; cette
-version ne certifie ni une équipe active ni plusieurs exécutions de modèles.
+contrôleur. Les [livraisons Git](GIT_DELIVERY.md) et les
+[PR brouillon](GIT_PUBLICATION.md) sont des étapes explicites séparées.
+Le raccordement au service et la hiérarchie manager/codeurs/reviewers/rédacteurs
+restent à livrer ; cette version ne certifie ni une équipe active ni plusieurs
+exécutions de modèles. Voir l’[état des travailleurs serveur](CLOUD-WORKERS.md).
 
 Depuis 0.31.0, le raccord propriétaire [B/Host5](MESSAGE_APPEND_HOST5.md) permet
 d’ajouter une cible de messages inactive depuis un slot personnel déjà
