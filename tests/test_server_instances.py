@@ -98,6 +98,48 @@ def test_initial_unknown_cannot_start_then_full_lifecycle(env):
     assert done['instance']['generation'] == 1
 
 
+def test_human_stop_after_budget_keeps_generation_and_requires_manager_confirmation(env):
+    b, _, _, raw, _, host, *_ = env
+    report(env)
+    # A clean budget stop ends the observed activation, not the human's intent.
+    for generation in range(1, 4):
+        start = command(env, key=f'budget-start-{generation}')
+        assert start['generation'] == generation and start['budget'] == 1
+        ack(env, start)
+        assert report(env, 'ready', False)['command']['status'] == 'complete'
+        exhausted = report(env, reason='budget_exhausted')
+        assert exhausted['instance']['desired_state'] == 'running'
+        assert exhausted['instance']['observed_state'] == 'stopped'
+        assert exhausted['instance']['cleanup_confirmed'] is True
+        assert exhausted['command']['status'] == 'complete'
+    snapshot = b.poll_instance_commands(raw, host['id'])
+    instance = snapshot['instances'][0]
+    assert snapshot['commands'] == [] and instance['generation'] == 3
+    assert instance['current_command']['action'] == 'start'
+    with b._connection() as db:
+        history = [dict(r) for r in db.execute('SELECT * FROM server_instance_commands ORDER BY seq')]
+        assert db.execute('SELECT COUNT(*) FROM runtime_executions').fetchone()[0] == 0
+    stop = command(env, 'stop', 'final-human-stop', instance=instance)
+    assert stop['generation'] == 3 and stop['budget'] == 0 and stop['status'] == 'queued'
+    queued = b.poll_instance_commands(raw, host['id'])
+    assert queued['commands'] == [stop]
+    assert queued['instances'][0]['desired_state'] == 'stopped'
+    assert queued['instances'][0]['observation_revision'] == instance['observation_revision']
+    # The previous clean observation and ACK alone cannot complete this Stop.
+    with pytest.raises(BoardError, match='not_accepted'):
+        report(env, key='stop-before-manager-ack')
+    assert ack(env, stop)['command']['status'] == 'accepted'
+    done = report(env, key='final-manager-stopped')
+    assert done['command']['status'] == 'complete'
+    assert done['instance']['generation'] == 3
+    assert done['instance']['desired_state'] == done['instance']['observed_state'] == 'stopped'
+    assert done['instance']['cleanup_confirmed'] is True
+    assert b.poll_instance_commands(raw, host['id'])['commands'] == []
+    with b._connection() as db:
+        assert [dict(r) for r in db.execute("SELECT * FROM server_instance_commands WHERE action='start' ORDER BY seq")] == history
+        assert db.execute('SELECT COUNT(*) FROM runtime_executions').fetchone()[0] == 0
+
+
 def test_command_and_report_replay_preserve_receipts_not_budget_or_presence(env):
     b, _, _, raw, _, host, *_ = env
     r = report(env, key='initial')
