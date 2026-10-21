@@ -24,7 +24,7 @@ from its own bounded procfs metadata and pins runtime, seccomp, sources and
 namespace toolchain. Qualification under one UID/unit/context does not qualify
 another; in particular a UID1000 experiment says nothing about UID994 or UID993.
 
-The recipe requires the exact closed 56-file source inventory from the integrated
+The recipe requires the exact closed 59-file source inventory from the integrated
 policy, including the matrix module, all execution components and transitive
 controller/transport consumers. The source-only runner branch does not contain
 all those integration modules; it cannot qualify by substituting placeholder
