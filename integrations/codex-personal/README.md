@@ -11,9 +11,12 @@ La source 0.32.0 compose le profil Linux explicite avec des
 [pilote de développement](DEVELOPMENT-POOL.md) et son
 [préparateur Linux](LINUX-POOL-PREPARATION.md).
 Ces composants exigent les autorisations et les preuves locales de leur
-contrôleur. Les [livraisons Git](GIT_DELIVERY.md) et les
-[PR brouillon](GIT_PUBLICATION.md) sont des étapes explicites séparées.
-Le raccordement au service et la hiérarchie manager/codeurs/reviewers/rédacteurs
+contrôleur. Le [raccord de livraison](DEVELOPMENT_POOL_DELIVERY.md) relie un
+résultat terminé aux [livraisons Git](GIT_DELIVERY.md), aux
+[PR brouillon](GIT_PUBLICATION.md) et au passage en revue du ticket.
+Un [installateur serveur séparé](../../deploy/worker_pool/README.md) prépare
+un service arrêté pour un lot explicite de quatre résultats privés.
+L’activation réelle et la hiérarchie manager/codeurs/reviewers/rédacteurs
 restent à livrer ; cette version ne certifie ni une équipe active ni plusieurs
 exécutions de modèles. Voir l’[état des travailleurs serveur](CLOUD-WORKERS.md).
 

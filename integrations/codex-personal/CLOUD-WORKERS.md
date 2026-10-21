@@ -14,6 +14,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Quatre parcours de développement parallèles | Testés avec Board/Runtime réels temporaires et modèles simulés |
 | Préparation Git, sélection et qualifications Linux par job | API explicite, sans dispatch automatique |
 | Commit scellé et PR brouillon | API explicite, avec garde de tests et reprise des effets ambigus |
+| Résultat du pool vers livraison et passage en revue | Raccord explicite à un résultat terminé, sans relancer modèle ou tests |
 | Revue indépendante | Worker et raccord Linux explicites |
 | Unité serveur du pool | Installateur séparé et lot fini implémentés ; installation inactive et qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
@@ -23,6 +24,12 @@ Le premier lot de développement produit des résultats privés. Ni la fin d’u
 thread ni le nettoyage d’une réservation ne publient une PR ou ne terminent un
 ticket. Les étapes de livraison, de revue et de publication ont leurs propres
 intentions durables et leurs contrôles d’autorité.
+
+Le [raccord de livraison](DEVELOPMENT_POOL_DELIVERY.md) traite un seul résultat
+sélectionné et terminé : commit vérifié, PR brouillon, preuve sur le ticket,
+puis retrait de l’attribution de l’auteur pour permettre une revue indépendante.
+Le lot du service s’arrête encore aux résultats privés ; ce raccord est une API
+distincte et ne constitue pas encore le contrôleur de l’équipe hiérarchique.
 
 ## Validation Linux datée du 21 octobre 2026
 
