@@ -63,8 +63,29 @@ Runtime start/finish or uncertain cleanup requires explicit reconciliation; it
 never silently runs another model turn. Changed context, lost/reclaimed claim,
 proof loss, or changed selection cannot adopt an old opinion for a new delivery.
 
-This tranche has synthetic inference and delivery-proof tests against a real
-temporary in-process Board/Runtime. It is not activated in the service. The Git
-workspace component currently proves workspace/base identity, not an accepted
-delivery snapshot or sealed reviewer copy. A real controller guard and delivery
-snapshot handoff remain prerequisites; the default worker refuses without them.
+`LocalGitDeliveryController.review_guard` supplies the concrete readonly Git
+export guard. Its test-evidence callback must still verify the accepted source
+snapshot and actual test receipts; a declared passed test never supplies that
+proof. The worker and Git components have local synthetic-inference tests, not
+an activated reviewer service.
+
+## Explicit Linux binding
+
+`LinuxDeliveryReviewBinding(deliveries, operation_id=..., review_operation_id=...,
+planner_policy_directory=...)` supplies `guard` and `runner_factory` for this
+worker. It requires the concrete delivery controller and an already qualified
+Linux policy in the current execution environment. Prepare that policy with a
+separate empty planner workspace and the exact readonly export as its checkout.
+Use `binding.workspace` and `binding.executable` in the worker's normal `run`.
+The model receives the selected material through its prompt; its cwd stays
+empty. The guard inspects the separate exact export, and qualification is checked
+before and after that inspection. There is no automatic policy qualification,
+claim acquisition, queue dispatch or publication. The live binding is confined
+to its creating thread and must be closed.
+
+The author must release its own assignment before a distinct reviewer can claim
+the ordinary ticket. The existing explicit `release_ticket` operation with
+`unassign_self=True` supports this handoff; publishing evidence alone preserves
+the author assignment. Never impersonate a human or rewrite another profile's
+assignment. A controller must retain the exact handoff intent and correlate its
+receipt before selecting the reviewer.
