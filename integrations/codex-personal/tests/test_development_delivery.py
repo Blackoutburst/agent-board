@@ -249,6 +249,29 @@ class DevelopmentDeliveryTests(unittest.TestCase):
         self.assertEqual(len(updates),1)
         with self.assertRaises(DevelopmentError):self.worker.publish(self.operation)
 
+    def test_publication_interrupted_before_cas_retries_exact_intent_and_authority(self):
+        class Interrupted(BaseException): pass
+        self.published();before=self.board.get_ticket(self.human,self.ticket['id'])['ticket']
+        original=self.client.call;updates=[];interrupted=[]
+        def call(name,args):
+            if name=='update_ticket':
+                updates.append(deepcopy(args))
+                if not interrupted:interrupted.append(True);raise Interrupted()
+            return original(name,args)
+        self.client.call=call
+        with self.assertRaises(Interrupted):self.worker.publish(self.operation,delivery_publication=self.link)
+        retained=self.journal.get(self.operation)
+        self.assertEqual(retained['stage'],'publishing')
+        self.assertEqual(self.board.get_ticket(self.human,self.ticket['id'])['ticket'],before)
+        calls,tests,posts=len(self.inferences),len(self.backend.calls),self.posts
+        result=self.worker.publish(self.operation,delivery_publication=self.link)
+        self.assertEqual(result['stage'],'complete',result)
+        after=self.board.get_ticket(self.human,self.ticket['id'])['ticket']
+        self.assertEqual(after['version'],before['version']+1);self.assertIsNone(after['claimant'])
+        self.assertEqual(len(updates),2);self.assertEqual(updates[0],updates[1])
+        self.assertEqual(self.journal.get(self.operation)['payload']['publication'],retained['payload']['publication'])
+        self.assertEqual((len(self.inferences),len(self.backend.calls),self.posts),(calls,tests,posts))
+
     def test_revocation_during_github_reads_precedes_any_board_cas(self):
         self.published();before=self.board.get_ticket(self.human,self.ticket['id'])['ticket'];fired=[]
         def revoke():

@@ -634,7 +634,6 @@ class DevelopmentBoardWorker:
             try:
                 delivery=None if delivery_publication is None else delivery_publication.verify(self,operation_id,op['scope'])
                 if op['stage']=='result_ready':
-                    from .dev_journal import DevelopmentJournal
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
                         authorization=DevelopmentAuthorization(self.client,scope=op['scope'],manifest=manifest.manifest,
                             registration=op['payload']['registration'],clock=self.clock,
