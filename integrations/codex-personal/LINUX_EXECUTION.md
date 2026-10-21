@@ -120,3 +120,18 @@ UID/groups, namespaces, cgroup/label/capability/seccomp metadata and exact sourc
 inventory. These metadata do not reconstruct every inherited kernel policy.
 Qualification concerns the observed host/unit and source combination, not another
 UID, unit, kernel, CLI, account, namespace or future deployment.
+
+## Native fixture observed on 2026-10-21
+
+The [dated backend observation](docs/linux-backend-fixture-2026-10-21.json)
+records all nine cases passing on source `745ed52`, Ubuntu x86_64 kernel
+`5.15.0-198-generic`, Python 3.10 and UID 1000, with cleanup confirmed.
+The run used synthetic inputs and no model, account RPC or Board connection.
+It exposed and led to fixes for empty public runtime files, publication of the
+SOURCE marker, and readiness of the existing nonblocking control descriptor.
+Earlier refused attempts remain retained separately.
+
+This is a dated validation result. It does not qualify the planner policy, a
+protected owner service or any newly created Git checkout. Each real job still
+requires preparation and qualification bound to its own exact sources, roots
+and execution environment before the development worker can use it.

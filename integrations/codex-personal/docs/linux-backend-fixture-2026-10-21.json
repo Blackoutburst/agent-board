@@ -1,0 +1,61 @@
+{
+  "schema": "blackoutburst-public-native-validation-observation-v1",
+  "date": "2026-10-21",
+  "source_commit": "745ed52efdc4dd9147c12f7e79d5d761437c9187",
+  "qualification": "synthetic_backend_fixture_only",
+  "live_owner_upgrade": false,
+  "portable_authority": false,
+  "report": {
+    "account_rpc_calls": 0,
+    "broker_snapshot_admitted": false,
+    "case_proof_sha256": {
+      "assertion_failed": "c7bc01409bdb2531c6f5b0bd5f3063c706aca8b91d0cde3c51d7170b96b777d1",
+      "controller_loss": "0f401b293a5621c879c4bb0698f4fb2e2367384d3b2343b3f1a76de39cf8a1f2",
+      "eof_running": "287708612513193736579ae4210656692f12dcf99406584378db2edc800dfcec",
+      "normal": "4260813a20621a3334ff60e1020ffece88812d289eb007ad69c07556183a4de2",
+      "output_limit": "b43ecd84c4d3a7a00664b19666dbc28635cb497a560ac283bb80f741e593ba08",
+      "replay_and_corruption": "9a46f1fdd318d3eea8166bf8ee84369c13849981df7f1737405e5ded85a6625f",
+      "source_revoked": "535dc49ebecb689a4181e9e8c4c833b2a20426c4e3036e011f83f624893489b2",
+      "supervisor_loss": "a19ded8e3757c383068000a5a3aec5400daad9cf2a702f67c9b9a7ba0d09cd2d",
+      "wall_timeout": "dc2069a49ed8d2deab193fa26a3d1b1ca73ad198e9d1c19c8e2fc7f9e0433cd9"
+    },
+    "checks": {
+      "assertion_failed": true,
+      "controller_loss": true,
+      "eof_running": true,
+      "normal": true,
+      "output_limit": true,
+      "replay_and_corruption": true,
+      "source_revoked": true,
+      "supervisor_loss": true,
+      "wall_timeout": true
+    },
+    "cleanup_confirmed": true,
+    "environment_sha256": "e16c56691c206e5bebd8c1b2a325be9baee75f67020131606dcbc1a7bfb961d4",
+    "fixtures_retained": true,
+    "host": {
+      "kernel_version": "#208-Ubuntu SMP Fri Sep 4 10:22:38 UTC 2026",
+      "machine": "x86_64",
+      "node": "ubuntu",
+      "pointer_bits": 64,
+      "release": "5.15.0-198-generic",
+      "system": "Linux"
+    },
+    "interpreter_sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+    "mcp_calls": 0,
+    "model_calls": 0,
+    "owner_service_activated": false,
+    "owner_subscription_qualified": false,
+    "plan_sha256": "393af6aaa6bea874f22c75594054d5630326ca2dbd1059941022ea162ef2d7ac",
+    "planner_policy_qualified": false,
+    "receipt_sha256": "c7906942c2e1fea26e3b5c3266089180cbfdcc7f9c48f340be998bf508a48b6e",
+    "result": "qualified_synthetic_backend_fixture",
+    "runner_sha256": "248543c3248ad1d24a117e4d56e8f9e7c5ab6ba881d4663c742a3c5b030b3e4f",
+    "schema": "blackoutburst-linux-execution-backend-qualification-v1",
+    "scope": "synthetic_Linux_test_backend_only",
+    "source_execution_from_held_bytes": true,
+    "source_inventory_sha256": "4e651bd755885e809d0491d1b0cc62d857a003e7ea02555a34e583d5a2fc00d2",
+    "uid": 1000,
+    "unshare_sha256": "9f41a192393e7a05b843ae51bd187a76e09482392d37275d796f8881db97dde6"
+  }
+}
