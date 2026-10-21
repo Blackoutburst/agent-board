@@ -595,16 +595,19 @@ class DevelopmentBoardWorker:
         return {**self._public(op,reason='development_stop_requested'),'stop_requested':True}
 
     @staticmethod
-    def _audit_text(op):
+    def _audit_text(op, delivery=None):
         review=op['payload']['planner_receipt']['review']
-        return ('Development snapshot '+op['id']+'\n'
+        text=('Development snapshot '+op['id']+'\n'
                 'Inspection timestamp: '+str(review['inspected_at'])+'\n'
                 'Base: '+review['diff']['base_sha']+'\n'
                 'Source snapshot SHA256: '+review['snapshot_sha256']+'\n'
                 'Passed named suites: '+', '.join(sorted(review['tests']))+'\n'
                 'Dated audit only; verify current hashes before accepting or applying changes.')
+        if delivery is not None:
+            text+='\nDelivery commit: '+delivery['delivery_sha']+'\nDraft pull request: '+delivery['pull_request']['url']
+        return text
 
-    def publish(self, operation_id, *, audit_outcome=False):
+    def publish(self, operation_id, *, audit_outcome=False, delivery_publication=None):
         """Explicit publication of dated evidence in review, never done."""
         if type(audit_outcome) is not bool:
             raise DevelopmentError('invalid_development_publication')
@@ -612,12 +615,24 @@ class DevelopmentBoardWorker:
         with self.journal.lock(op['scope']):
             op=self.journal.get(operation_id)
             self._pin_controller(op)
+            if delivery_publication is not None:
+                from .development_delivery import DevelopmentPublishedDelivery
+                if (type(delivery_publication) is not DevelopmentPublishedDelivery
+                        or delivery_publication.proof.worker is not self
+                        or delivery_publication.proof.operation_id != operation_id):
+                    raise DevelopmentError('invalid_development_publication')
+            retained=op['payload'].get('publication')
+            if retained is not None and (retained.get('delivery') is None) != (delivery_publication is None):
+                raise DevelopmentError('development_publication_conflict')
             if op['stage']=='complete':
+                if delivery_publication is not None and delivery_publication.verify(self,operation_id,op['scope']) != retained['delivery']:
+                    raise DevelopmentError('development_publication_conflict')
                 return self._public(op)
             if op['stage'] not in ('result_ready','publishing'):
                 raise DevelopmentError('development_not_ready_for_publication')
             self.client.adopt_registration()
             try:
+                delivery=None if delivery_publication is None else delivery_publication.verify(self,operation_id,op['scope'])
                 if op['stage']=='result_ready':
                     from .dev_journal import DevelopmentJournal
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
@@ -630,19 +645,21 @@ class DevelopmentBoardWorker:
                     authorization.claim_id=op['payload']['claim_id']
                     authorization()
                     ticket=authorization.snapshot(require_claim=True)['ticket']
-                    text=self._audit_text(op)
+                    text=self._audit_text(op,delivery)
                     evidence=ticket['evidence']+('\n\n' if ticket['evidence'] else '')+text
                     outcome=('Development audit ready for review; source snapshot SHA256: '+
                         op['payload']['planner_receipt']['review']['snapshot_sha256']) if audit_outcome else ticket['outcome']
                     changes={'status':'review','outcome':outcome,'evidence':evidence,'release_claim':True}
                     op=self._save(op,'publishing',publication={'expected_version':ticket['version'],'changes':changes,
-                        'audit_outcome':audit_outcome})
+                        'audit_outcome':audit_outcome,'delivery':delivery})
                 intent=op['payload']['publication']
-                if intent.get('audit_outcome',False) is not audit_outcome:
+                if intent.get('audit_outcome',False) is not audit_outcome or intent.get('delivery') != delivery:
                     raise DevelopmentError('development_publication_conflict')
                 response=self.client.call('get_ticket',{'ticket_id':op['scope']['ticket_id']})
                 ticket=response['ticket']
                 if ticket['version']==intent['expected_version'] and ticket['claimant'] is not None:
+                    if delivery_publication is not None and delivery_publication.verify(self,operation_id,op['scope']) != intent['delivery']:
+                        raise DevelopmentError('development_publication_conflict')
                     # Revalidate full live authority/context even when retrying
                     # an exact optimistic publication intent.
                     with closing(DevelopmentJournal(op['configuration']['pins']['broker']['path'])) as manifest:
