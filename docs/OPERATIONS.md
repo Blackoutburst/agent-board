@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.16.2/schema 16 with adapter 0.30.5. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema16, its draft barriers and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
+Current source is Board 2.16.2/schema 16 with adapter 0.30.6. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema16, its draft barriers and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures
@@ -8,6 +8,15 @@ only. Historical native receipts are not adopted by adapter 0.30.
 Older qualification receipts remain tied to their exact source and private pins;
 they do not qualify this integrated source or authorize a deployment.
 
+
+Adapter 0.30.6 adds only the pure launch-origin consistency foundation described
+in [MESSAGE_LAUNCH_BINDINGS.md](../integrations/codex-personal/MESSAGE_LAUNCH_BINDINGS.md).
+Its detached data checks preserve old launch hashes when a new target is added
+structurally; they neither authenticate their inputs nor create launch authority.
+No runtime caller, journal migration, Board operation, pairing or login is wired
+to these functions. Board/schema/API and Host4/Message3 remain unchanged. Existing
+protected owner releases remain separately pinned; publication does not upgrade
+or activate them. The future B transition still requires separate reviewed work.
 
 Adapter 0.30.5 closes the recovery dependency between an already queued human
 Stop and an executed-message disposition. The disposition pins the exact bounded
