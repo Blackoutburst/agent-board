@@ -9,6 +9,15 @@ class ServerControlClient(BoardReader):
         raise BoardReadError('managed_registration_forbidden')
 
     def call(self,name,args):
+        from .message_append_protocol import TOOLS as APPEND_TOOLS
+        if name in APPEND_TOOLS:
+            from .message_append_protocol import arguments as append_arguments, response as append_response
+            try:append_arguments(name,args)
+            except HostError:raise BoardReadError('managed_protocol_invalid') from None
+            self._initialize()
+            result=self._tool(name,args)
+            try:return append_response(name,result,args)
+            except HostError:raise BoardReadError('managed_protocol_invalid') from None
         try:arguments(name,args)
         except HostError:raise BoardReadError('managed_protocol_invalid') from None
         self._initialize()

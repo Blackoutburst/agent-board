@@ -863,6 +863,50 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
             expected_host_version,expected_instances_sha256,[entry.model_dump() for entry in entries],idempotency_key)
 
     @mcp.tool()
+    async def poll_server_messages_appends(host_id: ServerOpaque,
+            limit: Annotated[int, Field(strict=True, ge=1, le=16)] = 1) -> dict:
+        """Read one finite queue of explicit owner append requests. Metadata only; no registration, login, feed, model or execution authority."""
+        return board.poll_server_messages_appends(device_actor(), host_id, limit=limit)
+
+    @mcp.tool()
+    async def prepare_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, operation_id: ServerOpaque, source_release_sha256: ServerHash,
+            old_configuration_sha256: ServerHash, new_configuration_sha256: ServerHash,
+            old_catalog_sha256: ServerHash, new_catalog_sha256: ServerHash,
+            bindings_sha256: ServerHash, children_roster_sha256: ServerHash,
+            idempotency_key: ServerOpaque) -> dict:
+        """Pin the exact private proposal to a fresh human B request before any private effect. The Board checks public authority and CAS, never attests the private hashes. Cancelling is unavailable after this boundary."""
+        return board.prepare_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, operation_id=operation_id,
+            source_release_sha256=source_release_sha256, old_configuration_sha256=old_configuration_sha256,
+            new_configuration_sha256=new_configuration_sha256, old_catalog_sha256=old_catalog_sha256,
+            new_catalog_sha256=new_catalog_sha256, bindings_sha256=bindings_sha256,
+            children_roster_sha256=children_roster_sha256, idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def precommit_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, proof: dict, idempotency_key: ServerOpaque) -> dict:
+        """Recheck current owner, grant, profile, slot and complete real Stops before the exact append. A cached receipt remains delivery evidence only."""
+        return board.precommit_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, proof=proof, idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def commit_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, proof: dict, entry: ServerCatalogEntry,
+            idempotency_key: ServerOpaque) -> dict:
+        """Append exactly one inactive messages identity, preserving every old instance and Stop command. Hold the barrier until the protected owner confirms the matching local binding; never Start or attest authentication."""
+        return board.commit_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, proof=proof, entry=entry.model_dump(),
+            idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def complete_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, proof: dict, idempotency_key: ServerOpaque) -> dict:
+        """Confirm the same appended membership and release its barrier after exact local binding. Connection, cleanup and execution require their own observations and explicit controls."""
+        return board.complete_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, proof=proof, idempotency_key=idempotency_key)
+
+    @mcp.tool()
     async def poll_instance_commands(host_id: ServerOpaque,
                                      limit: Annotated[int, Field(strict=True, ge=1, le=20)] = 20) -> dict:
         """Read current instance observations and durable queued/accepted commands for this human-granted manager device. Redelivers unresolved commands; reading is not acknowledgement or launch authority. Cleanup remains available after work permission withdrawal, never after device revocation."""
@@ -1385,6 +1429,48 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/server-hosts/{host_id}/provisioning-requests/{request_id}/cancel')
     async def cancel_provisioning_request(host_id: ServerOpaque, request_id: ServerOpaque, request: Request, actor=Depends(human)):
         return board.cancel_server_provisioning_request(actor, host_id, request_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/grant')
+    async def messages_append_grant(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if request.query_params:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.get_server_messages_append_grant(actor, host_id)
+
+    @app.put('/api/server-hosts/{host_id}/messages-append/grant')
+    async def set_messages_append_grant(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.set_server_messages_append_grant(actor, host_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/context')
+    async def messages_append_context(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if set(request.query_params) != {'profile_id'} or len(request.query_params.getlist('profile_id')) != 1:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.get_server_messages_append_context(actor, host_id, request.query_params['profile_id'])
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/requests')
+    async def messages_append_requests(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        params = request.query_params
+        if set(params) - {'before', 'limit'} or any(len(params.getlist(key)) != 1 for key in params):
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        limit = params.get('limit', '16')
+        if limit not in {str(v) for v in range(1, 17)}:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.list_server_messages_appends(actor, host_id, before=params.get('before'), limit=int(limit))
+
+    @app.post('/api/server-hosts/{host_id}/messages-append/requests')
+    async def create_messages_append(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.create_server_messages_append(actor, host_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/requests/{request_id}')
+    async def messages_append_request(host_id: ServerOpaque, request_id: ServerOpaque,
+            request: Request, actor=Depends(human)):
+        if request.query_params:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.get_server_messages_append(actor, host_id, request_id)
+
+    @app.post('/api/server-hosts/{host_id}/messages-append/requests/{request_id}/cancel')
+    async def cancel_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            request: Request, actor=Depends(human)):
+        return board.cancel_server_messages_append(actor, host_id, request_id, **await provisioning_body(request))
 
     @app.post('/api/server-hosts/{host_id}/revoke')
     async def revoke_server_host(host_id: ServerOpaque, values: ServerHostRevoke, actor=Depends(human)):
