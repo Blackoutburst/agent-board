@@ -95,12 +95,70 @@ class LinuxPolicyTests(unittest.TestCase):
             self.assertEqual(command[:1+len(arguments)],[str(self.cli),*arguments])
             self.assertEqual(command[1+len(arguments):5+len(arguments)],
                 ['sandbox','--permission-profile',policy_module.PROFILE_NAME,'--include-managed-config'])
+            self.assertEqual(command[-2],policy_module.LINUX_CANARY)
             self.assertIn('default_permissions="board-linux-planner-read-v1"',command)
             self.assertNotIn('-P',command);self.assertNotIn('exec',command);self.assertNotIn('login',command)
             self.assertEqual(self.commands[1][3],8192)
             self.assertNotIn('OPENAI_API_KEY',self.commands[1][4])
             self.refuse(policy.qualify,'linux_planner_attempt_not_reusable')
         with LinuxPlannerPolicy(self.state) as reopened:reopened.validate_for(self.cli,self.workspace)
+
+    def test_linux_canary_is_pinned_and_old_canary_plan_is_never_converted(self):
+        from blackoutburst_agents.planner_policy import CANARY as darwin_canary
+        self.assertNotEqual(policy_module.LINUX_CANARY,darwin_canary)
+        self.prepare();path=self.state/'planner-plan.json';plan=decode(path.read_bytes())
+        self.assertEqual(plan['canary_sha256'],digest(policy_module.LINUX_CANARY.encode()))
+        plan['canary_sha256']=digest(darwin_canary.encode())
+        encoded=canonical(plan);path.write_bytes(encoded)
+        self.refuse(lambda:LinuxPlannerPolicy(self.state),'linux_planner_policy_changed')
+        self.assertEqual(path.read_bytes(),encoded)
+        self.assertIsNone(decode((self.state/'planner-qualification.json').read_bytes()))
+        self.run.assert_not_called()
+
+    def test_host_fixture_mutation_before_canary_refuses_without_sandbox_call(self):
+        self.prepare();original=policy_module._canary_host_fixtures
+        def mutate(owned):
+            directory,name,descriptor,pin=owned[-1]
+            (self.state/name).write_bytes(b'changed host fixture')
+            return original(owned)
+        with LinuxPlannerPolicy(self.state) as policy,patch.object(policy_module,'_canary_host_fixtures',side_effect=mutate):
+            self.refuse(policy.qualify,'linux_planner_qualification_cleanup_unconfirmed')
+        self.assertEqual([command[0] for command in self.commands],[[str(self.cli),'--version']])
+        self.assertFalse(decode((self.state/'planner-qualification.json').read_bytes())['cleanup_confirmed'])
+
+    def test_missing_replaced_or_mutated_host_original_never_accepts_claimed_denial(self):
+        for source in ('inside','outside'):
+            for change in ('delete','replace','modify'):
+                with self.subTest(source=source,change=change):
+                    self.setUp();self.prepare();changed=[]
+                    def falsify(argv,*args):
+                        result=self.fake_run(argv,*args)
+                        if 'sandbox' in argv:
+                            payload=decode(argv[-1].encode());path=Path(payload[source]);changed.append(path)
+                            if change in ('delete','replace'):path.unlink()
+                            if change!='delete':path.write_bytes(b'changed host original')
+                        return result
+                    with LinuxPlannerPolicy(self.state) as policy,patch.object(policy_module,'_run_bounded',side_effect=falsify):
+                        self.refuse(policy.qualify,'linux_planner_qualification_cleanup_unconfirmed')
+                    refusal=decode((self.state/'planner-qualification.json').read_bytes())
+                    self.assertFalse(refusal['cleanup_confirmed']);self.assertEqual(refusal['result'],'refused')
+                    self.assertEqual(changed[0].exists(),change!='delete')
+                    if change!='delete':self.assertEqual(changed[0].read_bytes(),b'changed host original')
+
+    def test_claimed_inside_write_denial_cannot_hide_a_created_file(self):
+        self.prepare();created=[]
+        def falsify(argv,*args):
+            result=self.fake_run(argv,*args)
+            if 'sandbox' in argv:
+                payload=decode(argv[-1].encode());path=Path(payload['inside_write'])
+                path.write_bytes(b'foreign synthetic write');created.append(path)
+            return result
+        with LinuxPlannerPolicy(self.state) as policy,patch.object(policy_module,'_run_bounded',side_effect=falsify):
+            self.refuse(policy.qualify,'linux_planner_qualification_cleanup_unconfirmed')
+        refusal=decode((self.state/'planner-qualification.json').read_bytes())
+        self.assertIs(refusal['checks']['inside_write_denied'],False)
+        self.assertIs(refusal['cleanup_confirmed'],False)
+        self.assertEqual(created[0].read_bytes(),b'foreign synthetic write')
 
     def test_profile_reads_only_the_exact_executable_and_workspace(self):
         public='/opt/blackoutburst-agent-host/releases/'+'7'*64+'/tools/codex'

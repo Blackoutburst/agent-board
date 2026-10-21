@@ -24,13 +24,37 @@ from .dev_manifest import (DevelopmentError, absolute_directory,
                            canonical, digest, identity, sha256, signature)
 from .dev_test_backend import _binary, _host
 from .linux_input_snapshot import _chain, _path
-from .planner_policy import CANARY, CHECKS, PlannerPolicyError, _directory, _separate
+from .planner_policy import CHECKS, PlannerPolicyError, _directory, _separate
 from .subscription_probe import _run_bounded, sanitized_environment
 
 PROFILE_NAME = 'board-linux-planner-read-v1'
 PROFILE_VERSION = 1
 ENVIRONMENT_SCHEMA = 'blackoutburst-linux-execution-environment-v1'
 PLAN_SCHEMA = 'blackoutburst-linux-planner-policy-v1'
+LINUX_CANARY = r'''
+import errno,json,socket,sys
+p=json.loads(sys.argv[1]);checks={}
+def denied(name,fn,allowed):
+    try:
+        fn();checks[name]=False
+    except OSError as e:
+        checks[name]=e.errno in allowed
+def read(path):
+    with open(path,'rb') as f:return f.read(64)
+def write(path):
+    with open(path,'xb') as f:f.write(b'synthetic planner canary')
+def connect():
+    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as s:
+        s.settimeout(1);s.connect(('127.0.0.1',p['port']))
+try:checks['inside_read']=read(p['inside'])==b'synthetic planner canary'
+except OSError:checks['inside_read']=False
+denied('inside_write_denied',lambda:write(p['inside_write']),(errno.EACCES,errno.EPERM,errno.EROFS))
+denied('outside_read_denied',lambda:read(p['outside']),(errno.EACCES,errno.EPERM,errno.ENOENT))
+denied('outside_write_denied',lambda:write(p['outside_write']),(errno.EACCES,errno.EPERM,errno.ENOENT))
+denied('network_loopback_denied',connect,(errno.EACCES,errno.EPERM))
+print(json.dumps({'schema':1,'checks':checks},sort_keys=True),flush=True)
+raise SystemExit(0 if all(checks.values()) else 78)
+'''
 MAX_PLAN_BYTES = 64 * 1024
 MAX_SOURCE_FILE = 256 * 1024
 MAX_SOURCE_TOTAL = 4 * 1024 * 1024
@@ -347,6 +371,14 @@ def _known_process_cleanup(result):
         {'timeout','output_limit','launch_failed','process_io_failed','unsupported_platform'})
 
 
+def _canary_host_fixtures(owned):
+    # A sandbox ENOENT is meaningful only with the original host fixtures held.
+    for directory,name,descriptor,pin in owned:
+        if (list(signature(os.fstat(descriptor))) != pin
+                or list(signature(os.stat(name,dir_fd=directory,follow_symlinks=False))) != pin):
+            _fail('linux_planner_policy_changed')
+
+
 def prepare_linux_planner_policy(directory, *, workspace, checkout, executable,
                                  cli_version, interpreter='/usr/bin/python3'):
     """New private plan only. No subprocess, native CLI, model or grant probe."""
@@ -372,7 +404,7 @@ def prepare_linux_planner_policy(directory, *, workspace, checkout, executable,
                 'executable':os.fspath(executable),'executable_pin':_executable_pin(executable),
                 'cli_version':cli_version,'cli_sha256':_binary(executable),
                 'interpreter':os.fspath(interpreter),'interpreter_pin':_executable_pin(interpreter),
-                'policy':permission_document(workspace,executable=executable),'canary_sha256':digest(CANARY.encode()),
+                'policy':permission_document(workspace,executable=executable),'canary_sha256':digest(LINUX_CANARY.encode()),
                 'source_pins':linux_source_pins(),'environment':environment,'environment_sha256':digest(canonical(environment))}
             if plan['cli_sha256'] != plan['executable_pin']['sha256'] or linux_execution_identity() != environment:
                 _fail('linux_planner_policy_changed')
@@ -450,7 +482,7 @@ class LinuxPlannerPolicy:
                     or type(p['origin']) is not str or str(uuid.UUID(p['origin'])) != p['origin']
                     or type(p['cli_version']) is not str or re.fullmatch(r'codex-cli [0-9][A-Za-z0-9._+-]{0,79}',p['cli_version']) is None
                     or canonical(p['policy']) != canonical(permission_document(p['workspace'],executable=p['executable']))
-                    or p['canary_sha256'] != digest(CANARY.encode())): _fail('linux_planner_policy_changed')
+                    or p['canary_sha256'] != digest(LINUX_CANARY.encode())): _fail('linux_planner_policy_changed')
             validate_linux_execution_identity(p['environment'])
             sha256(p['cli_sha256']);sha256(p['environment_sha256'])
             self.private.verify()
@@ -580,9 +612,11 @@ class LinuxPlannerPolicy:
                     'port':listener.getsockname()[1]}
                 command = [self.executable,*permission_arguments(self.workspace,executable=self.executable),
                     'sandbox','--permission-profile',PROFILE_NAME,'--include-managed-config',
-                    '--',self._plan['interpreter'],'-I','-S','-c',CANARY,canonical(payload).decode()]
+                    '--',self._plan['interpreter'],'-I','-S','-c',LINUX_CANARY,canonical(payload).decode()]
+                _canary_host_fixtures(owned)
                 run = _run_bounded(command,self.workspace,15,8192,env)
                 process_cleanup = process_cleanup and _known_process_cleanup(run)
+                _canary_host_fixtures(owned)
                 if type(run.stdout) is not bytes: _fail('linux_planner_canary_output_invalid')
                 value = decode(run.stdout)
                 if (type(value) is not dict or set(value) != {'schema','checks'}
