@@ -30,12 +30,12 @@ class RecipeTests(unittest.TestCase):
             '--expected-uid','1000','--root',str(self.root/'new'),'--output',str(self.root/'report.json')])
 
     def test_inventory_requires_exact_full_roster_and_retains_bytes_without_import(self):
-        self.assertEqual(len(recipe.ALLOWED_SOURCES),59)
+        self.assertEqual(len(recipe.ALLOWED_SOURCES),64)
         self.assertEqual(recipe.ALLOWED_SOURCES,tuple(sorted(set(recipe.ALLOWED_SOURCES))))
-        # The owner adds twelve transitive source pins in the integrated tree.
-        # This source-only branch still has the reviewed44-name base policy;
-        # The recipe refuses until its complete 59-name roster matches exactly.
-        self.assertLessEqual(set(LINUX_EXECUTION_SOURCES),set(recipe.ALLOWED_SOURCES))
+        # The held-byte launcher and both concrete execution policies must pin
+        # the exact closed import graph, including the separate command helper.
+        self.assertEqual(LINUX_EXECUTION_SOURCES,recipe.ALLOWED_SOURCES)
+        self.assertIn("git_publication_guardian.py",recipe.ALLOWED_SOURCES)
         before=set(sys.modules)
         inventory,sources=recipe.load_sources(str(self.package),str(self.inventory),self.expected)
         self.assertEqual(inventory['files'],self.files);self.assertEqual(set(sources),set(recipe.ALLOWED_SOURCES))
