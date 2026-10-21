@@ -1,6 +1,27 @@
-# Board interface contract — 2.16.2
+# Board interface contract — 2.17.0
 
-The browser REST API and MCP act on one database. Application version is `2.16.2`; schema version is `16`. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.17.0`; schema version is `17`; the MCP catalogue has 70 tools. Existing project/task IDs, conversations and device tokens are preserved by migration.
+
+## Explicit inactive message append (2.17.0, schema 17)
+
+`messages_append_v1` is a separate human grant and request for one existing paired
+personal Codex slot. Its six closed manager operations poll, prepare, precommit,
+commit, complete and report a blocked controller status. Manager mutations return
+the exact 23-field proof directly; human reads retain their separate view.
+Preparation fixes the original operation and private-data hashes before any
+private effect. Those declared hashes establish no private execution authority.
+
+The acquired owner worker applies one finite phase at a time using protected
+source, fixed private slots and real child locks. The barrier blocks positive
+commands and publication; current-device Stop and genuine cleanup remain
+available. Completion records one stopped/unknown member without a Start, feed,
+login, model call or authentication attestation. A metadata-only preparation
+draft cannot be promoted into this operation. See
+[SERVER-MESSAGES-APPEND.md](docs/SERVER-MESSAGES-APPEND.md).
+
+Schema 17 retains both request histories, barriers, manager proofs and controller
+statuses. Rollback requires compatible source and the current database. Board
+deployment neither upgrades nor activates a protected owner installation.
 
 ## Human preparation drafts (2.16.0, schema 16)
 
@@ -8,7 +29,7 @@ A separate human grant permits an inert preparation request for an additional
 message profile. A request holds a durable host-wide Start/Restart barrier until
 explicit human cancellation. It creates no instance, private file, connection,
 provider login or execution. Existing manager wire shapes and reason enums are
-preserved; manager consumption and applying an append are unavailable.
+preserved; these drafts have no manager consumption or append application path.
 The public context supplies server-computed profile/catalogue digests as read
 pins, and every mutation checks current authority and CAS transactionally.
 See [the draft contract](docs/SERVER-PROVISIONING-APPEND-PROPOSAL.md).

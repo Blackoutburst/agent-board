@@ -1,6 +1,13 @@
 # Host5 — contrat local d'append messages
 
-Base exacte : main d95697d60b81e8b79be27e039606bb34b39b2f20, SDK0.30.5/Host4/Message3. Ce lot ajoute un parcours privé non sélectionné : aucune CLI, aucun service, aucune nouvelle requête réseau ou activation. Le Board B et son autorisation fraîche restent un composant séparé. Le module pur message_launch_bindings.py et L1 restent inchangés.
+Source actuelle : Board 2.17.0/schema17 et SDK0.31.0. Le parcours privé Host5 est
+raccordé au vrai worker `managed-run` sous acquisition propriétaire ; il effectue
+seulement les RPC fermés et les phases finies de B. Aucune installation ne lance
+de service ou de modèle. Les prérequis et limites sont décrits dans
+[SERVER-MESSAGES-APPEND.md](../../docs/SERVER-MESSAGES-APPEND.md).
+
+Base historique de ce lot : main d95697d60b81e8b79be27e039606bb34b39b2f20,
+SDK0.30.5/Host4/Message3. Le module pur message_launch_bindings.py et L1 restent inchangés.
 
 ## Autorité et acquisitions
 

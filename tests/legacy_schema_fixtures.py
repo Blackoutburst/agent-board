@@ -15,6 +15,14 @@ PROVISIONING_SCHEMA16_TABLES = (
     'server_provisioning_grants',
 )
 
+MESSAGES_APPEND_SCHEMA17_TABLES = (
+    'server_messages_append_statuses',
+    'server_messages_append_barriers',
+    'server_messages_append_receipts',
+    'server_messages_append_requests',
+    'server_messages_append_grants',
+)
+
 
 def _drop_empty(db, names):
     for name in names:
@@ -27,7 +35,15 @@ def _drop_empty(db, names):
 def remove_provisioning_schema16_tables(db):
     """Test-only downgrade preparation; never discard a grant or barrier."""
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    _drop_empty(db, tuple(name for name in PROVISIONING_SCHEMA16_TABLES if name in tables))
+    # Preflight both generations before the first DROP. B/status references
+    # must disappear before reconstructing a store that also predates A.
+    _drop_empty(db, tuple(name for name in MESSAGES_APPEND_SCHEMA17_TABLES + PROVISIONING_SCHEMA16_TABLES if name in tables))
+
+
+def remove_messages_append_schema17_tables(db):
+    """Reconstruct schema16 only when every later B/status table is empty."""
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    _drop_empty(db, tuple(name for name in MESSAGES_APPEND_SCHEMA17_TABLES if name in tables))
 
 
 def remove_server_schema14_tables(db):
@@ -41,7 +57,7 @@ def remove_server_schema14_tables(db):
     """
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set(SERVER_SCHEMA14_TABLES) <= tables, 'fixture must start with schema14 tables'
-    removable = tuple(name for name in PROVISIONING_SCHEMA16_TABLES if name in tables) + SERVER_SCHEMA14_TABLES + tuple(
+    removable = tuple(name for name in MESSAGES_APPEND_SCHEMA17_TABLES + PROVISIONING_SCHEMA16_TABLES if name in tables) + SERVER_SCHEMA14_TABLES + tuple(
         name for name in ('runtime_admission_refusals',) if name in tables)
     _drop_empty(db, removable)
     remaining = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}

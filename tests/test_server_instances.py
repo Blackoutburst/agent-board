@@ -314,7 +314,7 @@ def test_schema13_to14_preserves_accounts_profiles_and_old_tables(env):
     assert reopened.authenticate(device['token']) == raw
     assert reopened.list_server_hosts(human) == {'hosts': []}
     with reopened._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 17
     assert Board(b.data_dir).list_server_hosts(human) == {'hosts': []}
 
 
