@@ -1060,7 +1060,7 @@ const Workspace = (() => {
     const startButton = btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart });
     const restartButton = btn("Redémarrer", () => serverActionDialog(owner, instance, "restart"), "quiet", { disabled: !canRestart });
     const actions = el("div", { class: "server-instance-actions" }, startButton,
-      btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && !activeCommand && !locallyPending }),
+      btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && instance.desired_state !== "running" && !activeCommand && !locallyPending }),
       restartButton);
     if (pending && ["prepared", "uncertain"].includes(pending.status)) actions.append(btn("Réessayer la même demande", guard(() => sendServerRecord(owner, pending)), "quiet"));
     card.append(note, actions);
