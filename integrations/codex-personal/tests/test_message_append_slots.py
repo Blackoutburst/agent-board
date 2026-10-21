@@ -82,3 +82,22 @@ def test_ambiguous_files_and_unexpected_fields_are_rejected(tmp_path,kind):
     elif kind=='duplicate-json':path.write_text('{"schema":"ignored",'+json.dumps(data)[1:])
     else:data['token']='must not be accepted';save()
     with pytest.raises(HostError):PreparedMessageSlots(base,configuration_guard=lambda _:None).candidate(record,cfg)
+
+
+def test_configuration_guard_cannot_mutate_candidate(tmp_path):
+    base,cfg,record,data,path,save=prepared(tmp_path);original=deepcopy(cfg)
+    def mutate(candidate):candidate['targets'][-1]['model']='changed-after-validation'
+    with pytest.raises(HostError):PreparedMessageSlots(base,configuration_guard=mutate).candidate(record,cfg)
+    assert cfg==original
+
+
+@pytest.mark.parametrize('changed',['connection','preparation'])
+def test_private_inputs_must_still_match_after_configuration_guard(tmp_path,changed):
+    base,cfg,record,data,path,save=prepared(tmp_path)
+    def mutate(_):
+        if changed=='connection':
+            connection=data['target']['connection_file']
+            with open(connection,'a') as stream:stream.write(' ')
+        else:
+            data['target']['model']='changed-after-validation';save()
+    with pytest.raises(HostError):PreparedMessageSlots(base,configuration_guard=mutate).candidate(record,cfg)

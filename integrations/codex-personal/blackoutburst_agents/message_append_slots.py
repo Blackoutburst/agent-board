@@ -5,13 +5,14 @@ paths and transport pins come from that private preparation. The resulting
 catalogue membership says nothing about provider authentication or model access.
 """
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
 import stat
 
-from .board_reader import _connection_file
-from .host_config import HostError, connection_digest, validate
+from .board_reader import BoardReadError, _connection_data, _json
+from .host_config import HostError, validate
 from .message_append_protocol import slot as validate_slot
 
 
@@ -33,6 +34,31 @@ def _private(path,base,*,directory=False):
     return path
 
 
+def _held_bytes(path,base):
+    """Bind parsed identity and its digest to the same private file snapshot."""
+    _private(path,base)
+    fd=None
+    try:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        before=os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid()
+                or stat.S_IMODE(before.st_mode)!=0o600 or before.st_nlink!=1
+                or not 1<=before.st_size<=65536):_fail()
+        chunks=[];length=0
+        while True:
+            part=os.read(fd,min(8192,65537-length))
+            if not part:break
+            chunks.append(part);length+=len(part)
+            if length>65536:_fail()
+        after=os.fstat(fd);named=Path(path).stat(follow_symlinks=False)
+        fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+        if any(getattr(before,k)!=getattr(after,k) or getattr(before,k)!=getattr(named,k) for k in fields):_fail()
+        return b''.join(chunks)
+    except (OSError,ValueError,TypeError):_fail()
+    finally:
+        if fd is not None:os.close(fd)
+
+
 class PreparedMessageSlots:
     def __init__(self,owner_home,*,configuration_guard):
         if not callable(configuration_guard):_fail()
@@ -45,32 +71,17 @@ class PreparedMessageSlots:
                 or slot['profile_version']!=body['profile_version']):_fail()
         # No filesystem path supplied by the Board enters this selection.
         path=self.base/'.config/blackoutburst-agent-host/message-slots'/(slot['slot_id']+'.json')
-        _private(path,self.base)
-        fd=None
+        raw=_held_bytes(path,self.base)
         try:
-            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-            before=os.fstat(fd)
-            if not 1<=before.st_size<=65536:_fail()
-            chunks=[];length=0
-            while True:
-                part=os.read(fd,min(8192,65537-length))
-                if not part:break
-                chunks.append(part);length+=len(part)
-                if length>65536:_fail()
-            after=os.fstat(fd);named=path.stat(follow_symlinks=False)
-            fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
-            if any(getattr(before,k)!=getattr(after,k) or getattr(before,k)!=getattr(named,k) for k in fields):_fail()
             def pairs(items):
                 value={}
                 for key,item in items:
                     if key in value:_fail()
                     value[key]=item
                 return value
-            prepared=json.loads(b''.join(chunks).decode('utf-8'),object_pairs_hook=pairs,
+            prepared=json.loads(raw.decode('utf-8'),object_pairs_hook=pairs,
                 parse_constant=lambda _:_fail())
         except (OSError,ValueError,UnicodeError,TypeError,RecursionError):_fail()
-        finally:
-            if fd is not None:os.close(fd)
         if (type(prepared) is not dict or set(prepared)!={'schema','slot','profile_sha256','target'}
                 or prepared['schema']!='owner-prepared-message-slot-v1' or prepared['slot']!=slot
                 or prepared['profile_sha256']!=body['profile_sha256']):_fail()
@@ -86,12 +97,16 @@ class PreparedMessageSlots:
             value=Path(target.get(key,''))
             if not value.is_absolute() or value==root or not value.is_relative_to(root):_fail()
             _private(value,self.base,directory=key=='workspace')
-        connection=_connection_file(target['connection_file'])
+        connection_raw=_held_bytes(target['connection_file'],self.base)
+        try:connection=_connection_data(_json(connection_raw,'invalid_connection'))
+        except BoardReadError:_fail()
         if (connection['mcp_url']!=configuration['board_endpoint']
                 or connection['client']!=slot['agent_kind'] or connection['identity_key']!=slot['identity_key']
-                or connection_digest(target['connection_file'])!=target.get('connection_sha256')):_fail()
+                or hashlib.sha256(connection_raw).hexdigest()!=target.get('connection_sha256')):_fail()
         normalized=validate(candidate,bind_connections=True)
         if normalized!=candidate:_fail()
-        if self.configuration_guard(candidate) is not None:_fail()
-        _private(path,self.base)
+        guarded=deepcopy(candidate)
+        if self.configuration_guard(guarded) is not None or guarded!=candidate:_fail()
+        if (_held_bytes(target['connection_file'],self.base)!=connection_raw
+                or _held_bytes(path,self.base)!=raw):_fail()
         return candidate

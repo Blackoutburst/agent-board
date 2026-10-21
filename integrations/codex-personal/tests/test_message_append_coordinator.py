@@ -180,3 +180,20 @@ def test_completion_reply_lost_then_human_stop_keeps_both_operations_distinct(co
     new=next(row for row in f.board.get_server_host(f.human,'fixture-host')['instances'] if row['catalog_key']=='aaa-added')
     assert new['current_command']['id']==stop['id'] and new['current_command']['status']=='queued'
     assert new['observed_state']=='unknown' and new['cleanup_confirmed'] is False
+
+
+@pytest.mark.parametrize('field,new',[('request_sha256','f'*64),('device_id','different-manager'),
+    ('grant_version',2),('owner_id','different-owner'),('expected_host_version',2),
+    ('expected_catalog_version',2),('expected_instances_sha256','e'*64)])
+def test_prepare_receipt_is_bound_to_the_original_human_request(coupled,field,new):
+    f,client,c,request=coupled;original=client.call
+    def substitute(name,args):
+        result=original(name,args)
+        if name=='prepare_server_messages_append':result={**result,field:new}
+        return result
+    client.call=substitute
+    with f.locked():
+        before=f.snapshot()
+        with pytest.raises(HostError,match='receipt_conflict'):c.advance(current_record(f,client,c))
+        assert f.snapshot()==before
+        assert f.host._db.execute('PRAGMA user_version').fetchone()[0]==4

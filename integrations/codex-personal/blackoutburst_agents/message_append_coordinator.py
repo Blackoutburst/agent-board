@@ -181,6 +181,11 @@ class MessagesAppendCoordinator:
         arguments(name,args)
         result=self.client.call(name,args)
         response(name,result,args)
+        expected={key:record['request'][key] for key in
+            ('owner_id','host_id','device_id','request_id','request_sha256')}
+        expected.update({key:record['body'][key] for key in ('grant_version','expected_host_version',
+            'expected_catalog_version','expected_instances_sha256')})
+        if any(result[key]!=value for key,value in expected.items()):_fail('receipt_conflict')
         if name in ('prepare_server_messages_append','precommit_server_messages_append'):
             self._old_membership(plan,result)
         elif name in ('commit_server_messages_append','complete_server_messages_append'):
