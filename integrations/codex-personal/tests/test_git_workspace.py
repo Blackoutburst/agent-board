@@ -323,6 +323,54 @@ def test_source_alternates_refused_before_git_or_copy(setup):
     assert not list(setup['work'].iterdir())
 
 
+@pytest.mark.parametrize('metadata', ['shallow', 'info/grafts', 'refs/replace/unused', 'objects/pack/unused.promisor'])
+@pytest.mark.parametrize('stage', ['source', 'ready'])
+def test_history_or_storage_overrides_are_refused_before_git(setup, monkeypatch, metadata, stage):
+    if stage == 'ready':
+        operation, _ = planned(setup)
+        value = setup['controller'].materialize(operation)
+        repository = Path(value['checkout'])
+        (repository / 'example.py').write_text('preserve this edit\n')
+    else:
+        repository = setup['source']
+    marker = repository / '.git' / metadata
+    marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    marker.write_text(setup['grant'].base_commit + '\n')
+    marker.chmod(0o600)
+    monkeypatch.setattr(setup['controller'], '_git', lambda *_args, **_kwargs: pytest.fail('Git ran with overridden history'))
+    with pytest.raises(DevelopmentError, match='git_workspace_checkout_changed' if stage == 'ready' else 'git_workspace_source_layout_refused'):
+        if stage == 'ready':
+            setup['controller'].manifest_inputs(operation)
+        else:
+            planned(setup)
+    if stage == 'ready':
+        assert (repository / 'example.py').read_text() == 'preserve this edit\n'
+
+
+@pytest.mark.parametrize('metadata', ['shallow', 'info/grafts'])
+def test_ready_cannot_hide_missing_parent_history_from_integrity_check(setup, metadata):
+    source = setup['source']
+    parent = setup['grant'].base_commit
+    (source / 'example.py').write_text('value = 2\n')
+    git(source, 'add', 'example.py')
+    git(source, 'commit', '--quiet', '-m', 'Second synthetic commit')
+    base = git(source, 'rev-parse', 'HEAD')
+    grant = replace(setup['grant'], base_commit=base)
+    controller = LocalGitWorkspaceController(setup['state'], grant=grant)
+    operation = str(uuid.uuid4())
+    controller.plan(operation_id=operation, scope=setup['scope'])
+    value = controller.materialize(operation)
+    checkout = Path(value['checkout'])
+    (checkout / 'example.py').write_text('preserve this edit\n')
+    (checkout / '.git/objects' / parent[:2] / parent[2:]).unlink()
+    marker = checkout / '.git' / metadata
+    marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    marker.write_text(base + '\n'); marker.chmod(0o600)
+    with pytest.raises(DevelopmentError, match='git_workspace_checkout_changed'):
+        controller.manifest_inputs(operation)
+    assert (checkout / 'example.py').read_text() == 'preserve this edit\n'
+
+
 @pytest.mark.parametrize('key,value', [('include.path', '/outside/private-config'),
     ('core.worktree', '/outside/worktree'), ('extensions.partialClone', 'outside'),
     ('remote.outside.promisor', 'true')])

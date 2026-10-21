@@ -38,6 +38,8 @@ component is not an OS sandbox against arbitrary same-user Python code.
   files, unsafe ownership/modes and external alternate/common directories are
   refused. The bounded metadata inventory brackets each subsequent Git read;
   an observed substitution refuses the copy without touching working files.
+  The same source/copy layout rule refuses shallow boundaries, grafts,
+  replacement refs and promisor markers that could hide missing history.
 - `status(operation_id)` returns recorded local metadata. It does **not** prove
   current process health, Board ownership, credentials or checkout validity.
 - `manifest_inputs(operation_id)` revalidates a ready checkout and returns
@@ -78,7 +80,9 @@ and hard resource enforcement require a separate host contract.
 
 Git uses fixed arguments without a shell, an explicit local source and
 `clone --local --no-hardlinks --no-checkout`, then its own branch checkout.
-The copied object database passes a strict local integrity check before checkout.
+The copied object database passes a strict local integrity check before checkout
+and whenever ready inputs are revalidated; history/storage overrides are refused
+before this check can interpret them.
 The process receives a minimal environment, disabled inherited/system/global
 Git configuration, disabled hooks/templates/fsmonitor, no recursive submodules,
 no replacement objects or lazy fetching, and file-only protocol permission.

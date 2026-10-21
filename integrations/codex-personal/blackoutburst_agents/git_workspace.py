@@ -127,6 +127,19 @@ def _scope(value):
     return decode(canonical(value))
 
 
+def _unsupported_metadata(relative):
+    """One full-copy layout contract, for both source and ready copies.
+
+    These markers redirect storage or suppress object/history verification.
+    Replacement objects are also disabled in the fixed Git environment; their
+    metadata is refused rather than becoming an implicit alternate history.
+    """
+    return (relative in {'commondir', 'shallow', 'info/grafts',
+                         'objects/info/alternates', 'objects/info/http-alternates', 'refs/replace'}
+            or relative.startswith('refs/replace/')
+            or relative.startswith('objects/pack/') and relative.endswith('.promisor'))
+
+
 @dataclass(frozen=True)
 class LocalRepositoryGrant:
     """Exact owner-supplied local resource declaration, not Board authority."""
@@ -191,9 +204,6 @@ class LocalGitWorkspaceController:
         self._roots()
         git_directory = self.repository / '.git'
         pin = _directory(git_directory)
-        for name in ('commondir', 'shallow', 'objects/info/alternates', 'objects/info/http-alternates'):
-            if os.path.lexists(git_directory / name):
-                _fail('git_workspace_source_layout_refused')
         # --local clone copies object files, never invokes upload-pack or a
         # remote helper. Bound and inspect that complete input before Git runs.
         total = count = 0
@@ -201,7 +211,8 @@ class LocalGitWorkspaceController:
             for name in directories + files:
                 path = Path(root) / name
                 item = path.lstat()
-                if (item.st_uid != os.geteuid() or item.st_mode & 0o022
+                if (_unsupported_metadata(path.relative_to(git_directory).as_posix())
+                        or item.st_uid != os.geteuid() or item.st_mode & 0o022
                         or not (stat.S_ISREG(item.st_mode) or stat.S_ISDIR(item.st_mode))):
                     _fail('git_workspace_source_layout_refused')
                 count += 1
@@ -443,7 +454,7 @@ class LocalGitWorkspaceController:
             for name in names:
                 before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
                 relative = prefix + name
-                if (before.st_uid != os.geteuid() or before.st_mode & 0o022
+                if (_unsupported_metadata(relative) or before.st_uid != os.geteuid() or before.st_mode & 0o022
                         or not (stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode))
                         or stat.S_ISREG(before.st_mode) and before.st_nlink != 1):
                     _fail('git_workspace_checkout_changed')
@@ -497,9 +508,7 @@ class LocalGitWorkspaceController:
                 or _directory(checkout / '.git', private=True) == _directory(self.repository / '.git')):
             _fail('git_workspace_checkout_changed')
         metadata = self._copy_metadata(checkout)
-        if (value['git_config_sha256'] != digest(_file(checkout / '.git/config', 32768))
-                or any(os.path.lexists(checkout / '.git' / name) for name in
-                       ('commondir', 'objects/info/alternates', 'objects/info/http-alternates'))):
+        if value['git_config_sha256'] != digest(_file(checkout / '.git/config', 32768)):
             _fail('git_workspace_checkout_changed')
 
         def read_git(arguments):
