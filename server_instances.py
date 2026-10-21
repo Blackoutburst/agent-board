@@ -258,12 +258,22 @@ class ServerInstancesMixin:
     def _server_owner_enabled(self, db, owner_id):
         return json.loads(self._owner(db, owner_id)['policy']).get('enabled') is True
 
-    def _server_start_reason(self, db, host, instance):
+    def _server_start_reason(self, db, host, instance, *, _barriers=True):
         if host['revoked_at'] is not None:
             return 'host_revoked'
-        if self._provisioning_has_barrier(db, host):
-            # Keep the existing closed SDK wire: launch authority is suspended.
-            return 'authorization_changed'
+        if _barriers:
+            if self._provisioning_has_barrier(db, host):
+                return 'authorization_changed'
+            # This is a non-authoritative display of launch eligibility. An
+            # invalid B ledger denies launch but cannot consume the independent
+            # existing device channel needed to deliver/ACK/report a Stop.
+            # Positive mutations still call the strict B guard before effects.
+            from board import BoardError
+            try:
+                if self._messages_append_has_barrier(db, host):
+                    return 'authorization_changed'
+            except BoardError:
+                return 'authorization_changed'
         if not instance['active']:
             return 'configuration_changed'
         if not db.execute('SELECT 1 FROM devices WHERE id=? AND owner_id=? AND revoked_at IS NULL',
@@ -337,6 +347,7 @@ class ServerInstancesMixin:
             actor = self._human(db, actor)
             for row in db.execute('SELECT * FROM server_hosts WHERE owner_id=? LIMIT 17', (actor['owner_id'],)):
                 self._provisioning_require_no_barrier(db, row)
+                self._messages_append_require_no_barrier(db, row)
             prior = self._server_retry(db, actor['owner_id'], 'create_host', idempotency_key, payload)
             if prior is not None:
                 return prior
@@ -367,8 +378,10 @@ class ServerInstancesMixin:
         with self._tx() as db:
             host = self._server_manager(db, actor, host_id)
             self._provisioning_require_no_barrier(db, host)
+            self._messages_append_require_no_barrier(db, host)
             if host['revoked_at'] is not None or not self._server_owner_enabled(db, host['owner_id']):
                 _fail('server_catalog_not_authorized', 403)
+            self._messages_append_publish_identity(db, host, entries)
             prior = self._server_retry(db, host['owner_id'], 'catalog:' + host_id, idempotency_key, payload)
             if prior is not None:
                 return prior
@@ -431,6 +444,7 @@ class ServerInstancesMixin:
             def authorized():
                 current=self._server_manager(db,actor,host_id)
                 self._provisioning_require_no_barrier(db,current)
+                self._messages_append_require_no_barrier(db,current)
                 if current['revoked_at'] is not None or not self._server_owner_enabled(db,current['owner_id']):
                     _fail('server_catalog_not_authorized',403)
                 for entry in entries:
@@ -541,6 +555,7 @@ class ServerInstancesMixin:
             host = self._server_host(db, actor, row['host_id'])
             if action != 'stop':
                 self._provisioning_require_no_barrier(db, host)
+                self._messages_append_require_no_barrier(db, host)
             prior = self._server_retry(db, actor['owner_id'], 'command', idempotency_key, payload)
             if prior is not None:
                 return prior
@@ -627,6 +642,7 @@ class ServerInstancesMixin:
             host = self._server_manager(db, actor, host_id)
             if state in ('starting', 'ready', 'busy'):
                 self._provisioning_require_no_barrier(db, host)
+                self._messages_append_require_no_barrier(db, host)
             prior = self._server_retry(db, host['owner_id'], 'report:' + host_id, idempotency_key, payload)
             if prior is not None:
                 return prior

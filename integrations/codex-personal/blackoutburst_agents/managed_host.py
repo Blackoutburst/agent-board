@@ -39,7 +39,7 @@ def _sha(value):
 
 class ManagedHostJournalMixin:
     def managed(self):
-        return self._db.execute('PRAGMA user_version').fetchone()[0] in (2,3,4)
+        return self._db.execute('PRAGMA user_version').fetchone()[0] in (2,3,4,5)
 
     def _check_managed(self):
         if not self.managed():return
@@ -54,6 +54,7 @@ class ManagedHostJournalMixin:
 
     def prepare_managed(self, host_id, catalog):
         self._require_lock();_opaque(host_id)
+        if self._messages_append_version()==5:raise HostError('messages_append_legacy_mutation')
         config=self.control()['configuration']
         if type(catalog) is not list or len(catalog)!=len(config['targets']):
             raise HostError('managed_catalog_invalid')
@@ -95,6 +96,7 @@ class ManagedHostJournalMixin:
         self._check_managed()
 
     def bind_managed_instances(self, bindings):
+        if self._messages_append_version()==5:raise HostError('messages_append_legacy_mutation')
         if type(bindings) is not dict:raise HostError('managed_catalog_invalid')
         with self._tx() as db:
             rows=db.execute('SELECT * FROM managed_targets').fetchall()
@@ -141,6 +143,7 @@ class ManagedHostJournalMixin:
         from .server_control_protocol import arguments as validate_arguments
         validate_arguments(method,arguments)
         with self._tx() as db:
+            self._messages_append_effect(method,arguments)
             old=db.execute('SELECT * FROM managed_effects WHERE id=?',(identity,)).fetchone()
             if old:
                 value=self.managed_effect(identity)
@@ -188,6 +191,8 @@ class ManagedHostJournalMixin:
     def finish_managed_effect(self, identity, result):
         from .server_control_protocol import response
         with self._tx() as db:
+            original=self.managed_effect(identity)
+            if original is not None:self._messages_append_effect(original['method'],original['arguments'])
             row=self.managed_effect(identity)
             if row is None:raise HostError('managed_effect_invalid')
             response(row['method'],result)
@@ -216,6 +221,8 @@ class ManagedHostJournalMixin:
         return not target['enabled'] or token!=(target['generation'],target['activation'])
 
     def target_selected(self, target_id):
+        try:self.require_no_messages_append()
+        except HostError:return False
         if not self.managed():return True
         t=self.managed_target(target_id)
         return t['enabled'] and t['remaining']>0
@@ -245,6 +252,7 @@ class ManagedHostJournalMixin:
             raise HostError('managed_command_invalid')
         payload=json.dumps(command,sort_keys=True,separators=(',',':'));hashed=digest(command)
         with self._tx() as db:
+            if command['action']!='stop':self.require_no_messages_append()
             old=db.execute('SELECT * FROM managed_commands WHERE id=?',(command['id'],)).fetchone()
             if old:
                 if old['payload_sha256']!=hashed or old['payload']!=payload:raise HostError('managed_command_conflict')
@@ -272,6 +280,7 @@ class ManagedHostJournalMixin:
         with self._tx() as db:
             row=db.execute('SELECT * FROM managed_commands WHERE id=?',(command_id,)).fetchone()
             if row is None:raise HostError('managed_command_unknown')
+            if row['action']!='stop':self.require_no_messages_append()
             if row['state']!='queued':return dict(row)
             try:
                 if len(row['payload'].encode('utf-8'))>4096:raise ValueError()
@@ -308,6 +317,7 @@ class ManagedHostJournalMixin:
             return dict(db.execute('SELECT * FROM managed_commands WHERE id=?',(command_id,)).fetchone())
 
     def _charge_managed_dispatch(self, db, target_id):
+        self.require_no_messages_append()
         if not self.managed():return
         target=self.managed_target(target_id)
         if not target['enabled']:raise HostError('host_target_stopped')
@@ -330,6 +340,7 @@ class ManagedHostJournalMixin:
         return [self.managed_effect(r[0]) for r in rows]
 
     def require_no_catalog_source_transition(self):
+        self.require_no_messages_append()
         self._require_no_unsettled_executed_disposition()
         if self.managed() and any(r['state']!='complete' for r in self.catalog_source_transitions()):
             raise HostError('catalog_transition_pending')

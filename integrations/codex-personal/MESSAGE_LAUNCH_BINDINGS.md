@@ -1,6 +1,8 @@
 # Bindings de lancement messages — fondation pure
 
-Source SDK **0.30.6** ; aucun raccord d’exécution ni déploiement propriétaire.
+Fondation historique SDK **0.30.6** ; ce lot initial n'ajoutait aucun raccord
+d’exécution ni déploiement propriétaire. Le raccord actuel SDK0.31.0 est décrit
+dans [MESSAGE_APPEND_HOST5.md](MESSAGE_APPEND_HOST5.md).
 
 `message_launch_bindings.py` vérifie uniquement la **cohérence structurelle** de données. Il ne lit ni n’écrit aucun fichier/journal, n’interroge aucun service et ne crée aucune permission, migration ou transition d’append. Aucun autre composant produit ne l’utilise dans ce lot. Les fonctions ne valident ni le propriétaire réel, ni la release installée, ni la fraîcheur du catalogue, ni l’appairage, ni un nettoyage.
 

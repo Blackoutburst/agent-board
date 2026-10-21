@@ -21,6 +21,7 @@ from message_feed import MessageFeedMixin, migrate_message_feed
 from delegation_families import DelegationFamiliesMixin, migrate_delegation_families
 from server_instances import ServerInstancesMixin, migrate_server_instances
 from server_provisioning import ServerProvisioningMixin, migrate_server_provisioning
+from server_messages_append import ServerMessagesAppendMixin, migrate_server_messages_append
 
 
 class BoardError(Exception):
@@ -51,7 +52,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -66,7 +67,7 @@ class Board(ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMix
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 16:
+            if version > 17:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -183,7 +184,11 @@ class Board(ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMix
             if version < 16:
                 migrate_server_provisioning(db)
                 db.execute("PRAGMA user_version=16")
+            if version < 17:
+                migrate_server_messages_append(db)
+                db.execute("PRAGMA user_version=17")
             self._provisioning_schema(db)
+            self._messages_append_schema(db)
 
     @contextmanager
     def _connection(self):

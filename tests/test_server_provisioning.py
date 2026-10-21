@@ -10,6 +10,7 @@ import pytest
 from board import Board, BoardError
 from server_provisioning import GRANT_SCHEMA, REQUEST_SCHEMA, CANCEL_SCHEMA, SQL
 from test_server_instances import env, report, command, ack
+from legacy_schema_fixtures import remove_provisioning_schema16_tables, MESSAGES_APPEND_SCHEMA17_TABLES
 
 
 def stop(e, key='stop'):
@@ -262,9 +263,7 @@ def test_cancel_cas_and_pagination_keep_terminal_history(ready):
 
 def downgrade_empty_provisioning(b):
     with b._tx() as db:
-        for name in tuple(SQL)[:4]: assert db.execute('SELECT COUNT(*) FROM '+name).fetchone()[0]==0
-        for name in ('server_provisioning_barriers','server_provisioning_receipts','server_provisioning_requests','server_provisioning_grants'):
-            db.execute('DROP TABLE '+name)
+        remove_provisioning_schema16_tables(db)
         db.execute('PRAGMA user_version=15')
 
 
@@ -281,8 +280,8 @@ def test_schema16_migration_is_atomic_and_preserves_old_rows(env,monkeypatch):
     assert snapshot(b)==before
     monkeypatch.setattr(module,'migrate_server_provisioning',original)
     reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4])==before
-    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==16
+    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)==before
+    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 17
 
 
 @pytest.mark.parametrize('phase', ['request', 'cancel'])
@@ -378,7 +377,7 @@ def test_schema16_retains_actual_runtime_and_permanent_admission_refusal(runtime
     downgrade_empty_provisioning(b)
     before=snapshot(b)
     reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4])==before
+    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)==before
     assert reopened.reserve_message_execution(actor(e),**args)==proof
     with reopened._connection() as db:
         assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0]==1

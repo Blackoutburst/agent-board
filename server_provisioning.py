@@ -106,7 +106,7 @@ def _request_view(row, body):
 
 class ServerProvisioningMixin:
     def _provisioning_schema(self, db):
-        if db.execute('PRAGMA user_version').fetchone()[0] != 16:
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (16, 17):
             _fail('server_provisioning_schema_invalid', 409)
         names = tuple(SQL)[:4]
         if any(row['name'] not in SQL for row in db.execute(
@@ -284,6 +284,8 @@ class ServerProvisioningMixin:
             detail['request_id'] = result['request_id']
         event_id = self._audit(db, actor, 'server_provisioning_' + operation, detail)
         self._provisioning_state(db, host)
+        if operation == 'request':
+            self._messages_append_require_no_barrier(db, host)
         current = self._server_host(db, actor, host['id'])
         if operation == 'request' or (operation == 'grant' and result['enabled']):
             self._provisioning_host(db, actor, host['id'], live=True)
@@ -342,6 +344,7 @@ class ServerProvisioningMixin:
         with self._tx() as db:
             actor, host = self._provisioning_host(db, actor, host_id, live=True)
             self._provisioning_request_authority(db, host, values)
+            self._messages_append_require_no_barrier(db, host)
             payload = {'host_id': host_id, **values}
             prior = self._provisioning_retry(db, host, 'request', values['idempotency_key'], payload)
             if prior is not None:

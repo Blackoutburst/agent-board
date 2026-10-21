@@ -368,7 +368,7 @@ def test_schema12_migration_preserves_live_family_and_frame_identities(frame_fix
         db.commit()
     migrated = Board(board.data_dir)
     with migrated._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 17
         assert {'blocked_reason', 'unblock_owner', 'recheck_at'} <= {
             row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
     after = http_frame(frame_fixture)

@@ -33,6 +33,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from board import Board, BoardError
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
+from server_messages_append import validate_messages_append_arguments
 from runtime import validate_message_admission_seal_arguments
 from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
@@ -42,6 +43,9 @@ from development_frames import (get_development_frame as development_frame, wire
 ROOT = Path(__file__).resolve().parent
 COOKIE = "board_session"
 MAX_BODY = 15 * 1024 * 1024
+APPEND_MANAGER_TOOLS = frozenset({'poll_server_messages_appends', 'prepare_server_messages_append',
+    'precommit_server_messages_append', 'commit_server_messages_append', 'complete_server_messages_append',
+    'report_server_messages_append_status'})
 
 
 class BoardMCP(FastMCP):
@@ -52,6 +56,8 @@ class BoardMCP(FastMCP):
             development_frame_arguments(arguments)
         elif name in MANAGER_TOOLS:
             validate_manager_arguments(name, arguments)
+        elif name in APPEND_MANAGER_TOOLS:
+            validate_messages_append_arguments(name, arguments)
         elif name == 'seal_message_execution_admission':
             validate_message_admission_seal_arguments(arguments)
         return await super().call_tool(name, arguments)
@@ -60,7 +66,7 @@ class BoardMCP(FastMCP):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
                 if tool.name in {'get_development_frame', 'seal_message_execution_admission'}
-                or tool.name in MANAGER_TOOLS else tool for tool in tools]
+                or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS else tool for tool in tools]
 
 
 class Body(BaseModel):
@@ -863,6 +869,60 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
             expected_host_version,expected_instances_sha256,[entry.model_dump() for entry in entries],idempotency_key)
 
     @mcp.tool()
+    async def poll_server_messages_appends(host_id: ServerOpaque,
+            limit: Annotated[int, Field(strict=True, ge=1, le=16)]) -> dict:
+        """Read one finite queue of explicit owner append requests. Metadata only; no registration, login, feed, model or execution authority."""
+        return board.poll_server_messages_appends(device_actor(), host_id, limit=limit)
+
+    @mcp.tool()
+    async def prepare_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, operation_id: ServerOpaque, source_release_sha256: ServerHash,
+            old_configuration_sha256: ServerHash, new_configuration_sha256: ServerHash,
+            old_catalog_sha256: ServerHash, new_catalog_sha256: ServerHash,
+            bindings_sha256: ServerHash, children_roster_sha256: ServerHash,
+            idempotency_key: ServerOpaque) -> dict:
+        """Pin the exact private proposal to a fresh human B request before any private effect. The Board checks public authority and CAS, never attests the private hashes. Cancelling is unavailable after this boundary."""
+        return board.prepare_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, operation_id=operation_id,
+            source_release_sha256=source_release_sha256, old_configuration_sha256=old_configuration_sha256,
+            new_configuration_sha256=new_configuration_sha256, old_catalog_sha256=old_catalog_sha256,
+            new_catalog_sha256=new_catalog_sha256, bindings_sha256=bindings_sha256,
+            children_roster_sha256=children_roster_sha256, idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def precommit_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, proof: dict, idempotency_key: ServerOpaque) -> dict:
+        """Recheck current owner, grant, profile, slot and complete real Stops before the exact append. A cached receipt remains delivery evidence only."""
+        return board.precommit_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, proof=proof, idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def commit_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, proof: dict, entry: ServerCatalogEntry,
+            idempotency_key: ServerOpaque) -> dict:
+        """Append exactly one inactive messages identity, preserving every old instance and Stop command. Hold the barrier until the protected owner confirms the matching local binding; never Start or attest authentication."""
+        return board.commit_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, proof=proof, entry=entry.model_dump(),
+            idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def complete_server_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Version, proof: dict, idempotency_key: ServerOpaque) -> dict:
+        """Confirm the same appended membership and release its barrier after exact local binding. Connection, cleanup and execution require their own observations and explicit controls."""
+        return board.complete_server_messages_append(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, proof=proof, idempotency_key=idempotency_key)
+
+    @mcp.tool()
+    async def report_server_messages_append_status(host_id: ServerOpaque, request_id: ServerOpaque,
+            expected_revision: Annotated[int, Field(strict=True, ge=1, le=5)], status: Literal['blocked'],
+            reason: Literal['slot_unavailable','source_changed','children_uncertain','connection_lost',
+                'request_changed','authorization_changed','local_state_conflict','local_io_failed',
+                'protocol_error','requires_reconciliation'], idempotency_key: ServerOpaque) -> dict:
+        """Report a closed inability code for this exact request revision. Metadata only: grants no execution, mutation of phase, authentication, ready state or cleanup. The existing manager device may report after work authority is withdrawn."""
+        return board.report_server_messages_append_status(device_actor(), host_id, request_id,
+            expected_revision=expected_revision, status=status, reason=reason, idempotency_key=idempotency_key)
+
+    @mcp.tool()
     async def poll_instance_commands(host_id: ServerOpaque,
                                      limit: Annotated[int, Field(strict=True, ge=1, le=20)] = 20) -> dict:
         """Read current instance observations and durable queued/accepted commands for this human-granted manager device. Redelivers unresolved commands; reading is not acknowledgement or launch authority. Cleanup remains available after work permission withdrawal, never after device revocation."""
@@ -1101,7 +1161,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.16.3", "schema_version": 16, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests"]}
+        return {"status": "ok", "version": "2.17.0", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1385,6 +1445,48 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/server-hosts/{host_id}/provisioning-requests/{request_id}/cancel')
     async def cancel_provisioning_request(host_id: ServerOpaque, request_id: ServerOpaque, request: Request, actor=Depends(human)):
         return board.cancel_server_provisioning_request(actor, host_id, request_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/grant')
+    async def messages_append_grant(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if request.query_params:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.get_server_messages_append_grant(actor, host_id)
+
+    @app.put('/api/server-hosts/{host_id}/messages-append/grant')
+    async def set_messages_append_grant(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.set_server_messages_append_grant(actor, host_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/context')
+    async def messages_append_context(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        if set(request.query_params) != {'profile_id'} or len(request.query_params.getlist('profile_id')) != 1:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.get_server_messages_append_context(actor, host_id, request.query_params['profile_id'])
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/requests')
+    async def messages_append_requests(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        params = request.query_params
+        if set(params) - {'before', 'limit'} or any(len(params.getlist(key)) != 1 for key in params):
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        limit = params.get('limit', '16')
+        if limit not in {str(v) for v in range(1, 17)}:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.list_server_messages_appends(actor, host_id, before=params.get('before'), limit=int(limit))
+
+    @app.post('/api/server-hosts/{host_id}/messages-append/requests')
+    async def create_messages_append(host_id: ServerOpaque, request: Request, actor=Depends(human)):
+        return board.create_server_messages_append(actor, host_id, **await provisioning_body(request))
+
+    @app.get('/api/server-hosts/{host_id}/messages-append/requests/{request_id}')
+    async def messages_append_request(host_id: ServerOpaque, request_id: ServerOpaque,
+            request: Request, actor=Depends(human)):
+        if request.query_params:
+            raise BoardError('invalid_server_messages_append_payload', 422)
+        return board.get_server_messages_append(actor, host_id, request_id)
+
+    @app.post('/api/server-hosts/{host_id}/messages-append/requests/{request_id}/cancel')
+    async def cancel_messages_append(host_id: ServerOpaque, request_id: ServerOpaque,
+            request: Request, actor=Depends(human)):
+        return board.cancel_server_messages_append(actor, host_id, request_id, **await provisioning_body(request))
 
     @app.post('/api/server-hosts/{host_id}/revoke')
     async def revoke_server_host(host_id: ServerOpaque, values: ServerHostRevoke, actor=Depends(human)):

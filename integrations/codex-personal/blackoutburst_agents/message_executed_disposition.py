@@ -208,7 +208,7 @@ class HostExecutedDispositionMixin:
     def _check_executed_dispositions(self):
         version=self._db.execute('PRAGMA user_version').fetchone()[0]
         exists=self._db.execute('SELECT 1 FROM main.sqlite_master WHERE name=?',(TABLE,)).fetchone()
-        if version!=4:
+        if version not in (4,5):
             if exists:raise HostError('message_executed_schema')
             return
         self._executed_schema(self._db)
@@ -217,12 +217,12 @@ class HostExecutedDispositionMixin:
 
     def _require_no_unsettled_executed_disposition(self):
         self._check_executed_dispositions()
-        if self._db.execute('PRAGMA user_version').fetchone()[0]==4 and self._db.execute(f"SELECT 1 FROM main.{TABLE} WHERE phase!='complete' LIMIT 1").fetchone():
+        if self._db.execute('PRAGMA user_version').fetchone()[0] in (4,5) and self._db.execute(f"SELECT 1 FROM main.{TABLE} WHERE phase!='complete' LIMIT 1").fetchone():
             raise HostError('message_executed_unsettled')
 
     def _executed_record(self,*,request_key=None,intent_id=None):
         if (request_key is None)==(intent_id is None):raise HostError('message_executed_invalid')
-        if self._db.execute('PRAGMA user_version').fetchone()[0]!=4:return None
+        if self._db.execute('PRAGMA user_version').fetchone()[0] not in (4,5):return None
         self._executed_schema(self._db)
         row=self._db.execute(f'SELECT * FROM main.{TABLE} WHERE '+('request_key' if request_key is not None else 'id')+'=?',
             (request_key if request_key is not None else intent_id,)).fetchone()
@@ -289,6 +289,7 @@ class HostExecutedDispositionMixin:
 
     def _executed_advance(self,record,phase,*,proof=None,checkpoints=None):
         self._require_lock()
+        if self._db.execute('PRAGMA user_version').fetchone()[0]==5:raise HostError('messages_append_legacy_mutation')
         with self._tx() as db:
             guard_sql(db,HOST_TABLES);changes=db.total_changes
             schema_version=db.execute('PRAGMA schema_version').fetchone()[0]

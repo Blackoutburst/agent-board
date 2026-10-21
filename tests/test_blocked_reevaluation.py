@@ -208,7 +208,7 @@ def test_upgrade_keeps_a_human_manual_block_from_before_schema_13(space):
     schema12(board)
     upgraded = Board(board.db_path.parent, base_url='https://board.test')
     with sqlite3.connect(upgraded.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 17
     ready = [item['id'] for item in upgraded.get_work(first, project['id'])['ready']]
     kept = upgraded.get_ticket(human, manual['id'])['ticket']
     assert kept['status'] == 'blocked' and manual['id'] not in ready

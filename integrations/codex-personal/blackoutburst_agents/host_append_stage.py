@@ -103,6 +103,7 @@ class HostAppendStageMixin:
 
     def _append_guard(self, db, config_sha, catalog_sha):
         self._require_lock()
+        if self._db.execute('PRAGMA user_version').fetchone()[0]==5:raise HostError('messages_append_legacy_mutation')
         self._require_no_unsettled_abandonment()
         if not self.managed():
             raise HostError('host_append_managed_required')

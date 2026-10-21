@@ -672,6 +672,43 @@ def _catalog_source(args, manifest):
         return 0
 
 
+def _managed_append_factory(args, manifest, client):
+    """Build only from the installed owner release and fixed private slots."""
+    release_id=manifest_id(manifest)
+    base,_,journal=paths(args.owner)
+    def factory(worker):
+        from blackoutburst_agents.host_config import HostError, validate
+        from blackoutburst_agents.message_append_coordinator import MessagesAppendCoordinator
+        from blackoutburst_agents.message_append_slots import PreparedMessageSlots
+        worker._require_lock()
+        def configuration_guard(candidate):
+            try:
+                check_configuration(candidate,manifest,args.release,args.owner)
+                if validate(candidate,bind_connections=True)!=candidate:
+                    raise PackageError('private_configuration_changed')
+            except (PackageError,HostError,OSError):
+                raise HostError('messages_append_source_changed') from None
+        def source_guard():
+            try:
+                owner_context(manifest,args.owner)
+                verified=verify_release(args.release)
+                required={'source/blackoutburst_agents/'+name+'.py' for name in
+                    ('message_append_coordinator','message_append_slots','message_append_journal',
+                     'message_append_children','message_append_protocol')}
+                if (verified!=manifest or manifest_id(verified)!=release_id
+                        or not required<=set(verified.get('files',{}))):
+                    raise PackageError('recovery_source_chain_changed')
+                private_path(journal,base,directory=True)
+                private_path(journal/'host.sqlite3',base)
+                configuration_guard(worker.control()['configuration'])
+            except (PackageError,HostError,OSError):
+                raise HostError('messages_append_source_changed') from None
+        slots=PreparedMessageSlots(base,configuration_guard=configuration_guard)
+        return MessagesAppendCoordinator(worker,client,source_release_sha256=release_id,
+            candidate_factory=slots.candidate,source_guard=source_guard)
+    return factory
+
+
 def execute(args, manifest):
     """Text-host lifecycle, no-model doctor, and a separately requested nonce probe."""
     from blackoutburst_agents.cli import main as adapter_main
@@ -684,11 +721,12 @@ def execute(args, manifest):
         return _catalog_source(args, manifest)
     if args.action in ('managed-prepare','managed-run'):
         from blackoutburst_agents.host_journal import HostJournal
-        from blackoutburst_agents.server_controller import ServerController,launch_catalog
+        from blackoutburst_agents.server_controller import ServerController
+        from blackoutburst_agents.message_append_journal import effective_message_catalog
         from blackoutburst_agents.server_control_client import ServerControlClient
         config=_configuration(manifest,args.release,args.owner)
-        catalog=launch_catalog(config,manifest_id(manifest))
         with HostJournal(journal) as state:
+            catalog=effective_message_catalog(state,manifest_id(manifest))
             if args.action=='managed-prepare':
                 with state.owner_lock():state.prepare_managed(args.host_id,catalog)
                 print(json.dumps({'status':'managed_prepared','host_id':args.host_id,
@@ -699,7 +737,8 @@ def execute(args, manifest):
             with ServerControlClient.from_connection_file(config['targets'][0]['connection_file'],
                     session_id='fixed-server-control',timeout=5) as client:
                 if client.endpoint!=config['board_endpoint']:raise PackageError('connection_endpoint_mismatch')
-                controller=ServerController(state,client)
+                append_factory=_managed_append_factory(args,manifest,client) if config['schema_version']==2 else None
+                controller=ServerController(state,client,append_factory=append_factory)
                 cancelled=threading.Event();previous={}
                 try:
                     controller.start_worker()

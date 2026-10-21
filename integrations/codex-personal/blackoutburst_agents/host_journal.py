@@ -18,6 +18,7 @@ from .managed_host import ManagedHostJournalMixin
 from .host_append_stage import HostAppendStageMixin
 from .message_abandon_journal import HostMessageAbandonMixin
 from .message_executed_disposition import HostExecutedDispositionMixin
+from .message_append_journal import HostMessagesAppendMixin
 from .work_journal import _private_file, _encode
 
 _APPLICATION_ID = 0x4242484A
@@ -28,7 +29,7 @@ def canonical_directory():
     return Path(pwd.getpwuid(os.geteuid()).pw_dir) / '.local' / 'state' / 'blackoutburst-agents' / 'hosts'
 
 
-class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostAppendStageMixin, ManagedHostJournalMixin):
+class HostJournal(HostMessagesAppendMixin, HostExecutedDispositionMixin, HostMessageAbandonMixin, HostAppendStageMixin, ManagedHostJournalMixin):
     def __init__(self, directory):
         self._db = None
         self._held = False
@@ -45,11 +46,11 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
             self._db = sqlite3.connect(database, isolation_level=None, timeout=5)
             self._db.row_factory = sqlite3.Row
             version = self._db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4):
+            if version not in (0, 1, 2, 3, 4, 5):
                 raise HostError('unsupported_host_version')
             if version == 0 and self._db.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
                 raise HostError('host_corrupt')
-            if version in (1,2,3,4) and self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID:
+            if version in (1,2,3,4,5) and self._db.execute('PRAGMA application_id').fetchone()[0] != _APPLICATION_ID:
                 raise HostError('host_corrupt')
             self._db.execute('PRAGMA journal_mode=DELETE')
             self._db.execute('PRAGMA synchronous=FULL')
@@ -78,6 +79,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
         self._check_managed()
         self._check_abandonments()
         self._check_executed_dispositions()
+        self._check_messages_appends()
 
     def __enter__(self): return self
     def __exit__(self, *_): self.close()
@@ -97,6 +99,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
             raise
 
     def configure(self, configuration):
+        if self._messages_append_version()==5:raise HostError('messages_append_legacy_mutation')
         configuration = validate(configuration)
         encoded, hashed = _encode(configuration, 262144, 'invalid_host_configuration'), digest(configuration)
         with self._tx() as db:
@@ -199,6 +202,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
 
     def pin_profile(self, target_id, value):
         self._require_lock()
+        self.require_no_messages_append()
         with self._tx() as db:
             old = self.target(target_id)['profile_hash']
             if old and old != value: raise HostError('host_profile_changed')
@@ -206,6 +210,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
 
     def save_target(self, target_id, receipt):
         self._require_lock()
+        self.require_no_messages_append()
         with self._tx() as db:
             old = self.target(target_id)
             subscription = receipt.get('subscription_id', old['subscription'])
@@ -226,6 +231,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
 
     def reserve_dispatch(self, target_id, batch, activation):
         self._require_lock()
+        self.require_no_messages_append()
         with self._tx() as db:
             value = self.control()
             if self.cancelled(activation): raise HostError('host_stopped')
@@ -246,6 +252,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
 
     def link_worker(self, batch_id, operation_id):
         self._require_lock()
+        self.require_no_messages_append()
         with self._tx() as db:
             row = next((row for row in self.dispatches() if row['batch_id'] == batch_id), None)
             if row is None or row['worker_id'] != operation_id: raise HostError('host_reference_conflict')
@@ -253,6 +260,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
 
     def finish_dispatch(self, batch_id, state, receipt):
         self._require_lock()
+        self.require_no_messages_append()
         if state not in ('pending','complete','needs_review'): raise HostError('invalid_host_receipt')
         with self._tx() as db:
             row = next((row for row in self.dispatches() if row['batch_id'] == batch_id), None)
@@ -263,6 +271,7 @@ class HostJournal(HostExecutedDispositionMixin, HostMessageAbandonMixin, HostApp
 
     def rotate(self):
         self._require_lock()
+        self.require_no_messages_append()
         with self._tx() as db:
             size = len(self.control()['configuration']['targets'])
             db.execute('UPDATE control SET next_target=(next_target+1)%?', (size,))
