@@ -33,6 +33,11 @@ component is not an OS sandbox against arbitrary same-user Python code.
   changed scope, grant, base, repository identity, root, Git executable, branch,
   HEAD or destination Git configuration is refused. Working-file edits are
   preserved; no reset, clean, removal or recopy API exists.
+- Before reusing a ready copy, the complete physical `.git` tree is inspected
+  through held directory descriptors. Symlinks, shared file hardlinks, special
+  files, unsafe ownership/modes and external alternate/common directories are
+  refused. The bounded metadata inventory brackets each subsequent Git read;
+  an observed substitution refuses the copy without touching working files.
 - `status(operation_id)` returns recorded local metadata. It does **not** prove
   current process health, Board ownership, credentials or checkout validity.
 - `manifest_inputs(operation_id)` revalidates a ready checkout and returns

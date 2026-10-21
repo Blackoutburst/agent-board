@@ -413,22 +413,112 @@ class LocalGitWorkspaceController:
             with PrivateDirectory(root) as directory:
                 os.fsync(directory.fd)
 
+    @staticmethod
+    def _copy_metadata(checkout):
+        """Read the complete physical Git tree, never following external links.
+
+        The operation lock excludes cooperating controller writers. Held parent
+        descriptors and before/after observations refuse substitution during
+        this read; arbitrary same-user code is not an OS security boundary.
+        """
+        root = checkout / '.git'
+        snapshot = []
+        total = 0
+
+        def pin(info):
+            return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+                    info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+        def walk(descriptor, prefix, depth):
+            nonlocal total
+            if depth > 32:
+                _fail('git_workspace_checkout_changed')
+            with os.scandir(descriptor) as entries:
+                names = []
+                for entry in entries:
+                    if len(snapshot) + len(names) >= MAX_REPOSITORY_FILES:
+                        _fail('git_workspace_checkout_changed')
+                    names.append(entry.name)
+                names.sort()
+            for name in names:
+                before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                relative = prefix + name
+                if (before.st_uid != os.geteuid() or before.st_mode & 0o022
+                        or not (stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode))
+                        or stat.S_ISREG(before.st_mode) and before.st_nlink != 1):
+                    _fail('git_workspace_checkout_changed')
+                snapshot.append((relative, pin(before)))
+                if len(snapshot) > MAX_REPOSITORY_FILES:
+                    _fail('git_workspace_checkout_changed')
+                if stat.S_ISDIR(before.st_mode):
+                    if stat.S_IMODE(before.st_mode) != 0o700:
+                        _fail('git_workspace_checkout_changed')
+                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                    try:
+                        if pin(os.fstat(child)) != pin(before):
+                            _fail('git_workspace_checkout_changed')
+                        walk(child, relative + '/', depth + 1)
+                        if pin(os.fstat(child)) != pin(before):
+                            _fail('git_workspace_checkout_changed')
+                    finally:
+                        os.close(child)
+                else:
+                    total += before.st_size
+                    if total > MAX_REPOSITORY_BYTES:
+                        _fail('git_workspace_checkout_changed')
+                if pin(os.stat(name, dir_fd=descriptor, follow_symlinks=False)) != pin(before):
+                    _fail('git_workspace_checkout_changed')
+
+        descriptor = None
+        try:
+            descriptor = absolute_directory(str(root))
+            original = pin(os.fstat(descriptor))
+            if (original[2] != os.geteuid() or stat.S_IMODE(original[4]) != 0o700):
+                _fail('git_workspace_checkout_changed')
+            walk(descriptor, '', 0)
+            current = absolute_directory(str(root))
+            try:
+                if pin(os.fstat(current)) != original or pin(os.fstat(descriptor)) != original:
+                    _fail('git_workspace_checkout_changed')
+            finally:
+                os.close(current)
+            return (original, snapshot)
+        except (OSError, ValueError):
+            _fail('git_workspace_checkout_changed')
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
     def _ready(self, value):
         self._roots()
         checkout = _path(value['request']['checkout'])
         _directory(checkout.parent, private=True)
         if (value['checkout_identity'] != _directory(checkout, private=True)
-                or _directory(checkout / '.git', private=True) == _directory(self.repository / '.git')
-                or value['git_config_sha256'] != digest(_file(checkout / '.git/config', 32768))
+                or _directory(checkout / '.git', private=True) == _directory(self.repository / '.git')):
+            _fail('git_workspace_checkout_changed')
+        metadata = self._copy_metadata(checkout)
+        if (value['git_config_sha256'] != digest(_file(checkout / '.git/config', 32768))
                 or any(os.path.lexists(checkout / '.git' / name) for name in
                        ('commondir', 'objects/info/alternates', 'objects/info/http-alternates'))):
             _fail('git_workspace_checkout_changed')
-        if (self._git(['symbolic-ref', '--quiet', 'HEAD'], cwd=checkout).strip()
+
+        def read_git(arguments):
+            if self._copy_metadata(checkout) != metadata:
+                _fail('git_workspace_checkout_changed')
+            result = self._git(arguments, cwd=checkout)
+            if self._copy_metadata(checkout) != metadata:
+                _fail('git_workspace_checkout_changed')
+            return result
+
+        read_git(['fsck', '--strict', '--no-reflogs', '--no-dangling'])
+        if (read_git(['symbolic-ref', '--quiet', 'HEAD']).strip()
                 != ('refs/heads/' + value['request']['branch']).encode()
-                or self._git(['rev-parse', '--verify', 'HEAD'], cwd=checkout).strip()
+                or read_git(['rev-parse', '--verify', 'HEAD']).strip()
                 != self.grant['base_commit'].encode()
-                or self._git(['config', '--local', '--no-includes', '--get', 'remote.origin.url'], cwd=checkout).strip()
+                or read_git(['config', '--local', '--no-includes', '--get', 'remote.origin.url']).strip()
                 != str(self.repository).encode()):
+            _fail('git_workspace_checkout_changed')
+        if self._copy_metadata(checkout) != metadata:
             _fail('git_workspace_checkout_changed')
 
     def materialize(self, operation_id):

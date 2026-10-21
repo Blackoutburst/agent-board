@@ -231,6 +231,90 @@ def test_ready_workspace_change_refused_without_resetting_edits(setup, mode):
     assert (checkout / 'example.py').read_text() == 'preserve this edit\n'
 
 
+@pytest.mark.parametrize('metadata', ['objects', 'refs', 'HEAD', 'index', 'logs'])
+def test_ready_manifest_refuses_any_external_metadata_symlink(setup, tmp_path, metadata):
+    operation, _ = planned(setup)
+    value = setup['controller'].materialize(operation)
+    checkout = Path(value['checkout'])
+    (checkout / 'example.py').write_text('preserve this edit\n')
+    original = checkout / '.git' / metadata
+    outside = tmp_path / ('outside-' + metadata)
+    original.rename(outside)
+    original.symlink_to(outside, target_is_directory=outside.is_dir())
+    for action in (setup['controller'].manifest_inputs, setup['controller'].materialize):
+        with pytest.raises(DevelopmentError, match='git_workspace_checkout_changed'):
+            action(operation)
+    assert (checkout / 'example.py').read_text() == 'preserve this edit\n'
+
+
+@pytest.mark.parametrize('metadata', ['HEAD', 'index', 'object'])
+def test_ready_manifest_refuses_shared_metadata_hardlinks(setup, tmp_path, metadata):
+    operation, _ = planned(setup)
+    value = setup['controller'].materialize(operation)
+    checkout = Path(value['checkout'])
+    if metadata == 'object':
+        hashed = git(checkout, 'rev-parse', 'HEAD:example.py')
+        original = checkout / '.git/objects' / hashed[:2] / hashed[2:]
+    else:
+        original = checkout / '.git' / metadata
+    outside = tmp_path / 'outside-metadata'
+    original.rename(outside)
+    os.link(outside, original)
+    with pytest.raises(DevelopmentError, match='git_workspace_checkout_changed'):
+        setup['controller'].manifest_inputs(operation)
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'corrupt'])
+def test_ready_requires_the_copied_commit_object_to_remain_valid(setup, mutation):
+    operation, _ = planned(setup)
+    value = setup['controller'].materialize(operation)
+    checkout = Path(value['checkout'])
+    (checkout / 'example.py').write_text('preserve this edit\n')
+    hashed = setup['grant'].base_commit
+    object_path = checkout / '.git/objects' / hashed[:2] / hashed[2:]
+    object_path.unlink()
+    if mutation == 'corrupt':
+        object_path.write_bytes(b'not a git object')
+        object_path.chmod(0o600)
+    with pytest.raises(DevelopmentError, match='git_workspace_command_failed'):
+        setup['controller'].manifest_inputs(operation)
+    assert (checkout / 'example.py').read_text() == 'preserve this edit\n'
+
+
+def test_ready_refuses_metadata_substitution_during_git_reads(setup, tmp_path, monkeypatch):
+    operation, _ = planned(setup)
+    value = setup['controller'].materialize(operation)
+    checkout = Path(value['checkout'])
+    original = setup['controller']._git
+    changed = False
+    def substitute(arguments, **kwargs):
+        nonlocal changed
+        result = original(arguments, **kwargs)
+        if not changed and arguments[0] == 'symbolic-ref':
+            changed = True
+            head = checkout / '.git/HEAD'
+            outside = tmp_path / 'outside-head'
+            head.rename(outside)
+            head.symlink_to(outside)
+        return result
+    monkeypatch.setattr(setup['controller'], '_git', substitute)
+    with pytest.raises(DevelopmentError, match='git_workspace_checkout_changed'):
+        setup['controller'].manifest_inputs(operation)
+
+
+@pytest.mark.parametrize('bound', ['MAX_REPOSITORY_FILES', 'MAX_REPOSITORY_BYTES'])
+def test_ready_metadata_bound_refuses_before_git_and_preserves_edits(setup, monkeypatch, bound):
+    operation, _ = planned(setup)
+    value = setup['controller'].materialize(operation)
+    checkout = Path(value['checkout'])
+    (checkout / 'example.py').write_text('preserve this edit\n')
+    monkeypatch.setattr('blackoutburst_agents.git_workspace.' + bound, 1)
+    monkeypatch.setattr(setup['controller'], '_git', lambda *_args, **_kwargs: pytest.fail('Git ran after metadata bound'))
+    with pytest.raises(DevelopmentError, match='git_workspace_checkout_changed'):
+        setup['controller'].manifest_inputs(operation)
+    assert (checkout / 'example.py').read_text() == 'preserve this edit\n'
+
+
 def test_source_alternates_refused_before_git_or_copy(setup):
     alternate = setup['source'] / '.git/objects/info/alternates'
     alternate.write_text('/outside/object-store\n')
