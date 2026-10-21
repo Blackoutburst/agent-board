@@ -47,6 +47,10 @@ Pending B suspends admissions, ticks, feeds, Start/Restart, ordinary publication
 replacement and reassociation. The current device channel still delivers,
 acknowledges, applies and reports real Stops. A refused or uncertain append can
 report only a closed blocked reason, independently of phase and cleanup.
+This is a retained historical signal for that request revision, not a live health
+observation. In particular, an exact successful phase5 receipt replay does not
+erase it or establish that local recovery completed. The interface labels it as
+the last error received; current instance observations remain separate.
 
 Cold recovery keeps the original intent and exact request keys. A retained
 complete reply is checked against fresh catalogue membership before the local

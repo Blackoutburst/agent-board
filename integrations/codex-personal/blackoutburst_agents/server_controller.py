@@ -124,6 +124,14 @@ class ServerController:
                     or (local['instance_id'] and i['id']!=local['instance_id']) or not i['active']):
                 raise HostError('managed_catalog_conflict')
 
+    def _append_without_command(self,instance):
+        # A newly appended membership is deliberately unknown, not a cleanup
+        # observation. Its persisted origin survives controller cold starts.
+        if instance['generation']!=0 or instance['command_id'] is not None:return False
+        if self.host._db.execute('PRAGMA user_version').fetchone()[0]!=5:return False
+        return any(b['kind']=='append' and b['target_id']==instance['catalog_key']
+            for b in self.host._messages_binding_state()['bindings'])
+
     def start_worker(self):
         if self.append_factory is None:self.host.require_no_catalog_source_transition()
         if self._thread is not None:raise HostError('managed_worker_already_started')
@@ -436,6 +444,10 @@ class ServerController:
             else:
                 i=by_id.get(args['instance_id'])
                 stale=i is None or any(i[k]!=args[k] for k in ('command_id','generation','launchspec_sha256'))
+                if i is not None and self._append_without_command(i):
+                    # Never replay an old controller's metadata-only cleanup
+                    # claim for a member that has never received a command.
+                    self._owned_call('supersede_managed_effect',effect['id']);continue
             if stale:
                 self._owned_call('supersede_managed_effect',effect['id']);continue
             # Retry the exact original request, not a new revision under its key.
@@ -492,6 +504,7 @@ class ServerController:
             instances=snapshot['instances']
             # These revocations reach an active runner via its existing callback.
             for i in instances:
+                if self._append_without_command(i):continue
                 local=self.host.managed_target(i['catalog_key'])
                 if (not snapshot['enabled'] or not i['can_start'] or i['desired_state']=='stopped'
                         or local['generation']!=i['generation'] or self._retired_observation(i)):
@@ -518,6 +531,7 @@ class ServerController:
             for i in snapshot['instances']:
                 target=i['catalog_key'];c=i['current_command']
                 if self.clock()>=authority_until:raise HostError('managed_authority_expired')
+                if self._append_without_command(i):continue
                 if (c is not None and c['status'] in ('queued','accepted') and c['action']!='stop'
                         and c['budget']>self.host.control()['configuration']['dispatch_budget']):
                     # The web bound is shared; this owner's fixed launch policy

@@ -258,3 +258,48 @@ def test_cancel_before_prepare_releases_hold_only_after_worker_confirms_no_inten
         assert not ticks and not f.host.control()['enabled']
         assert not any(n.endswith('_server_messages_append') for n,a,t in client.calls)
     finally:assert c.shutdown()
+
+
+def test_inactive_appended_member_stays_unknown_across_polls_and_cold_controller(roster):
+    from blackoutburst_agents.message_append_journal import effective_message_catalog
+    f=roster;client=ClosedAppendTransport(f);c,ticks=controller(f,client)
+    try:
+        c.start_worker();drive(c,lambda:client.phase=='complete' and not c._append_hold)
+        for _ in range(4):c.step()
+        added=client.instances[-1]
+        assert (added['observed_state'],added['cleanup_confirmed'],added['generation'],added['command_id'])==('unknown',False,0,None)
+    finally:assert c.shutdown()
+    resumed,more=controller(f,client)
+    try:
+        resumed.start_worker();resumed.publish(effective_message_catalog(f.host,'b'*64))
+        for _ in range(4):resumed.step()
+        assert (added['observed_state'],added['cleanup_confirmed'],added['generation'],added['command_id'])==('unknown',False,0,None)
+        assert not any(n=='report_instance_state' and a['instance_id']==added['id'] for n,a,t in client.calls)
+        assert not ticks and not more and not f.host.managed_target(added['catalog_key'])['enabled']
+    finally:assert resumed.shutdown()
+
+
+def test_unproven_old_cleanup_outbox_is_not_replayed_and_real_Stop_still_settles(roster):
+    f=roster;client=ClosedAppendTransport(f);c,ticks=controller(f,client)
+    try:
+        c.start_worker();drive(c,lambda:client.phase=='complete' and not c._append_hold)
+        added=client.instances[-1]
+        bad=dict(host_id='fixture-host',instance_id=added['id'],expected_observation_revision=0,generation=0,
+            launchspec_sha256=added['launchspec_sha256'],command_id=None,state='stopped',cleanup_confirmed=True,
+            reason='stopped',idempotency_key='old-unproven-cleanup')
+        f.host.begin_managed_effect('old-unproven-cleanup','report_instance_state',bad)
+        c.step()
+        assert f.host.managed_effect('old-unproven-cleanup')['state']=='superseded'
+        assert not any(n=='report_instance_state' and a['instance_id']==added['id'] for n,a,t in client.calls)
+        assert added['observed_state']=='unknown' and not added['cleanup_confirmed']
+        added['version']+=1
+        stop=dict(id='added-real-stop',seq=3,instance_id=added['id'],action='stop',generation=0,
+            launchspec_sha256=added['launchspec_sha256'],budget=0,instance_version=added['version'],
+            revision=1,status='queued',created_at=3.,updated_at=3.,stop_confirmed=False)
+        added.update(command_id=stop['id'],current_command=stop)
+        c.step();wait_for(lambda:(f.host.managed_command(stop['id']) or {}).get('state')=='applied')
+        c.step()
+        assert added['observed_state']=='stopped' and added['cleanup_confirmed']
+        assert added['current_command']['status']=='complete' and added['generation']==0
+        assert not ticks and not f.host.managed_target(added['catalog_key'])['enabled']
+    finally:assert c.shutdown()
