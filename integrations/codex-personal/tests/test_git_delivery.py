@@ -370,3 +370,24 @@ def test_replaced_record_root_cannot_be_adopted_after_controller_callback(delive
     with pytest.raises(DevelopmentError,match='git_delivery_root_changed'):
         f['delivery'].finalize(operation_id=f['op'],snapshot_sha256=f['snapshot_sha256'],test_evidence=f['evidence'],message='Selected')
     assert git(f['checkout'],'for-each-ref','refs/heads/codex/delivery-')==''
+
+
+@pytest.mark.parametrize('mutation',['contents','export_identity'])
+def test_final_test_verification_cannot_make_an_old_export_check_current(delivery,mutation):
+    f=delivery;seal(f);review(f);original=f['test_guard'];calls=[]
+    export=Path(f['review']['workspace'])
+    def interleaved(**kw):
+        verified=original(**kw);calls.append(True)
+        if len(calls)==2:
+            if mutation=='contents':
+                target=export/'example.py';target.chmod(0o600)
+                target.write_text('value = 9000\n');target.chmod(0o400)
+            else:
+                export.rename(export.with_name('retained-original-export'))
+                export.mkdir(mode=0o700)
+                target=export/'example.py';target.write_text('value = 2\n');target.chmod(0o400)
+                export.chmod(0o500)
+        return verified
+    f['delivery'].test_guard=interleaved
+    with pytest.raises(DevelopmentError):guard(f)
+    assert len(calls)==2

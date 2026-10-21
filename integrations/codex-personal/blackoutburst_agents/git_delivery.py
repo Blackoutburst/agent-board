@@ -455,5 +455,9 @@ class LocalGitDeliveryController:
                     or digest(material.encode()) != selection['material_sha256']
                     or selection['delivery_sha'] != value['seal']['delivery_sha']
                     or selection['author_agent_id'] != author['agent_id']): fail('git_delivery_review_selection_changed')
-            self._sealed(operation_id, workspace_private, private)
+            # The final protected test/authority callback can itself perform
+            # I/O. Its completion is not proof that a previously checked export
+            # still exists unchanged. Bracket it with a fresh export check.
+            value = self._sealed(operation_id, workspace_private, private)
+            self._review_validate(review, result, request, value)
             return True
