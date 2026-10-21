@@ -81,10 +81,10 @@ def ready(env):
 
 def test_real_phases_exact_replay_and_inactive_membership(ready):
     e,p,v=ready;b,h,_,raw,_,host,*_=e
-    preserved=snapshot(b,exclude=tuple(SQL)[:4]+('audit',))
+    preserved=snapshot(b,exclude=tuple(SQL)[:5]+('audit',))
     r=create(e,v)
     assert r['state']=='requested' and r['can_cancel'] and r['proof'] is None and r['instance_id'] is None
-    assert snapshot(b,exclude=tuple(SQL)[:4]+('audit',))==preserved
+    assert snapshot(b,exclude=tuple(SQL)[:5]+('audit',))==preserved
     assert create(e,v)==r
     polled=b.poll_server_messages_appends(raw,host['id'])
     assert polled['requests'][0]['body']==v and polled['requests'][0]['slot']['slot_id']==v['slot_id']
@@ -116,11 +116,11 @@ def test_real_phases_exact_replay_and_inactive_membership(ready):
 
 
 def test_cancel_requested_only_preserves_slot_and_no_work(ready):
-    e,p,v=ready; r=create(e,v);before=snapshot(e[0],exclude=tuple(SQL)[:4]+('audit',))
+    e,p,v=ready; r=create(e,v);before=snapshot(e[0],exclude=tuple(SQL)[:5]+('audit',))
     final=cancel(e,r)
     assert final['state']=='cancelled' and final['reason']=='cancelled_by_owner' and not final['barrier_held']
     assert not final['can_cancel'] and final['proof'] is None
-    assert cancel(e,r)==final and snapshot(e[0],exclude=tuple(SQL)[:4]+('audit',))==before
+    assert cancel(e,r)==final and snapshot(e[0],exclude=tuple(SQL)[:5]+('audit',))==before
 
 
 @pytest.mark.parametrize('which',['agent','other-owner','other-device'])
@@ -299,7 +299,7 @@ def test_migration_16_to_17_is_atomic_and_preserves_every_existing_row(ready,mon
     assert snapshot(b)==before
     with b._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==16
     monkeypatch.setattr(module,'migrate_server_messages_append',original);reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4])==before
+    assert snapshot(reopened,exclude=tuple(SQL)[:5])==before
     with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==17
 
 

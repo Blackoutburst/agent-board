@@ -25,14 +25,17 @@ SLOT_KEYS = tuple('profile_id profile_version device_id session_id agent_kind id
 PHASES = {'prepared': 2, 'precommit': 3, 'committed': 4, 'complete': 5}
 ACTIVE = ('requested', 'prepared', 'precommit', 'committed')
 MAX_REQUESTS = 32
+STATUS_REASONS = frozenset('slot_unavailable source_changed children_uncertain connection_lost request_changed authorization_changed local_state_conflict local_io_failed protocol_error requires_reconciliation'.split())
+STATUS_KEYS = frozenset('schema owner_id host_id device_id request_id request_revision status reason'.split())
 SQL = {
  'server_messages_append_grants': 'CREATE TABLE server_messages_append_grants(host_id TEXT PRIMARY KEY REFERENCES server_hosts(id),owner_id TEXT NOT NULL REFERENCES owners(id),device_id TEXT NOT NULL REFERENCES devices(id),purpose TEXT NOT NULL,version INTEGER NOT NULL,enabled INTEGER NOT NULL)',
  'server_messages_append_requests': 'CREATE TABLE server_messages_append_requests(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL REFERENCES owners(id),host_id TEXT NOT NULL REFERENCES server_hosts(id),device_id TEXT NOT NULL REFERENCES devices(id),revision INTEGER NOT NULL,state TEXT NOT NULL,request_sha256 TEXT NOT NULL,body TEXT NOT NULL,slot TEXT NOT NULL,proof TEXT)',
  'server_messages_append_barriers': 'CREATE TABLE server_messages_append_barriers(host_id TEXT PRIMARY KEY REFERENCES server_hosts(id),owner_id TEXT NOT NULL REFERENCES owners(id),request_id TEXT UNIQUE NOT NULL REFERENCES server_messages_append_requests(id))',
  'server_messages_append_receipts': 'CREATE TABLE server_messages_append_receipts(owner_id TEXT NOT NULL REFERENCES owners(id),host_id TEXT NOT NULL REFERENCES server_hosts(id),operation TEXT NOT NULL,key TEXT NOT NULL,payload_sha256 TEXT NOT NULL,response TEXT NOT NULL,PRIMARY KEY(owner_id,host_id,operation,key))',
+ 'server_messages_append_statuses': 'CREATE TABLE server_messages_append_statuses(request_id TEXT NOT NULL REFERENCES server_messages_append_requests(id),request_revision INTEGER NOT NULL,owner_id TEXT NOT NULL REFERENCES owners(id),host_id TEXT NOT NULL REFERENCES server_hosts(id),device_id TEXT NOT NULL REFERENCES devices(id),status TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(request_id,request_revision))',
  'server_messages_append_one_active': "CREATE UNIQUE INDEX server_messages_append_one_active ON server_messages_append_requests(host_id) WHERE state IN ('requested','prepared','precommit','committed')",
 }
-SENSITIVE = tuple(SQL)[:4] + ('server_hosts','server_instances','server_instance_commands','server_control_receipts','audit',
+SENSITIVE = tuple(SQL)[:5] + ('server_hosts','server_instances','server_instance_commands','server_control_receipts','audit',
  'server_provisioning_grants','server_provisioning_requests','server_provisioning_barriers','server_provisioning_receipts',
  'owners','devices','agent_profiles','agent_profile_versions','agent_profile_bindings','sessions')
 
@@ -85,6 +88,12 @@ def validate_proof(value):
 
 def validate_messages_append_arguments(name, args):
     common = {'host_id','request_id','expected_revision','idempotency_key'}
+    if name == 'report_server_messages_append_status':
+        _exact(args,common|{'status','reason'})
+        for key in ('host_id','request_id','idempotency_key'): _opaque(args[key])
+        _number(args['expected_revision'],1,5)
+        _validate_status(args['status'],args['reason'])
+        return
     if name == 'poll_server_messages_appends':
         _exact(args, {'host_id','limit'}); _opaque(args['host_id']); _number(args['limit'],1,16); return
     if name == 'prepare_server_messages_append':
@@ -150,7 +159,17 @@ def _decode(row):
     return body,slot,proof
 
 
-def _view(row):
+def _validate_status(status,reason):
+    if type(status) is not str or status!='blocked' or type(reason) is not str or reason not in STATUS_REASONS:
+        _fail('invalid_server_messages_append_status')
+
+
+def _status_view(row):
+    _validate_status(row['status'],row['reason'])
+    return dict(schema='server-messages-append-controller-status-v1',**dict(row))
+
+
+def _view(row,controller=None):
     body,_,proof=_decode(row)
     return _bound(dict(schema='server-messages-append-view-v1',request_id=row['id'],request_sha256=row['request_sha256'],
         owner_id=row['owner_id'],host_id=row['host_id'],device_id=row['device_id'],revision=row['revision'],
@@ -158,7 +177,9 @@ def _view(row):
         barrier_held=row['state'] in ACTIVE,profile_id=body['profile_id'],profile_version=body['profile_version'],
         provider_id=body['provider_id'],requested_model=body['requested_model'],slot_id=body['slot_id'],
         can_cancel=row['state']=='requested',instance_id=None if proof is None else proof['instance_id'],proof=proof,
-        connection_status='not_attested',model_catalog_status='not_attested',model_access_status='not_attested'),16384)
+        connection_status='not_attested',model_catalog_status='not_attested',model_access_status='not_attested',
+        controller_status='not_reported' if controller is None else controller['status'],
+        controller_reason='' if controller is None else controller['reason']),16384)
 
 
 class ServerMessagesAppendMixin:
@@ -176,9 +197,9 @@ class ServerMessagesAppendMixin:
         for name,expected in SQL.items():
             row=db.execute('SELECT sql FROM main.sqlite_master WHERE name=?',(name,)).fetchone()
             if row is None or row['sql']!=expected: _fail('server_messages_append_schema_invalid',409)
-        tables=tuple(SQL)[:4]
+        tables=tuple(SQL)[:5]
         allowed={f'sqlite_autoindex_{n}_1' for n in tables}|{'sqlite_autoindex_server_messages_append_barriers_2','server_messages_append_one_active'}
-        for r in db.execute("SELECT name FROM main.sqlite_master WHERE type='index' AND tbl_name IN (?,?,?,?)",tables):
+        for r in db.execute("SELECT name FROM main.sqlite_master WHERE type='index' AND tbl_name IN (?,?,?,?,?)",tables):
             if r['name'] not in allowed: _fail('server_messages_append_schema_invalid',409)
 
     def _messages_append_state(self, db, host):
@@ -209,12 +230,36 @@ class ServerMessagesAppendMixin:
         barriers=db.execute('SELECT * FROM server_messages_append_barriers WHERE host_id=? LIMIT 2',(host['id'],)).fetchall()
         if (len(active)>1 or len(barriers)!=len(active) or (barriers and
             (barriers[0]['owner_id']!=host['owner_id'] or barriers[0]['request_id']!=active[0]))): _fail('server_messages_append_corrupt',409)
+        if db.execute('''SELECT 1 FROM server_messages_append_statuses WHERE host_id=? AND
+            (typeof(request_id)!='text' OR length(CAST(request_id AS BLOB))>800 OR typeof(status)!='text'
+             OR length(CAST(status AS BLOB))>32 OR typeof(reason)!='text' OR length(CAST(reason AS BLOB))>64) LIMIT 1''',(host['id'],)).fetchone():
+            _fail('server_messages_append_corrupt',409)
+        statuses=db.execute('''SELECT * FROM server_messages_append_statuses WHERE host_id=? OR request_id IN
+            (SELECT id FROM server_messages_append_requests WHERE host_id=?) LIMIT 161''',(host['id'],host['id'])).fetchall()
+        by_id={r['id']:r for r in rows}
+        if len(statuses)>160: _fail('server_messages_append_corrupt',409)
+        for status in statuses:
+            record=by_id.get(status['request_id'])
+            _validate_status(status['status'],status['reason'])
+            if (record is None or type(status['request_revision']) is not int or not 1<=status['request_revision']<=record['revision']
+                or (record['state']=='cancelled' and status['request_revision']!=1)
+                or status['host_id']!=host['id'] or status['owner_id']!=host['owner_id'] or status['device_id']!=host['device_id']):
+                _fail('server_messages_append_corrupt',409)
         return grant,rows,bool(active)
 
     def _messages_append_has_barrier(self, db, host): return self._messages_append_state(db,host)[2]
 
     def _messages_append_require_no_barrier(self, db, host):
         if self._messages_append_has_barrier(db,host): _fail('server_messages_append_pending',409)
+
+    def _messages_append_view(self, db, row):
+        controller=db.execute('SELECT * FROM server_messages_append_statuses WHERE request_id=? AND request_revision=?',
+            (row['id'],row['revision'])).fetchone()
+        if controller is not None:
+            _validate_status(controller['status'],controller['reason'])
+            if any(controller[k]!=row[v] for k,v in (('request_id','id'),('request_revision','revision'),('owner_id','owner_id'),('host_id','host_id'),('device_id','device_id'))):
+                _fail('server_messages_append_corrupt',409)
+        return _view(row,controller)
 
     def _messages_append_publish_identity(self, db, host, entries):
         # After a real append, ordinary publication may refresh only the same
@@ -292,6 +337,13 @@ class ServerMessagesAppendMixin:
             _number(value['version'])
             if (value['schema']!='server-messages-append-grant-view-v1' or type(value['enabled']) is not bool
                 or value['purpose']!=PURPOSE): _fail('server_messages_append_corrupt',409)
+        elif operation=='controller-status':
+            _exact(value,STATUS_KEYS)
+            _number(value['request_revision'],1,5)
+            _validate_status(value['status'],value['reason'])
+            if (value['schema']!='server-messages-append-controller-status-v1' or value['request_id']!=payload['request_id']
+                or value['request_revision']!=payload['expected_revision'] or value['status']!=payload['status'] or value['reason']!=payload['reason']):
+                _fail('server_messages_append_corrupt',409)
         else:
             request=self._messages_append_record(db,host,value.get('request_id') if type(value) is dict else None)
             historical=dict(request)
@@ -424,7 +476,7 @@ class ServerMessagesAppendMixin:
     def get_server_messages_append(self, actor, host_id, request_id):
         with self._connection() as db:
             _,host=self._messages_append_host(db,actor,host_id)
-            return _view(self._messages_append_record(db,host,request_id))
+            return self._messages_append_view(db,self._messages_append_record(db,host,request_id))
 
     def list_server_messages_appends(self, actor, host_id, *, before=None, limit=16):
         _number(limit,1,16)
@@ -439,7 +491,7 @@ class ServerMessagesAppendMixin:
             rows=db.execute('SELECT * FROM server_messages_append_requests WHERE host_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?',(host_id,position,limit+1)).fetchall()
             selected=[]
             for row in rows[:limit]:
-                value=_view(row)
+                value=self._messages_append_view(db,row)
                 if len(_json(dict(schema='server-messages-append-list-v1',requests=selected+[value],next_before=row['id'])).encode('ascii'))>16384: break
                 selected.append(value)
             if rows and not selected: _fail('server_messages_append_corrupt',409)
@@ -471,7 +523,7 @@ class ServerMessagesAppendMixin:
             for row in self._messages_append_state(db,host)[1]:
                 if row['state'] not in ACTIVE: continue
                 body,slot,_=_decode(row);self._messages_append_authority(db,host,body,slot)
-                item=dict(request=_view(row),body=body,slot=slot)
+                item=dict(request=self._messages_append_view(db,row),body=body,slot=slot)
                 requests.append(item)
                 if len(requests)>=limit: break
             return _bound(dict(schema='server-messages-append-poll-v1',host_id=host_id,requests=requests),65536)
@@ -561,4 +613,40 @@ class ServerMessagesAppendMixin:
             current=self._server_host(db,actor,host['id'])
             self._messages_append_authority(db,current,body,slot)
             self._messages_append_fence(db,current,body,proof)
+            return result
+
+
+    def report_server_messages_append_status(self, actor, host_id, request_id, expected_revision, status, reason, idempotency_key):
+        args=dict(host_id=host_id,request_id=request_id,expected_revision=expected_revision,status=status,reason=reason,idempotency_key=idempotency_key)
+        validate_messages_append_arguments('report_server_messages_append_status',args)
+        with self._tx() as db:
+            actor,host=self._messages_append_host(db,actor,host_id,manager=True)
+            record=self._messages_append_record(db,host,request_id)
+            if record['revision']!=expected_revision or record['state']=='cancelled':
+                _fail('server_messages_append_changed',409)
+            prior=self._messages_append_retry(db,host,'controller-status',idempotency_key,args)
+            if prior is not None: return prior
+            snapshot=self._messages_append_snapshot(db,host)
+            values=dict(request_id=request_id,request_revision=expected_revision,owner_id=host['owner_id'],host_id=host_id,
+                device_id=host['device_id'],status=status,reason=reason)
+            db.execute('''INSERT INTO server_messages_append_statuses VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(request_id,request_revision) DO UPDATE SET status=excluded.status,reason=excluded.reason''',tuple(values.values()))
+            result=_status_view(values); encoded=_json(result)
+            saved_receipt=(host['owner_id'],host_id,'controller-status',idempotency_key,_hash(args),encoded)
+            db.execute('INSERT INTO server_messages_append_receipts VALUES(?,?,?,?,?,?)',saved_receipt)
+            detail=dict(host_id=host_id,request_id=request_id,request_revision=expected_revision,status=status,reason=reason)
+            event=self._audit(db,actor,'server_messages_append_controller_status',detail)
+            # Final checks follow every write, including audit and receipt.
+            self._messages_append_state(db,host)
+            current=self._server_manager(db,actor,host_id)
+            final=self._messages_append_snapshot(db,current)
+            stored=db.execute('SELECT * FROM server_messages_append_statuses WHERE request_id=? AND request_revision=?',
+                (request_id,expected_revision)).fetchone()
+            receipt=db.execute('SELECT * FROM server_messages_append_receipts WHERE owner_id=? AND host_id=? AND operation=? AND key=?',saved_receipt[:4]).fetchone()
+            audit=db.execute('SELECT actor,event,detail FROM audit WHERE id=?',(event,)).fetchone()
+            if (final[:2]!=snapshot[:2] or final[2][0]-snapshot[2][0]!=3 or final[2][1:]!=snapshot[2][1:]
+                or dict(self._messages_append_record(db,current,request_id))!=dict(record)
+                or stored is None or dict(stored)!=values or receipt is None or tuple(receipt)!=saved_receipt
+                or audit is None or tuple(audit)!=(audit_json(actor),'server_messages_append_controller_status',audit_json(detail))):
+                _fail('server_messages_append_postcondition_failed',409)
             return result
