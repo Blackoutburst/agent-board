@@ -31,12 +31,14 @@ avec `resource`, les UUID distincts du Pool, les outils, les sources et les budg
 sont épinglés dans l’intention privée. Le premier reçu de registration épingle
 ensuite le device et la version du profil Board sélectionnés.
 
-Le ticket doit être `todo`, sans claim, délégation, dépendance ou attente humaine,
+Le ticket doit être `todo`, sans claim, délégation, dépendance bloquante ou attente humaine,
 avec projet actif et affectations absentes ou correspondant au propriétaire et
 au profil. Trois nouveaux clients enregistrent la même session ; aucun argument
 `registration=` réservé aux familles n’est utilisé. Les lectures fraîches
 `get_work`, `get_ticket` et du contexte borné refusent les changements pertinents
 avant chaque qualification et avant la liaison finale.
+Après l’intention, toutes les étapes consomment la sélection canonique détachée ;
+une mutation des listes ou objets budgets fournis par l’appelant ne l’élargit pas.
 
 L’ordre est : intention durable ; copie Git isolée ; copie du seul vérificateur
 approuvé et workspace planner vide ; manifeste/broker et plans existants ;

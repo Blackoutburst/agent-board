@@ -394,3 +394,48 @@ def test_corrupt_completion_cannot_redirect_reads_to_an_unapproved_private_file(
     with pytest.raises(DevelopmentError):f.prepare(job,args)
     with pytest.raises(DevelopmentError):f.preparer.status(job['id'])
     assert len(f.clients)==3
+
+
+def dependency(f,ticket,*,status='done'):
+    parent=f.board.create_ticket(f.human,f.project['id'],'Prerequisite',idempotency_key='prerequisite')
+    if status=='done':
+        f.board.update_ticket(f.human,parent['id'],parent['version'],status='done',outcome='Delivered',evidence='Synthetic evidence')
+    f.update(ticket,depends_on=[parent['id']])
+    return parent
+
+
+def test_completed_dependency_allows_preparation(fixture):
+    f=fixture;job,ticket,args=f.selected();dependency(f,ticket)
+    assert f.prepare(job,args)['status']=='bound'
+    assert f.events==['plan','backend','policy']
+
+
+@pytest.mark.parametrize('when',['backend','policy'])
+def test_dependency_downgraded_during_qualification_refuses_binding(fixture,when):
+    f=fixture;job,ticket,args=f.selected();parent=dependency(f,ticket)
+    def downgrade(stage):
+        if stage==when:f.update(parent,status='todo')
+    f.hook=downgrade
+    with pytest.raises(Exception):f.prepare(job,args)
+    assert not (Path(f.driver.selections.directory)/(job['id']+'.json')).exists()
+    if when=='backend':assert 'policy' not in f.events
+
+
+@pytest.mark.parametrize('which',['paths','actions','budgets'])
+def test_detached_intent_is_the_only_selection_after_caller_mutation(fixture,which):
+    f=fixture;job,_,args=f.selected();args['actions']=['repo.read_file','repo.run_test']
+    def mutate(stage):
+        if stage!='plan':return
+        if which=='actions':args['actions'].append('repo.patch_file')
+        elif which=='paths':
+            root=next(f.work.iterdir())/'checkout'
+            (root/'two.py').write_text('unselected synthetic file\n');args['paths'].append('two.py')
+        else:object.__setattr__(args['broker_budgets'],'max_tests',31)
+    f.hook=mutate
+    assert f.prepare(job,args)['status']=='bound'
+    root=f.base/'preparations'/job['id']
+    intent=decode(file_document(root/'intent.json',preparation.MAX_DOCUMENT)[0])['request']
+    manifest=decode(file_document(root/'broker'/'manifest.json')[0])
+    assert manifest['actions']==intent['actions']
+    assert list(manifest['files'])==intent['paths']
+    assert manifest['budgets']==intent['broker_budgets']

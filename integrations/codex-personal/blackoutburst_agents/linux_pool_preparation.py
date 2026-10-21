@@ -177,7 +177,6 @@ class LinuxPoolJobPreparer:
         ticket=observed['ticket']
         if (ticket['status']!='todo' or ticket['claimant'] is not None
                 or ticket.get('delegation') is not None or ticket.get('claim_expired') is True
-                or ticket.get('depends_on')
                 or ticket.get('resource')!=request['resource']):fail('linux_pool_ticket_not_ready')
         selected={'context_sha256':observed['context']['fingerprint'],
                   'policy_sha256':digest(canonical(observed['policy']))}
@@ -246,7 +245,7 @@ class LinuxPoolJobPreparer:
                     def authorize(given,action,wanted):
                         try:
                             held();self._fresh(authority,request,baseline)
-                            return given==manifest_scope and action in request['actions'] and wanted==resource
+                            return given==manifest_scope and action in request['actions'] and wanted==request['resource']
                         except Exception:return False
                     stage='git'
                     self._record(private,'02-git-intent.json',{'request_sha256':request_sha,'scope':manifest_scope})
@@ -257,20 +256,23 @@ class LinuxPoolJobPreparer:
                     stage='resources'
                     self._record(private,'03-resources-intent.json',{'request_sha256':request_sha,'inputs':inputs})
                     scripts=private.path/'scripts';os.mkdir(scripts,0o700);os.fsync(private.fd)
+                    if digest(verifier)!=request['verifier_sha256']:fail('linux_pool_verifier_changed')
                     with PrivateDirectory(scripts) as script_dir:script_dir.create('verifier.py',verifier)
                     planner=private.path/'planner';os.mkdir(planner,0o700);os.fsync(private.fd)
+                    selected_test=request['test']
                     plan=pin_linux_execution_plan(root=inputs['root'],scripts_root=str(scripts),
-                        scripts={test_name:{'path':'verifier.py','timeout_seconds':test_timeout_seconds,
-                                           'max_output_bytes':test_max_output_bytes}},interpreter=request['interpreter'],unshare=request['unshare'])
-                    suite=NamedTest(test_name,linux_execution_backend_id(digest(canonical(plan))),test_timeout_seconds,test_max_output_bytes)
+                        scripts={selected_test['name']:{'path':'verifier.py','timeout_seconds':selected_test['timeout_seconds'],
+                            'max_output_bytes':selected_test['max_output_bytes']}},interpreter=request['interpreter'],unshare=request['unshare'])
+                    suite=NamedTest(selected_test['name'],linux_execution_backend_id(digest(canonical(plan))),
+                        selected_test['timeout_seconds'],selected_test['max_output_bytes'])
                     broker,backend,policy=(private.path/name for name in ('broker','backend','policy'))
                     prepare_linux_execution_manifest(broker,execution_plan=plan,root=inputs['root'],
-                        base_sha=inputs['base_sha'],scope=manifest_scope,paths=list(paths),resource=resource,
-                        authorize_scope=authorize,tests=[suite],actions=sorted(actions),budgets=broker_budgets)
+                        base_sha=inputs['base_sha'],scope=manifest_scope,paths=request['paths'],resource=request['resource'],
+                        authorize_scope=authorize,tests=[suite],actions=request['actions'],budgets=Budgets(**request['broker_budgets']))
                     with closing(DevelopmentJournal(broker)) as journal:manifest=deepcopy(journal.manifest)
                     prepare_linux_backend(backend,manifest=manifest,plan=plan)
                     prepare_linux_planner_policy(policy,workspace=planner,checkout=inputs['root'],
-                        executable=request['executable'],cli_version=cli_version,interpreter=request['interpreter'])
+                        executable=request['executable'],cli_version=request['cli_version'],interpreter=request['interpreter'])
                     stage='backend-qualification'
                     self._fresh(authority,request,baseline);held()
                     self._record(private,'04-backend-qualification-intent.json',{'plan_sha256':digest(canonical(plan))})
@@ -295,17 +297,17 @@ class LinuxPoolJobPreparer:
                         for path,pin in manifest['files'].items():
                             data,_=repository.read(path,manifest['budgets']['max_file_bytes'])
                             if digest(data)!=pin['sha256'] or len(data)!=pin['bytes']:fail('linux_pool_source_changed')
-                    private.create('instruction.txt',instruction.encode())
+                    private.create('instruction.txt',request['instruction'].encode())
                     selection={'schema':1,'operation_id':job['id'],'worker_id':job['worker_id'],'session_id':job['session_id'],
                         'scope':request['scope'],'broker_directory':str(broker),'backend_directory':str(backend),
                         'planner_policy_directory':str(policy),'instruction_file':str(private.path/'instruction.txt'),
-                        'model':model,'budgets':request['planner_budgets']}
+                        'model':request['model'],'budgets':request['planner_budgets']}
                     self._record(private,'selection.json',selection)
                     self._fresh(final,request,baseline);held()
                     # Dispatch and Stop share this short local metadata bracket.
                     # All registrations, RPC, Git and qualification are outside.
                     with self.pool.mutex:
-                        current_pool,current_job=self._job(operation_id,project_id,ticket_id)
+                        current_pool,current_job=self._job(operation_id,request['project_id'],request['ticket_id'])
                         if current_pool!=pool_id or current_job!=job:fail('linux_pool_job_changed')
                         bound=self.driver.bind_selection(self.pool._public(job),private.path/'selection.json')
                 complete={'schema':SCHEMA,'request_sha256':request_sha,
