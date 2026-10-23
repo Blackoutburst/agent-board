@@ -106,7 +106,7 @@ def main():
             try:
                 with urllib.request.urlopen('http://127.0.0.1:9140/health',timeout=2) as response:
                     health=json.load(response)
-                if health.get('version')=='2.17.1' and health.get('schema_version')==17:
+                if health.get('version')=='2.17.2' and health.get('schema_version')==17:
                     break
             except (OSError,ValueError):
                 pass

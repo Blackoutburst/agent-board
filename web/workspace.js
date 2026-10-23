@@ -527,7 +527,8 @@ const Workspace = (() => {
   const profileTemplates = {
     development: { name: "Developer", avatar: "🛠", role: "Development", description: "Implement focused changes and verify the result.", instructions: "Understand the selected task and existing code before making changes. Keep changes focused, run relevant checks, and explain the result and remaining limits. Ask for missing information when needed.", response_style: "Clear, concise updates with concrete verification evidence." },
     review: { name: "Reviewer", avatar: "🔎", role: "Code review", description: "Review changes for concrete defects and regressions.", instructions: "Review the selected change independently. Prioritize reproducible bugs, regressions, and missing safeguards. Cite the affected file and scenario. Explain what was checked and any limits of the review.", response_style: "Lead with actionable findings, ordered by severity." },
-    research: { name: "Researcher", avatar: "📚", role: "Research", description: "Investigate a question and summarize the evidence.", instructions: "Clarify the selected question, use relevant primary sources, and distinguish verified facts from assumptions. Compare the options and explain uncertainties. Keep recommendations within the task's scope.", response_style: "A short answer followed by supporting evidence and sources." }
+    research: { name: "Researcher", avatar: "📚", role: "Research", description: "Investigate a question and summarize the evidence.", instructions: "Clarify the selected question, use relevant primary sources, and distinguish verified facts from assumptions. Compare the options and explain uncertainties. Keep recommendations within the task's scope.", response_style: "A short answer followed by supporting evidence and sources." },
+    management: { name: "Management / Lead", avatar: "🧭", role: "Management", description: "Coordonner les agents et leurs profils dans le périmètre confié par leur propriétaire.", instructions: "Manage ordinary agent profiles only through explicitly delegated tools and current owner/project/grant ceilings. Keep independent review and truthful execution evidence. Ask the owner for identity, connection or permission changes outside the delegation. A role name grants no authority.", response_style: "Des décisions concises, avec leur périmètre et des preuves vérifiables." }
   };
   const profileAvatar = (p) => el("span", { class: "profile-avatar", "aria-hidden": "true", title: p.avatar || "" }, p.avatar || "◇");
   const profileStatus = (p) => badge(profileStates[p.status] || p.status, p.status === "active" ? "status-ready" : p.status === "paused" ? "status-blocked" : "");
@@ -1767,7 +1768,7 @@ const Workspace = (() => {
       el("div", { class: "form-row" }, profileField("Avatar text or emoji", "avatar", 32, { value: p?.avatar || "", placeholder: "🔎", hint: "Plain text only. Images and URLs are not used." }), profileField("Role", "role", 200, { value: p?.role || "", placeholder: "Code review" })),
       profileField("Description", "description", 4000, { type: "textarea", rows: 2, value: p?.description || "", placeholder: "What should this agent focus on?" }));
     const appearance = el("div", { class: "profile-editor-top" }, basics, preview);
-    const template = select("Start from a template", "template", [["", "Custom profile"], ["development", "Development"], ["review", "Review"], ["research", "Research"]], "");
+    const template = select("Start from a template", "template", [["", "Custom profile"], ["development", "Development"], ["review", "Review"], ["research", "Research"], ["management", "Management / Lead"]], "");
     if (!p) form.append(template);
     form.append(appearance,
       profileField("Instructions", "instructions", 12000, { type: "textarea", rows: 6, value: p?.instructions || "", hint: "Private to your account and authorized executor. Do not include passwords or connection keys." }),
@@ -1797,9 +1798,17 @@ const Workspace = (() => {
       select("Work selection", "autonomy", [["responses", "Responses only"], ["requested", "Explicitly requested work"], ["queue", "Authorized queue work"]], policy.autonomy),
       el("p", { class: "small muted" }, "Queue permission does not start a worker or listener. An executor must also support and be authorized for that workflow."),
       el("details", { class: "profile-legacy-scopes" }, el("summary", {}, "Legacy action limits"), profileField("Allowed actions (one per line)", "actions", 25700, { type: "textarea", value: policy.actions.join("\n") }), profileField("Allowed resources (one per line)", "resources", 25700, { type: "textarea", value: policy.resources.join("\n") })));
+    const managementGranted = policy.actions.some(value => value.startsWith("agent.profile.")) || policy.resources.some(value => value.startsWith("agent-profiles:"));
+    const management = check("Gérer les profils d’agents ordinaires", "manage_agent_profiles", managementGranted);
+    let managementTouched = false;
+    management.querySelector("input").disabled = Boolean(p?.legacy);
+    management.querySelector("input").addEventListener("change", () => { managementTouched = true; });
     form.append(projectPicker, permissions,
+      el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
+        el("p", { class: "small muted" }, "Autorise la création, la modification et l’archivage réversible des profils ordinaires de votre compte. Chaque profil doit rester dans les projets suivis et sous les plafonds effectifs de permissions, d’actions, de ressources et d’autonomie de ce Lead."),
+        el("p", { class: "small muted" }, p?.legacy ? "Créez un nouveau profil à projets explicites pour cette délégation. Le nom du rôle seul ne donne aucun droit." : "Activez la lecture et les demandes de travail, choisissez des projets explicites et une sélection de travail autorisée. Les identités Management, les connexions et les limites d’exécution restent gérées par vous. Cette délégation ne démarre aucun agent.")),
       el("p", { class: "small muted" }, p ? `Editing configuration v${p.version}. Saved preferences apply to future work; existing work keeps its captured configuration.` : "A new profile has no connection. Choose its project scope and permissions, then connect an executor."),
-      profileWorkNotice(p),
+      ...(p?.active_work?.length ? [profileWorkNotice(p)] : []),
       formButtons(p ? "Save profile" : "Create profile"));
     const refreshPreview = () => {
       const values = new FormData(form);
@@ -1819,7 +1828,31 @@ const Workspace = (() => {
       fields.policy = { allow_read: values.has("allow_read"), allow_messages: values.has("allow_messages"), allow_requests: values.has("allow_requests"), autonomy: values.get("autonomy"), actions: lines(String(values.get("actions") || "")), resources: lines(String(values.get("resources") || "")) };
       if (Object.hasOwn(policy, "allow_create_projects") || createProjectsTouched) fields.policy.allow_create_projects = values.has("allow_create_projects");
       if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
-      const saved = await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
+      let saved = await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
+      if (state.actor?.owner_id !== owner) return;
+      if (managementTouched) {
+        try {
+          const enabled = values.has("manage_agent_profiles");
+          const updated = await api(`/agent-profiles/${workPath(saved.id)}/management`, { method: "PUT", data: { expected_version: saved.version, enabled } });
+          const actions = updated.policy?.actions, resources = updated.policy?.resources;
+          const grants = ["agent.profile.read", "agent.profile.create", "agent.profile.update", "agent.profile.archive"];
+          if (updated.id !== saved.id || updated.owner_id !== owner || updated.version !== saved.version + 1
+              || !Array.isArray(actions) || !Array.isArray(resources)
+              || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
+              || (enabled ? !grants.every(value => actions.includes(value)) || !resources.includes(`agent-profiles:${owner}`)
+                : actions.some(value => value.startsWith("agent.profile.")) || resources.some(value => value.startsWith("agent-profiles:")))) {
+            throw new Error("Réponse de délégation incomplète ou incohérente.");
+          }
+          saved = updated;
+        }
+        catch (error) {
+          if (state.actor?.owner_id !== owner) return;
+          openModal("Délégation à vérifier", el("div", {},
+            el("p", { class: "callout", role: "alert" }, `Profil enregistré ; délégation non confirmée. Rechargez son état avant de réessayer. ${error.message}`),
+            btn("Recharger le profil", guard(() => profileEditor(saved.id)), "primary"), btn("Fermer", closeModal)));
+          return;
+        }
+      }
       if (state.actor?.owner_id !== owner) return;
       closeModal(); agentTab = "profiles"; await agents();
       if (state.actor?.owner_id !== owner) return;

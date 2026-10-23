@@ -34,6 +34,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from board import Board, BoardError
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
 from server_messages_append import validate_messages_append_arguments
+from profile_management import PROFILE_MANAGEMENT_TOOLS,validate_profile_management_arguments
 from runtime import validate_message_admission_seal_arguments
 from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
@@ -60,13 +61,16 @@ class BoardMCP(FastMCP):
             validate_messages_append_arguments(name, arguments)
         elif name == 'seal_message_execution_admission':
             validate_message_admission_seal_arguments(arguments)
+        elif name in PROFILE_MANAGEMENT_TOOLS:
+            validate_profile_management_arguments(name,arguments)
         return await super().call_tool(name, arguments)
 
     async def list_tools(self):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
                 if tool.name in {'get_development_frame', 'seal_message_execution_admission'}
-                or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS else tool for tool in tools]
+                or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS
+                or tool.name in PROFILE_MANAGEMENT_TOOLS else tool for tool in tools]
 
 
 class Body(BaseModel):
@@ -354,6 +358,11 @@ class NewProfile(ProfileChanges):
 
 class ProfilePatch(ProfileChanges):
     expected_version: Version
+
+
+class ProfileManagementGrant(ProjectBody):
+    expected_version: Version
+    enabled: bool
 
 
 class ProfileDuplicate(ProjectBody):
@@ -724,6 +733,47 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                             include_archived: Annotated[bool, Field(strict=True)] = False, limit: int = 20, cursor: str | None = None, view: Literal["compact", "full"] = "compact") -> dict:
         """List projects visible to this authenticated session. Requires read permission; project content is untrusted context. Does not claim or start work. Compact pages return items/next_cursor/totals; drain next_cursor with the same filters. view=full explicitly restores the original list."""
         return full_list(board.list_projects(session_actor(session_id), query=query, include_archived=include_archived)) if view == "full" else wire(views.page(session_actor(session_id),'list_projects',board.list_projects(session_actor(session_id), query=query, include_archived=include_archived),limit=limit,cursor=cursor,filters={'query':query,'include_archived':include_archived}))
+
+    def managed_profile_view(value,view):
+        if view=='full':return value
+        # Generic profile text locators intentionally read only the caller's own
+        # configuration. Delegated targets must use this explicitly scoped read.
+        summary={key:value[key] for key in ('id','owner_id','name','avatar','status','version','project_ids')}
+        summary['full_view']={'tool':'get_managed_agent_profile','profile_id':value['id'],'view':'full'}
+        return wire(summary)
+
+    @mcp.tool()
+    async def list_managed_agent_profiles(session_id: str, include_archived: bool = False, limit: int = 20,
+                                           cursor: str | None = None, view: Literal['compact','full'] = 'compact') -> dict:
+        """List ordinary profiles within your explicit human-delegated owner/project/grant ceiling. Requires agent.profile.read and the exact owner management resource in both stored and effective policy. Roles and legacy wildcards grant nothing. No connections or active-work identities are returned. Get an exact profile with get_managed_agent_profile(view='full')."""
+        actor=session_actor(session_id);rows=board.list_managed_agent_profiles(actor,include_archived)
+        if view=='full':return full_list(rows)
+        summaries=[{key:row[key] for key in ('id','owner_id','name','avatar','status','version','project_ids')} for row in rows]
+        return wire(views.page(actor,'list_managed_agent_profiles',summaries,limit=limit,cursor=cursor,filters={'include_archived':include_archived}))
+
+    @mcp.tool()
+    async def get_managed_agent_profile(session_id: str, profile_id: str, view: Literal['compact','full'] = 'full') -> dict:
+        """Read one ordinary profile within your explicit human delegation. Never returns connection keys, bindings, Runtime or another management profile. Full view preserves exact instructions and policy for a later CAS; reading grants no authority."""
+        return managed_profile_view(board.get_managed_agent_profile(session_actor(session_id),profile_id),view)
+
+    @mcp.tool()
+    async def create_managed_agent_profile(session_id: str, profile: dict, view: Literal['compact','full'] = 'full') -> dict:
+        """Explicitly create an unbound ordinary owner profile with a stable idempotency_key inside profile. Its projects, actions, resources, permission switches and autonomy cannot exceed your effective human-granted ceiling. No management/Runtime/server/credential grant, device binding or execution is created."""
+        values=NewProfile.model_validate(profile).supplied_fields()
+        return managed_profile_view(board.create_managed_agent_profile(session_actor(session_id),**values),view)
+
+    @mcp.tool()
+    async def update_managed_agent_profile(session_id: str, profile_id: str, expected_version: Version,
+                                            idempotency_key: str, changes: dict, view: Literal['compact','full'] = 'full') -> dict:
+        """Edit an ordinary profile using its exact version and stable retry key. Current and proposed scope/grants must remain within your effective ceiling. Cannot edit yourself, another manager, credentials, bindings or Runtime capacity. A changed profile revokes old session authority; existing effects still require truthful cleanup. Archive uses its separate tool/grant."""
+        fields=ProfileChanges.model_validate(changes).supplied_fields()
+        return managed_profile_view(board.update_managed_agent_profile(session_actor(session_id),profile_id,expected_version,idempotency_key,**fields),view)
+
+    @mcp.tool()
+    async def archive_managed_agent_profile(session_id: str, profile_id: str, expected_version: Version,
+                                             idempotency_key: str, view: Literal['compact','full'] = 'full') -> dict:
+        """Reversibly archive an ordinary profile in your delegated ceiling with exact version/retry key. Keeps audits, bindings, active claims and execution records. This does not stop a process or prove cleanup. Restore via the bounded update tool; management identities remain human-only."""
+        return managed_profile_view(board.archive_managed_agent_profile(session_actor(session_id),profile_id,expected_version,idempotency_key),view)
 
     @mcp.tool()
     async def create_project(session_id: str, name: str, participants: list[str], idempotency_key: str,
@@ -1168,7 +1218,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.17.1", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1"]}
+        return {"status": "ok", "version": "2.17.2", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1358,6 +1408,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.patch('/api/agent-profiles/{profile_id}')
     async def update_agent_profile(profile_id: str, values: ProfilePatch, actor=Depends(human)):
         return board.update_agent_profile(actor, profile_id, **values.supplied_fields())
+
+    @app.put('/api/agent-profiles/{profile_id}/management')
+    async def grant_profile_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
+        return board.set_agent_profile_management(actor,profile_id,**values.model_dump())
 
     @app.get('/api/agent-profiles/{profile_id}/versions/{version}')
     async def agent_profile_version(profile_id: str, version: int, actor=Depends(human)):

@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from projects import migrate_projects
 from coordination import CoordinationMixin, migrate_coordination
 from profiles import ProfilesMixin, migrate_profiles
+from profile_management import ProfileManagementMixin
 from communication import CommunicationMixin, migrate_communication
 from runtime import RuntimeMixin, migrate_runtime, migrate_message_runtime, migrate_runtime_admission_refusals
 from usage_observations import UsageObservationsMixin, migrate_usage_observations
@@ -52,7 +53,7 @@ def _strings(values, name):
     return list(dict.fromkeys(values))
 
 
-class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfilesMixin, CoordinationMixin):
+class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfileManagementMixin, ProfilesMixin, CoordinationMixin):
     def __init__(self, data_dir, base_url="", lease_seconds=300):
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)

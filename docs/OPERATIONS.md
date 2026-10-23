@@ -1,13 +1,19 @@
 # Operations and release procedure
 
-Board 2.17.1 simplifies Needs you on the inbox and task page: short prompts,
+Board 2.17.2 adds explicitly human-delegated Management / Lead profiles and five
+bounded MCP tools for ordinary profile management. Schema 17 is unchanged.
+No existing agent receives this authority automatically. Follow the human-only
+[activation and revocation procedure](DELEGATED-AGENT-MANAGEMENT.md) before using
+a new Lead identity; creating a profile never starts or binds an executor.
+
+Since Board 2.17.1, Needs you is simplified on the inbox and task page: short prompts,
 explicit choices or a custom reply, copyable commands, and expandable context.
 The browser form and MCP handoff tools accept the same optional presentation
 fields. Schema 17 is unchanged; existing requests and retry identities remain
 valid. This release updates Board source only and does not update or activate
 any separately installed personal owner adapter.
 
-Current source is Board 2.17.1/schema 17 with adapter 0.33.0. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema17, both request barriers, append proofs/statuses and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
+Current source is Board 2.17.2/schema 17 with adapter 0.33.0. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema17, both request barriers, append proofs/statuses and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures
@@ -46,14 +52,14 @@ Python verifier, repository/base, profiles, paired connections, models and
 budgets are explicit operator selections. No arbitrary shell or model-created
 new files are added.
 
-As of 23 October 2026, the new pool unit is **not installed and inactive**.
+As of 23 October 2026, the new pool unit is **installed, stopped and boot-disabled**.
 The [separate addon installer](../deploy/worker_pool/README.md) prepares a
 disabled, stopped unit; source publication or Board deployment does not start
 it or upgrade existing owner hosts. The `workflow-plan` action inspects the
 selected metadata without registration, qualification or model execution.
 Owner pairing and normal official Codex/gh authentication, exact-source
-backend/planner qualification in the final unit, and an explicit installation
-and start remain separate operator steps.
+backend/planner qualification in the final unit, and an explicit
+start remain separate operator steps.
 
 The integration tests exercise real temporary Board, Git, Pool, journals and
 Runtime with synthetic model/GitHub transports and Linux qualification
@@ -186,7 +192,7 @@ The pairing exchange uses `/mcp/connect/exchange`, which matches the current ngi
 
 ## After release
 
-Verify local health reports `2.17.1` and schema 17. Through the public MCP URL with an existing device credential, discover 70 tools including `get_development_frame`, `release_ticket`, `reconcile_profile_claim`, `reserve_message_execution`, `inspect_profile_refresh` and `refresh_agent_session`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git, including `profile_refresh.py`. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
+Verify local health reports `2.17.2` and schema 17. Through the public MCP URL with an existing device credential, discover 75 tools including `get_development_frame`, `release_ticket`, `reconcile_profile_claim`, `reserve_message_execution`, `inspect_profile_refresh` and `refresh_agent_session`, register a session/identity, list the actual Board overhaul project, and read its tasks/activity. Confirm a default `read_inbox` poll returns only `messages`, `cursor` and `session`, and explicit compact `include_work=true` returns a labelled get_work pointer without a false empty task list. Enumerate actual work separately. Follow compact text locators or explicitly select full views before treating any body as source. Verify unauthorized reads still fail. Compare all tracked deployed file hashes with Git, including `profile_refresh.py`. The `queue` integration remains a finite explicit command; this release enables no permanent listener or production queue selection.
 
 Schema 6 adds owner execution limits and runtime reservations transactionally. The initial limit is one participating turn per owner. Old clients and manual subscription usage remain outside this protocol. Validate **Agents → Runtime** with synthetic accounts before release; real runtime/model-policy tests require a separate, explicitly scoped pilot. No process is launched by editing limits, profile preferences or model metadata.
 

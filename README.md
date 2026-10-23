@@ -13,7 +13,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - An atomic work queue with renewable claims, precise session attribution and explicit expired-claim recovery.
 - Agent-to-agent delegation. A Windows agent can create a Linux-only child task that blocks its parent. A matching Linux agent picks it up; completing the child makes the parent available to the original agent.
 - Explicit two-worker development families with shared budgets, isolated checkouts, verified child results, parent integration and visible stop controls. The [local family guide](integrations/codex-personal/FAMILY.md) describes the finite, opt-in path and its qualification requirements.
-- Adapter 0.33.0's explicit [cloud workflow](integrations/codex-personal/CLOUD-WORKFLOW.md): one to four selected coders, a tested draft PR, and an independent review opinion visible on the same ticket. Its new pool unit is not yet installed or active; real server model acceptance remains outstanding.
+- Adapter 0.33.0's explicit [cloud workflow](integrations/codex-personal/CLOUD-WORKFLOW.md): one to four selected coders, a tested draft PR, and an independent review opinion visible on the same ticket. Its new pool unit is installed, stopped and boot-disabled; real server model acceptance remains outstanding.
 - Human information/action/approval requests, a Needs you view, durable discussion and configured Discord alerts.
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
 - Markdown renders in project text, task descriptions/criteria/progress/results, conversations and human requests; editors retain the original source.
@@ -70,11 +70,11 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Source candidate: `2.17.1`; database schema: `17` (check `/health` for the installed version)
+- Source candidate: `2.17.2`; database schema: `17` (check `/health` for the installed version)
 
 Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12. Source supporting only schema 12 cannot run against schema 13. Source supporting only schema 13 cannot run against schema 14. Source supporting only schema 14 cannot run against schema 15; never discard refusal tombstones during rollback. Source supporting only schema 15 cannot run against schema 16. Source supporting only schema 16 cannot run against schema 17. Code rollback must retain the schema-17 database, both request barriers, append proofs/statuses and every admission refusal, using compatible source; never restore an older database to roll back this release.
 
-Board 2.17.0 and adapter 0.31.0 add an explicit [inactive message-target append](docs/SERVER-MESSAGES-APPEND.md) for an already paired personal slot. The 70-tool catalogue includes its six closed manager operations. Installation starts no service or model. Adapter 0.33.0 separately provides the finite coder/PR/reviewer workflow. Its manager and writer components retain private results; the general hierarchy and assignment controller remain ticket #52 work. The new pool unit is still not installed or active, and the integration tests use synthetic model/GitHub transports and Linux qualification observations.
+Board 2.17.0 and adapter 0.31.0 add an explicit [inactive message-target append](docs/SERVER-MESSAGES-APPEND.md) for an already paired personal slot. The 70-tool catalogue includes its six closed manager operations. Installation starts no service or model. Adapter 0.33.0 separately provides the finite coder/PR/reviewer workflow. Its manager and writer components retain private results; the general hierarchy and assignment controller remain ticket #52 work. The new pool unit is installed, stopped and boot-disabled, and the integration tests use synthetic model/GitHub transports and Linux qualification observations.
 
 ## Design reference
 
