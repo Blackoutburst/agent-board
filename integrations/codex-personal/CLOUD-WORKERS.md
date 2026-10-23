@@ -18,7 +18,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Parcours `run-workflow` | Un à quatre codeurs sélectionnés, PR brouillon et avis exact d’un reviewer distinct sur le même ticket ; intégration testée avec modèles et GitHub simulés |
 | Revue indépendante | Driver Pool, préparation Linux explicite et publication durable de l’avis en statut `review` |
 | Mode historique `run-batch`/schema v1 | Quatre résultats privés ; la fin du lot ne publie pas de PR |
-| Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité non installée et inactive, qualification propriétaire à effectuer |
+| Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité installée, arrêtée et désactivée au démarrage, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
 | Rôles manager et rédacteur | Composants privés implémentés et testés, sans attribution ni dispatch des autres rôles |
 | Contrôleur hiérarchique et attribution | À réaliser et à valider de bout en bout dans le ticket #52 |
@@ -48,12 +48,20 @@ contrôleur fini : plan borné au catalogue opérateur pour le manager, synthès
 de reçus historiques corrélés pour le rédacteur. Leur résultat est privé ; ils
 ne distribuent pas encore les tâches de l’équipe.
 
-Au 23 octobre 2026, la nouvelle unité du pool n’est pas installée et aucun
+Au 23 octobre 2026, la nouvelle unité du pool est installée, arrêtée et désactivée au démarrage. Aucun
 modèle réel n’a validé ce nouveau parcours serveur. Les tests d’intégration
 avec Board, Git, journaux et Runtime temporaires vérifient le raccord logiciel ;
 leurs transports de modèle/GitHub et leurs qualifications Linux sont simulés.
 L’authentification des propriétaires, les qualifications dans l’unité finale et
 une recette réelle restent nécessaires avant de déclarer l’équipe active.
+
+## Vérification Linux du 23 octobre 2026
+
+La source `9f06c359bb7a56a18a562cef3f72ab3d3da0503a` ferme 84 modules et a passé
+les neuf scénarios backend et les cinq sondes planner, avec nettoyage confirmé.
+Cette observation reste une fixture synthétique UID1000 ; elle ne qualifie pas
+le compte propriétaire ni son abonnement et n’a exécuté aucun modèle. Le paquet
+SDK0.33 correspondant est installé avec son unité arrêtée et désactivée au démarrage.
 
 ## Validation Linux datée du 21 octobre 2026
 

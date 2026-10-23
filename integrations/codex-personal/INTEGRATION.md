@@ -7,7 +7,7 @@ Les qualifications natives historiques 0.26 restent attachées à leurs octets e
 
 Le dépôt commun est `Blackoutburst/agent-board`. Les changements Markdown et pièces jointes de Blackout sont conservés. Les développements de cette orchestration sont dans ce dépôt, jamais dans Touhou6. Les versions anciennes de clients restent bornées à leurs outils ; un outil obligatoire absent entraîne un refus, sans repli vers une exécution non gérée.
 
-Le profil Linux explicite reste conditionné à deux qualifications distinctes du backend et du planner dans leur environnement exact. Il ne transforme pas les anciens reçus en autorité. Depuis 0.33.0, l’entrée serveur finie [run-workflow](CLOUD-WORKFLOW.md) compose un à quatre codeurs sélectionnés, une livraison Git/PR brouillon et l’avis visible d’un reviewer distinct sur le même ticket. La nouvelle unité du pool n’est pas encore installée et reste inactive ; les modèles réels de ce parcours restent à valider. Voir [LINUX_EXECUTION.md](LINUX_EXECUTION.md) et [CLOUD-WORKERS.md](CLOUD-WORKERS.md).
+Le profil Linux explicite reste conditionné à deux qualifications distinctes du backend et du planner dans leur environnement exact. Il ne transforme pas les anciens reçus en autorité. Depuis 0.33.0, l’entrée serveur finie [run-workflow](CLOUD-WORKFLOW.md) compose un à quatre codeurs sélectionnés, une livraison Git/PR brouillon et l’avis visible d’un reviewer distinct sur le même ticket. La nouvelle unité du pool est installée, arrêtée et désactivée au démarrage ; les modèles réels de ce parcours restent à valider. Voir [LINUX_EXECUTION.md](LINUX_EXECUTION.md) et [CLOUD-WORKERS.md](CLOUD-WORKERS.md).
 
 ## Identités et responsabilités
 

@@ -21,7 +21,7 @@ revue distinct dont l’avis exact est ajouté au même ticket. Le ticket reste 
 revue ; ce parcours ne fusionne pas la PR. Le mode historique
 `run-batch`/schema v1 conserve ses quatre résultats privés.
 
-La nouvelle unité du pool n’est pas encore installée et reste inactive. Les
+La nouvelle unité du pool est installée, arrêtée et désactivée au démarrage. Les
 tests de ce parcours utilisent les vrais composants Board/Git/Runtime et des
 modèles, un transport GitHub et des qualifications Linux simulés ; les modèles
 réels sur le serveur restent à valider. Les [rôles manager et rédacteur](TEAM-ROLES.md)

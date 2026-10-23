@@ -52,14 +52,14 @@ Python verifier, repository/base, profiles, paired connections, models and
 budgets are explicit operator selections. No arbitrary shell or model-created
 new files are added.
 
-As of 23 October 2026, the new pool unit is **not installed and inactive**.
+As of 23 October 2026, the new pool unit is **installed, stopped and boot-disabled**.
 The [separate addon installer](../deploy/worker_pool/README.md) prepares a
 disabled, stopped unit; source publication or Board deployment does not start
 it or upgrade existing owner hosts. The `workflow-plan` action inspects the
 selected metadata without registration, qualification or model execution.
 Owner pairing and normal official Codex/gh authentication, exact-source
-backend/planner qualification in the final unit, and an explicit installation
-and start remain separate operator steps.
+backend/planner qualification in the final unit, and an explicit
+start remain separate operator steps.
 
 The integration tests exercise real temporary Board, Git, Pool, journals and
 Runtime with synthetic model/GitHub transports and Linux qualification

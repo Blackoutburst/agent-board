@@ -6,8 +6,7 @@ commit and GitHub draft PR, author evidence/handoff, then an independent review
 whose opinion is visible on the same ticket. It never marks a ticket done or
 merges a PR. A completed workflow can report a review requesting corrections.
 
-As of 23 October 2026, the new pool unit is not yet installed and remains
-inactive. This source implements the complete finite path; real models and
+As of 23 October 2026, the new pool unit is installed, stopped and boot-disabled. This source implements the complete finite path; real models and
 GitHub publication through the final owner unit have not been validated. Tests
 use real temporary Board/Git/Runtime components with synthetic model/GitHub
 transports and Linux qualification observations. The
