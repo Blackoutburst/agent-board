@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.32.0
+## État de la source 0.33.0
 
 | Élément | État |
 | --- | --- |
