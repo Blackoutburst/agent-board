@@ -67,8 +67,9 @@ def plan_addon(directory):
         'private_root':str(p.owner_root(owner)),'service':p.unit_name(owner),'unit_limits':manifest['unit_limits'],
         'actions':['install_new_public_release','create_new_private_pool_directories','write_disabled_pool_unit','daemon_reload'],
         'human_steps':['normal_owner_cli_authentication','private_canonical_development_anchor_exists',
-            'pair_four_new_board_profiles_connections','grant_four_exact_resources_and_runtime_capacity',
-            'provide_new_local_repository_and_approved_verifiers','review_explicit_batch_plan','explicit_start_new_unit'],
+            'pair_explicit_selected_coder_reviewer_profiles_connections','grant_exact_resources_and_free_runtime_capacity',
+            'normal_owner_github_authentication_with_write_access',
+            'provide_new_local_repository_and_approved_verifiers','review_explicit_batch_and_workflow_plan','explicit_start_new_unit'],
         'activated':False,'execution_qualified':False}
 
 

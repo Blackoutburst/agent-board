@@ -25,6 +25,7 @@ from .pool_journal import uuid_value,identifier
 from .worker_pool import WorkerPool
 
 SCHEMA='linux-finite-pool-batch-v1'
+FLEXIBLE_SCHEMA='linux-finite-pool-batch-v2'
 MAX_BATCH=128*1024
 JOB_FIELDS={'name','agent_id','connection_file','repository','project_id','ticket_id',
     'paths','resource','actions','verifier_path','verifier_sha256','test_name',
@@ -45,9 +46,10 @@ def load_batch(path,*,root,owner_id,board_endpoint,max_seconds):
     raw,pin=file_document(path,MAX_BATCH);value=decode(raw)
     if (type(value) is not dict or set(value)!={
             'schema','batch_id','owner_id','board_endpoint','timeout_seconds','jobs'}
-            or value['schema']!=SCHEMA or value['owner_id']!=owner_id or value['board_endpoint']!=board_endpoint
+            or value['schema'] not in (SCHEMA,FLEXIBLE_SCHEMA) or value['owner_id']!=owner_id or value['board_endpoint']!=board_endpoint
             or type(value['timeout_seconds']) is not int or not 1<=value['timeout_seconds']<=max_seconds
-            or type(value['jobs']) is not list or len(value['jobs'])!=4):fail()
+            or type(value['jobs']) is not list
+            or not 1<=len(value['jobs'])<=4 or value['schema']==SCHEMA and len(value['jobs'])!=4):fail()
     uuid_value(value['batch_id']);names=set();agents=set();tickets=set();resources=set();connections=set()
     for job in value['jobs']:
         if type(job) is not dict or set(job)!=JOB_FIELDS:fail()
@@ -129,14 +131,19 @@ class FiniteLinuxPoolBatch:
         if len(raw)>MAX_BATCH:fail('finite_pool_record_limit')
         private.create(name,raw)
 
-    def run(self,batch_file,*,should_stop=None):
+    def run(self,batch_file,*,should_stop=None,workflow=None):
         """Explicit first invocation only; existing intent returns history only."""
         path=child(batch_file,self.root/'config')
         value,pin=load_batch(path,root=self.root,owner_id=self.owner_id,board_endpoint=self.endpoint,max_seconds=self.max_seconds)
+        if workflow is not None:
+            from .cloud_workflow import CloudLinuxWorkflow
+            if type(workflow) is not CloudLinuxWorkflow:fail('finite_pool_concrete_workflow_required')
+            workflow.validate_batch(value,self.root,self.owner_id,self.endpoint)
         if should_stop is not None and not callable(should_stop):fail()
         connections={job['connection_file']:file_document(job['connection_file'])[1] for job in value['jobs']}
         request={'batch':value,'configuration':pin,'roots':self.directories,'tools':self.tools,
                  'cli_version':self.cli_version,'sources':self.sources,'connections':connections}
+        if workflow is not None:request['workflow']=workflow.descriptor()
         request=decode(canonical(request));request_sha=digest(canonical(request))
         self._local(path,pin,full=True,connections=connections)
         with self._locked(value['batch_id']) as (private,fresh,held):
@@ -149,6 +156,11 @@ class FiniteLinuxPoolBatch:
                             'request_sha256':request_sha,'historical':True}
                 if (type(result) is not dict or result.get('batch_id')!=value['batch_id']
                         or result.get('request_sha256')!=request_sha):fail()
+                if workflow is not None and result.get('status')=='complete':
+                    completed=decode(private.read('workflow-complete.json',MAX_BATCH))
+                    if (result.get('workflow')!=completed or private.read('workflow-intent.json',MAX_BATCH)
+                            !=canonical({'request_sha256':request_sha})):fail('finite_pool_workflow_history_changed')
+                    workflow.verify_completed(private.path,value,completed,tools=self.tools,cli_version=self.cli_version)
                 return {**result,'historical':True}
             self._record(private,'intent.json',{'request':request,'request_sha256':request_sha})
             self._local(path,pin,full=True,connections=connections);held()
@@ -169,6 +181,7 @@ class FiniteLinuxPoolBatch:
                         while not done.wait(.05):
                             try:
                                 self._local(path,pin,connections=connections);owned.verify()
+                                if workflow is not None:workflow.check()
                                 if identity(os.fstat(owned.fd))!=owned.identity:fail()
                                 requested=stopping()
                             except Exception:requested=True
@@ -182,11 +195,17 @@ class FiniteLinuxPoolBatch:
                                 # A failed auxiliary batch marker cannot suppress it.
                                 try:pool.stop()
                                 except Exception:errors.append('finite_pool_stop_unconfirmed')
+                                if workflow is not None:
+                                    try:workflow.stop()
+                                    except Exception:errors.append('finite_pool_stop_unconfirmed')
                                 return
                 except Exception:
                     errors.append('finite_pool_stop_unconfirmed');stop.set()
                     try:pool.stop()
                     except Exception:errors.append('finite_pool_stop_unconfirmed')
+                    if workflow is not None:
+                        try:workflow.stop()
+                        except Exception:errors.append('finite_pool_stop_unconfirmed')
                 finally:monitor_ready.set()
             try:
                 if stopping():fail('finite_pool_stopped')
@@ -194,8 +213,9 @@ class FiniteLinuxPoolBatch:
                     directory=private.path/('selection-'+job['name'])
                     drivers[job['name']]=DevelopmentPoolDriver(directory,connection_file=job['connection_file'],
                         owner_id=self.owner_id,agent_id=job['agent_id'],board_endpoint=self.endpoint)
-                pool=WorkerPool(private.path/'pool',concurrency=4,ceiling=4,
-                    drivers={name:driver.binding() for name,driver in drivers.items()});self.pool=pool
+                bindings={name:driver.binding() for name,driver in drivers.items()}
+                if workflow is not None:bindings.update(workflow.bindings(private.path))
+                pool=WorkerPool(private.path/'pool',concurrency=len(value['jobs']),ceiling=len(value['jobs']),drivers=bindings);self.pool=pool
                 companion=threading.Thread(target=monitor,name='finite-pool-stop',daemon=False);companion.start()
                 if not monitor_ready.wait(timeout=1) or stopping() or errors:fail('finite_pool_stop_unconfirmed')
                 submitted=[]
@@ -248,19 +268,33 @@ class FiniteLinuxPoolBatch:
                     if stopping():
                         stop.set();pool.stop();break
                     time.sleep(.05)
-                done.set()
-                companion.join(timeout=1)
-                if companion.is_alive():errors.append('finite_pool_stop_unconfirmed')
                 if stopping() or errors:pool.shutdown(timeout=30)
                 status=pool.status()
                 clean=(status['live_threads']==0 and status['capacity_held']==0
-                    and len(status['jobs'])==4 and all(job['state']=='settled' and job['outcome']=='complete'
+                    and len(status['jobs'])==len(value['jobs']) and all(job['state']=='settled' and job['outcome']=='complete'
                         and job['cleanup_confirmed'] is True for job in status['jobs']))
+                workflow_result=None
+                if workflow is not None and clean and not stopping() and not errors:
+                    stage='delivering'
+                    self._local(path,pin,full=True,connections=connections);held();workflow.check(full=True)
+                    self._record(private,'workflow-intent.json',{'request_sha256':request_sha})
+                    workflow_result=workflow.deliver(pool=pool,drivers=drivers,batch=value,submitted=submitted,
+                        tools=self.tools,cli_version=self.cli_version,should_stop=stopping)
+                    self._record(private,'workflow-complete.json',workflow_result)
+                    clean=workflow_result.get('status')=='complete'
+                    status=pool.status()
+                done.set()
+                companion.join(timeout=1)
+                if companion.is_alive():errors.append('finite_pool_stop_unconfirmed')
                 result={'batch_id':value['batch_id'],'request_sha256':request_sha,'status':'complete' if clean and not stopping() and not errors else 'needs_review',
-                    'reason':'private_results_verified' if clean and not stopping() and not errors else 'cleanup_or_result_requires_review',
-                    'pool':status,'ticket_published':False,'historical':False}
+                    'reason':('workflow_verified' if workflow is not None else 'private_results_verified') if clean and not stopping() and not errors else 'cleanup_or_result_requires_review',
+                    'pool':status,'ticket_published':workflow_result is not None and clean,'historical':False}
+                if workflow_result is not None:result['workflow']=workflow_result
                 self._record(private,'complete.json',result);return result
             except Exception as error:
+                if workflow is not None:
+                    try:workflow.stop()
+                    except Exception:pass
                 if pool is not None:
                     try:pool.shutdown(timeout=30)
                     except Exception:pass
