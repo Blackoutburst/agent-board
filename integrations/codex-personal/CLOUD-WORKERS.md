@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.33.0
+## État de la source 0.34.0
 
 | Élément | État |
 | --- | --- |
@@ -18,6 +18,8 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Parcours `run-workflow` | Un à quatre codeurs sélectionnés, PR brouillon et avis exact d’un reviewer distinct sur le même ticket ; intégration testée avec modèles et GitHub simulés |
 | Revue indépendante | Driver Pool, préparation Linux explicite et publication durable de l’avis en statut `review` |
 | Mode historique `run-batch`/schema v1 | Quatre résultats privés ; la fin du lot ne publie pas de PR |
+| Autorisation Development autonome | Lecture bornée en une requête ; contrôles de contexte, révocation et délai natif inchangés |
+| Mise à jour du pool arrêté | Remplacement de la release publique avec conservation des données privées, sans démarrage |
 | Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité installée, arrêtée et désactivée au démarrage, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
 | Rôles manager et rédacteur | Composants privés implémentés et testés, sans attribution ni dispatch des autres rôles |
