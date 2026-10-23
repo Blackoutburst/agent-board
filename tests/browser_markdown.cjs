@@ -85,7 +85,7 @@ fs.mkdirSync(output,{recursive:true});
   }));
   await copyAndCheck(copyBlocks.nth(1),indentedCode); // A denial does not disable a later retry.
   assert.equal(await page.getByRole('heading',{name:'Acceptance',exact:true}).count(),1);
-  assert.equal(await page.getByRole('heading',{name:'Needed',exact:true}).count(),1);
+  assert.equal(await page.getByRole('heading',{name:'Needed',exact:true}).filter({visible:true}).count(),1);
   assert.equal(await page.getByText('reported',{exact:true}).evaluate(n=>n.tagName),'STRONG');
   const messages=page.locator('#messages');
   assert.equal(await messages.getByRole('heading',{name:'Rich heading',exact:true}).count(),1);

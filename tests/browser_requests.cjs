@@ -91,7 +91,7 @@ async function needsYou(page, count) {
 
     await needsYou(first.page, 1);
     await first.page.getByLabel('Your response', { exact: true }).fill('First owner answered the fixture.');
-    await first.page.getByRole('button', { name: 'Answer & unblock', exact: true }).click();
+    await first.page.getByRole('button', { name: 'Send answer', exact: true }).click();
     await first.page.getByRole('heading', { name: "You're all caught up", exact: true }).waitFor();
     assert.equal(await first.page.locator('.human-request').count(), 0);
     await first.page.reload();

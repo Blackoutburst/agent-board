@@ -89,7 +89,8 @@ def compact(value, source=None, path=()):
     for key, item in value.items():
         if key=='answer' and isinstance(item,str) and len(encoded(item))<=512:
             result[key]=item
-        elif isinstance(item, str) and (key in PROSE or len(encoded(item)) > 1024):
+        elif isinstance(item, str) and (key in PROSE or len(encoded(item)) > 1024
+                or (source and source[0] == 'human_request' and key in ('summary', 'command', 'label'))):
             info = text_info(item)
             if source:
                 field = '/'+ '/'.join(x.replace('~','~0').replace('/','~1') for x in (*path,key))
@@ -322,7 +323,7 @@ class MCPViews:
             elif kind == 'human_request':
                 row=db.execute('SELECT * FROM human_requests WHERE id=?',(identifier,)).fetchone()
                 if row is None:_fail('Human request not found',404)
-                self.board._ticket_member(db,actor,row['ticket_id']);data=self.board._request(row)
+                self.board._ticket_member(db,actor,row['ticket_id']);data=self.board._request(row,db)
             elif kind == 'legacy_task':
                 row=db.execute('SELECT * FROM tasks WHERE id=?',(identifier,)).fetchone()
                 if row is None:_fail('Task not found',404)
