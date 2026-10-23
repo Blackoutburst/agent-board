@@ -220,6 +220,28 @@ def test_cached_opinion_requires_same_fresh_context_and_delivery_guard(review_ca
     assert len(case['calls']) == 1
 
 
+def test_parent_operation_id_is_exact_and_cannot_adopt_another_review(review_case):
+    case=review_case;operation_id=str(uuid.uuid4())
+    result=run(case,operation_id=operation_id)
+    assert result['status']=='complete' and result['operation_id']==operation_id
+    assert run(case,operation_id=str(uuid.uuid4()))['reason']=='local_operation_conflict'
+    assert len(case['calls'])==1
+
+
+def test_stop_during_final_runtime_reauthorization_never_completes_opinion(review_case):
+    case=review_case;state={'reservations':0,'stop':False}
+    def before(name,_arguments):
+        if name=='reserve_execution':
+            state['reservations']+=1
+            if state['reservations']==4:state['stop']=True
+    case['client'].before=before
+    result=run(case,should_cancel=lambda:state['stop'])
+    assert state['reservations']==4
+    assert result['status']=='needs_review' and result['reason']=='cancel_requested'
+    assert case['journal'].get(result['operation_id'])['stage']=='needs_review'
+    assert len(case['calls'])==1
+
+
 @pytest.mark.parametrize('opinion', [
     {'verdict': 'done', 'text': 'Done'}, {'verdict': 'accept', 'text': 'Fine', 'merge': True},
     {'verdict': 'limited', 'text': ''},

@@ -216,7 +216,7 @@ class DeliveryReviewWorker:
             raise _Stop('ticket_not_reviewable')
 
     def run(self, *, scope, request_id, selection, instruction, material, workspace,
-            executable, model, timeout=120, should_cancel=None):
+            executable, model, timeout=120, should_cancel=None, operation_id=None):
         op = None
         try:
             selection = _selection(selection, material)
@@ -239,7 +239,7 @@ class DeliveryReviewWorker:
                     or self.runtime_client.session_id != scope['board_session_id']):
                 raise _Stop('runtime_scope_mismatch')
             with self.journal.lock(scope):
-                op = self.journal.begin(scope, request_id, config)
+                op = self.journal.begin(scope, request_id, config, operation_id=operation_id)
                 if op['stage'] in ('needs_review', 'abandoned'):
                     return _receipt(op, cached=True)
                 try:
@@ -329,7 +329,9 @@ class DeliveryReviewWorker:
             opinion = _opinion(op['payload']['result_text'])
             op = self._save(op, 'publishing', opinion={**opinion, 'selection': config['selection']})
         if op['stage'] == 'publishing':
+            BoardWorker._check_cancel(should_cancel)
             self._snapshot(op)
             self._runtime_proof(op)
+            BoardWorker._check_cancel(should_cancel)
             op = self._save(op, 'complete')  # Private opinion only; no remote publication.
         return _receipt(op)
