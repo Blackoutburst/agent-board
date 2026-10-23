@@ -3,7 +3,7 @@ from copy import deepcopy
 import math
 import time
 
-from .context import ContextScope, build_context, _ticket_sources
+from .context import ContextScope, build_context, build_context_from_reads, _ticket_sources
 from .dev_manifest import DevelopmentError, canonical, digest
 
 
@@ -142,6 +142,8 @@ class DevelopmentAuthorization:
             from .family_worker import FamilyAuthorizationGuard
             if type(self.delegation_guard) is FamilyAuthorizationGuard:
                 return self.delegation_guard.snapshot(self, require_claim=require_claim, remaining=remaining)
+        if getattr(self.client,'development_ticket_frame',False) is True:
+            return self._ticket_frame_snapshot(require_claim=require_claim,remaining=remaining)
         self._registration()
         policy = self._policy()
         first = self.ticket()
@@ -152,6 +154,33 @@ class DevelopmentAuthorization:
             registration=self.registration)
         last = self.ticket()
         return self._snapshot_result(policy, first, last, context, require_claim=require_claim, remaining=remaining)
+
+    def _ticket_frame_snapshot(self, *, require_claim, remaining):
+        """Compose exactly the usual sources from one fresh bounded RPC."""
+        from .development_frame import parse_ticket_frame
+        self._registration()
+        observed=self.client.get_development_ticket_frame(ticket_id=self.scope['ticket_id'])
+        # A blocked RPC cannot outlive a local Stop or replace a scope pin.
+        self._registration()
+        frame=parse_ticket_frame(observed,scope=self.scope,manifest=self.manifest)['selected']
+        self._policy_response(frame['policy_first'])
+        first,last=frame['first'],frame['last']
+        self._ticket_fields(first);self._ticket_fields(last)
+        # Preserve any explicit guard; concrete family guards take the earlier
+        # family branch and are never replaced by this standalone reader.
+        for response in (first,last):
+            if response['ticket'].get('delegation') is not None or self.delegation_guard is not None:
+                if self.delegation_guard is None or self.delegation_guard(response) is not True:
+                    raise DevelopmentError('development_ticket_unavailable')
+        if require_claim and not self.own_claim(first['ticket'],remaining=remaining):
+            raise DevelopmentError('development_claim_lost')
+        context=build_context_from_reads(scope=ContextScope(**{key:self.scope[key] for key in
+            ('owner_id','agent_id','project_id','ticket_id')}),registration=self.registration,
+            first_response=first,pages=frame['pages'],final_response=last)
+        policy=self._policy_response(frame['policy_last'])
+        result=self._snapshot_result(policy,first,last,context,require_claim=require_claim,remaining=remaining)
+        self._registration()
+        return result
 
     def _snapshot_result(self, policy, first, last, context, *, require_claim, remaining):
         if (last['ticket']['version'] != first['ticket']['version']

@@ -1,6 +1,11 @@
-# Board interface contract — 2.17.2
+# Board interface contract — 2.17.3
 
-The browser REST API and MCP act on one database. Application version is `2.17.2`; schema version is `17`; the MCP catalogue has 75 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+The browser REST API and MCP act on one database. Application version is `2.17.3`; schema version is `17`; the MCP catalogue has 76 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+
+`get_development_ticket_frame(session_id, ticket_id)` adds one bounded read for
+standalone Development authorization. Its before/after observations preserve
+the existing policy, ticket, context and native freshness checks; no claim,
+lease or work sweep is performed. See the [ticket-frame contract](docs/DEVELOPMENT-TICKET-FRAME.md).
 
 ## Explicit inactive message append (2.17.0, schema 17)
 
@@ -149,7 +154,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
 | Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
 | Bounded delegation families | `open_delegation_family`, `get_delegation_family`, `lookup_delegation_family`, `stop_delegation_family`, `accept_delegation_result`, `finalize_delegation_family` |
-| Fixed development observations | `get_development_frame` |
+| Fixed development observations | `get_development_frame`, `get_development_ticket_frame` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
 | Addressed-message model execution | `reserve_message_execution` with the same lookup/start/control/heartbeat/finish tools; explicit `seal_message_execution_admission` |
 | Informational subscription observations | `report_usage_observation` |

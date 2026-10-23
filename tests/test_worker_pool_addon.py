@@ -50,7 +50,7 @@ def test_closed_addon_inventory_and_readonly_plan_never_calls_systemctl(bundle,m
     assert not p.BASE.exists() and not p.RELEASES.exists()
 
 
-@pytest.mark.parametrize('module',['cloud_workflow','review_lifecycle','review_lifecycle_client','review_pool','development_pool_delivery'])
+@pytest.mark.parametrize('module',['cloud_workflow','review_lifecycle','review_lifecycle_client','review_pool','development_pool_delivery','development_client','development_frame','development_authorization'])
 def test_new_workflow_release_cannot_omit_essential_sdk_modules(bundle,module):
     directory,value,_=bundle
     del value['files']['source/blackoutburst_agents/'+module+'.py']

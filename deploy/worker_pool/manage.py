@@ -132,6 +132,131 @@ def _absent_unit(unit):
             'MainPID':'0','ControlPID':'0','DropInPaths':'','FragmentPath':''}:p.fail('pool_unit_already_exists')
 
 
+def _publish_release(directory,manifest,bundle_id):
+    release=p.RELEASES/bundle_id
+    if release.exists() or release.is_symlink():p.fail('pool_existing_layout_refused')
+    stage=Path(tempfile.mkdtemp(prefix='.pool-release-',dir=p.RELEASES))
+    try:
+        for name in ('manifest.json',*manifest['files']):
+            target=stage/name;target.parent.mkdir(parents=True,exist_ok=True,mode=0o755)
+            _new_file(target,p.read_regular(Path(directory)/name),0o755 if name.startswith('tools/') else 0o444)
+        for parent,dirs,_ in os.walk(stage):
+            for name in dirs:os.chmod(Path(parent)/name,0o755)
+        copied=p.load_bundle(stage)
+        if copied!=manifest or p.manifest_id(copied)!=bundle_id:p.fail('pool_bundle_selection_changed')
+        os.chmod(stage,0o755);os.rename(stage,release);_fsync(p.RELEASES)
+    finally:
+        if stage.exists():shutil.rmtree(stage)
+    return release
+
+
+def _stopped_for_upgrade(unit):
+    state=_unit_state(unit)
+    if (state['LoadState']!='loaded'
+            or (state['ActiveState'],state['SubState']) not in (('inactive','dead'),('failed','failed'))
+            or state['UnitFileState']!='disabled' or state['MainPID']!='0' or state['ControlPID']!='0'
+            or state['DropInPaths'] or state['FragmentPath']!=str(p.UNIT_DIR/unit)):
+        p.fail('pool_unit_not_stopped_disabled')
+    return state
+
+
+def _replace_unit(path,expected,replacement):
+    p.protected(path)
+    if p.read_regular(path)!=expected:p.fail('pool_unit_changed')
+    descriptor,name=tempfile.mkstemp(prefix='.pool-unit-',dir=path.parent)
+    temporary=Path(name)
+    try:
+        with os.fdopen(descriptor,'wb') as stream:
+            stream.write(replacement);stream.flush();os.fsync(stream.fileno())
+        os.chmod(temporary,0o644)
+        if p.read_regular(path)!=expected:p.fail('pool_unit_changed')
+        os.replace(temporary,path);_fsync(path.parent)
+    finally:
+        if temporary.exists():temporary.unlink()
+
+
+def upgrade_addon(directory,*,previous_bundle_id,apply=False,expected_bundle_id=None):
+    """Replace only a receipted stopped unit; never inspect owner-private contents.
+
+    The prior and new tools, owner, endpoint, limits and unit template must be
+    identical. Only public source/revision changes are accepted by this path.
+    A completion-ACK loss remains stopped and uncertain, never auto-replayed.
+    """
+    plan=plan_addon(directory);previous_bundle_id=p.sha(previous_bundle_id)
+    if previous_bundle_id==plan['bundle_id']:p.fail('pool_upgrade_requires_new_release')
+    result={**plan,'status':'upgrade_plan','previous_bundle_id':previous_bundle_id,
+        'actions':['publish_new_public_release','replace_receipted_disabled_unit','daemon_reload','reset_failed'],
+        'preserve_private_state':True}
+    if not apply:return result
+    if expected_bundle_id is None or p.sha(expected_bundle_id)!=plan['bundle_id']:p.fail('pool_approved_bundle_required')
+    manifest=p.load_bundle(directory);account=_root_context(manifest)
+    if p.manifest_id(manifest)!=plan['bundle_id']:p.fail('pool_bundle_selection_changed')
+    unit=p.unit_name(manifest['unix_owner']);path=p.UNIT_DIR/unit
+    for parent in (p.BASE,p.BASE/'installations',p.RELEASES,p.UNIT_DIR):p.protected(parent)
+    lock=os.open(p.BASE/'install.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:p.fail('pool_install_busy')
+        _root_lock(lock)
+        previous_release=p.RELEASES/previous_bundle_id
+        previous=p.verify_release(previous_release)
+        if p.manifest_id(previous)!=previous_bundle_id:p.fail('pool_previous_release_changed')
+        continuity=('architecture','unix_owner','board_owner','board_endpoint','python',
+                    'codex_version','gh_version','unit_limits')
+        if (any(previous[key]!=manifest[key] for key in continuity)
+                or any(previous['files'][name]!=manifest['files'][name] for name in
+                    ('unit.service.in','tools/codex','tools/codex-resources/bwrap','tools/gh'))):
+            p.fail('pool_upgrade_scope_changed')
+        old_receipt=p.BASE/'installations'/(previous_bundle_id+'.complete.json')
+        p.protected(old_receipt);record=p.decode(p.read_regular(old_receipt,128*1024))
+        root=p.owner_root(manifest['unix_owner']);p.no_symlinks(root);info=root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=account.pw_uid
+                or info.st_gid!=account.pw_gid or stat_mode(info)!=0o700):p.fail('pool_private_root_changed')
+        p.protected(root.parent)
+        expected={'schema':p.SCHEMA,'status':'installed_disabled','bundle_id':previous_bundle_id,
+            'unix_owner':manifest['unix_owner'],'uid':account.pw_uid,'gid':account.pw_gid,
+            'normal_home':account.pw_dir,'private_root':str(root),'release':str(previous_release),
+            'service':unit,'unit_limits':previous['unit_limits'],'activated':False,'execution_qualified':False}
+        if type(record) is not dict or any(record.get(key)!=value for key,value in expected.items()):
+            p.fail('pool_previous_receipt_invalid')
+        old_unit=p.render_unit(p.read_regular(previous_release/'unit.service.in').decode(),previous,previous_release,account.pw_dir).encode()
+        if record.get('unit_sha256')!=hashlib.sha256(old_unit).hexdigest():p.fail('pool_previous_receipt_invalid')
+        p.protected(path)
+        if p.read_regular(path)!=old_unit:p.fail('pool_unit_changed')
+        before=_stopped_for_upgrade(unit)
+        receipt=p.BASE/'installations'/(plan['bundle_id']+'.json')
+        request={**result,'schema':p.SCHEMA,'status':'upgrading','unix_owner':manifest['unix_owner'],
+            'uid':account.pw_uid,'gid':account.pw_gid,'normal_home':account.pw_dir,
+            'old_unit_sha256':hashlib.sha256(old_unit).hexdigest(),'unit_sha256':None}
+        _new_file(receipt,p.encoded(request),0o600)
+        _publish_release(directory,manifest,plan['bundle_id'])
+        if _stopped_for_upgrade(unit)!=before:p.fail('pool_unit_state_changed')
+        rendered=p.render_unit(p.read_regular(p.RELEASES/plan['bundle_id']/'unit.service.in').decode(),manifest,p.RELEASES/plan['bundle_id'],account.pw_dir).encode()
+        _new_file(receipt.with_suffix('.previous-unit'),old_unit,0o600)
+        committing=False;attempted=False
+        try:
+            attempted=True;_replace_unit(path,old_unit,rendered)
+            command(['/usr/bin/systemctl','daemon-reload'])
+            if before['ActiveState']=='failed':command(['/usr/bin/systemctl','reset-failed',unit])
+            _inactive(unit)
+            if p.read_regular(path)!=rendered:p.fail('pool_unit_changed')
+            request.update(status='installed_disabled',unit_sha256=hashlib.sha256(rendered).hexdigest())
+            committing=True
+            _new_file(receipt.with_suffix('.complete.json'),p.encoded(request),0o600)
+        except BaseException:
+            if committing:p.fail('pool_upgrade_completion_unconfirmed')
+            if attempted:
+                _stopped_for_upgrade(unit)
+                current=p.read_regular(path)
+                if current==rendered:
+                    _replace_unit(path,rendered,old_unit)
+                    command(['/usr/bin/systemctl','daemon-reload'])
+                elif current!=old_unit:p.fail('pool_upgrade_unit_result_unconfirmed')
+            raise
+        return {**result,'status':'upgraded_disabled','receipt':str(receipt.with_suffix('.complete.json'))}
+    finally:os.close(lock)
+
+
 def install_addon(directory,*,apply=False,expected_bundle_id=None):
     plan=plan_addon(directory)
     if not apply:return plan
@@ -153,19 +278,7 @@ def install_addon(directory,*,apply=False,expected_bundle_id=None):
         request={**plan,'schema':p.SCHEMA,'status':'installing','unix_owner':manifest['unix_owner'],
             'uid':account.pw_uid,'gid':account.pw_gid,'normal_home':account.pw_dir,'unit_sha256':None}
         _new_file(receipt,p.encoded(request),0o600)
-        stage=Path(tempfile.mkdtemp(prefix='.pool-release-',dir=p.RELEASES))
-        try:
-            for name in ('manifest.json',*manifest['files']):
-                target=stage/name;target.parent.mkdir(parents=True,exist_ok=True,mode=0o755)
-                _new_file(target,p.read_regular(Path(directory)/name),0o755 if name.startswith('tools/') else 0o444)
-            for parent,dirs,_ in os.walk(stage):
-                for name in dirs:os.chmod(Path(parent)/name,0o755)
-            copied=p.load_bundle(stage)
-            if copied!=manifest or p.manifest_id(copied)!=plan['bundle_id']:p.fail('pool_bundle_selection_changed')
-            os.chmod(stage,0o755)
-            os.rename(stage,release);_fsync(p.RELEASES)
-        finally:
-            if stage.exists():shutil.rmtree(stage)
+        _publish_release(directory,manifest,plan['bundle_id'])
         root.mkdir(mode=0o700);os.chown(root,account.pw_uid,account.pw_gid)
         for name in ('batches','connections','repositories','checkouts','git-state','verifiers','config'):
             path=root/name;path.mkdir(mode=0o700);os.chown(path,account.pw_uid,account.pw_gid);_fsync(path)
@@ -200,15 +313,17 @@ def rollback_addon(receipt,*,apply=False):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__);commands=parser.add_subparsers(dest='action',required=True)
     build=commands.add_parser('prepare');build.add_argument('--source',required=True);build.add_argument('--output',required=True);build.add_argument('--spec',required=True)
-    for name in ('plan','install','rollback'):
+    for name in ('plan','install','rollback','upgrade'):
         command_parser=commands.add_parser(name);command_parser.add_argument('path')
         if name!='plan':command_parser.add_argument('--apply',action='store_true')
-        if name=='install':command_parser.add_argument('--expected-bundle-id')
+        if name in ('install','upgrade'):command_parser.add_argument('--expected-bundle-id')
+        if name=='upgrade':command_parser.add_argument('--previous-bundle-id',required=True)
     args=parser.parse_args(argv)
     try:
         if args.action=='prepare':result=prepare_addon(args.source,args.output,**p.decode(p.read_regular(args.spec,128*1024)))
         elif args.action=='plan':result=plan_addon(args.path)
         elif args.action=='install':result=install_addon(args.path,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
+        elif args.action=='upgrade':result=upgrade_addon(args.path,previous_bundle_id=args.previous_bundle_id,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         else:result=rollback_addon(args.path,apply=args.apply)
         print(p.encoded(result).decode().strip());return 0
     except (p.PackageError,OSError,ValueError,TypeError):print('{"status":"refused"}');return 2

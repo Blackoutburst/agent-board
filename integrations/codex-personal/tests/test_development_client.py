@@ -20,6 +20,9 @@ class DevelopmentClientTests(unittest.TestCase):
             'client':'codex','identity_key':'fixture','name':'Fixture'}));self.path.chmod(0o600)
         self.client=DevelopmentBoardClient.from_connection_file(self.path,session_id='chosen-session')
         self.client._initialize=Mock();self.client._tool=Mock(return_value={'session':{'id':'chosen-session'}})
+        self.client._rpc=Mock(return_value={'tools':[{'name':'get_development_ticket_frame','inputSchema':{
+            'properties':{'session_id':{'type':'string'},'ticket_id':{'type':'string'}},
+            'required':['session_id','ticket_id'],'additionalProperties':False}}]})
 
     def test_only_initial_explicit_registration_can_touch_registration(self):
         with self.assertRaises(BoardReadError):self.client.call('get_ticket',{'ticket_id':'ticket'})
