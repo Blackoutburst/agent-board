@@ -1,8 +1,8 @@
 """Concrete, thread-owned historical delivery/opinion input; no reviewer replay.
 
-Historical data is never current publication, done or merge authority. The
-existing Git guard can perform authenticated readonly cleanup lookups through
-its concrete DevelopmentDeliveryProof. No reviewer RPC or model is invoked.
+Historical data is never current publication, done or merge authority. Concrete
+Git guards inspect their existing correlated receipts. No author scope refresh,
+reviewer RPC, Runtime reservation or model is invoked.
 """
 from contextlib import ExitStack
 import threading
@@ -13,6 +13,7 @@ from .development_delivery import DevelopmentDeliveryProof
 from .git_delivery import LocalGitDeliveryController
 from .git_workspace import _operation
 from .review_worker import DeliveryReviewWorker,ReviewRuntimeGuard,_agent_id,_opinion
+from .review_pool import HistoricalPoolDeliveryTests
 from .run_store import RunStore
 from .runtime_journal import RuntimeJournal
 from .team_role_contract import fail
@@ -27,7 +28,7 @@ class TeamWriterSource:
     """
     def __init__(self,resources,deliveries,review_worker,*,delivery_operation_id,review_export_id,review_operation_id):
         if (type(resources) is not ExitStack or type(deliveries) is not LocalGitDeliveryController
-                or type(deliveries.test_guard) is not DevelopmentDeliveryProof
+                or type(deliveries.test_guard) not in (DevelopmentDeliveryProof,HistoricalPoolDeliveryTests)
                 or type(review_worker) is not DeliveryReviewWorker
                 or type(review_worker.journal) is not WorkJournal or type(review_worker.run_store) is not RunStore
                 or type(review_worker.runtime_journal) is not RuntimeJournal):fail('team_writer_concrete_source_required')

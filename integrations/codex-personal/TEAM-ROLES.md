@@ -65,7 +65,7 @@ open a concrete `TeamWriterSource` on its caller's thread and give it an
 flags and cross-thread SQLite handles are not accepted as evidence.
 
 `TeamWriterSource` correlates an actual sealed `LocalGitDeliveryController`,
-its concrete development test proof, the independent `DeliveryReviewWorker`,
+its concrete development test proof or `HistoricalPoolDeliveryTests`, the independent `DeliveryReviewWorker`,
 its complete `WorkJournal` operation, its one completed RunStore turn and its
 finished, cleaned Runtime record. It verifies the unchanged readonly Git
 export, exact delivery SHA, material, reviewer scope and parsed opinion. It
@@ -83,7 +83,31 @@ by changing the JSON verdict. No summary completes a ticket or merges code.
 These adapters do not schedule each other. A protected team controller still
 has to consume the manager plan, map its approved slots to coder/reviewer
 drivers, maintain step dependencies and hand the exact historical review
-receipts to the writer. In particular, post-handoff source readers must use the
-review Pool driver's concrete historical delivery guard rather than reactivating
-an author's former live scope. Operator configuration and live owner/unit
+receipts to the writer. Post-handoff source factories can call
+`DeliveryReviewPoolDriver.open_completed_source(resources, context)` to open the
+correlated delivery controller and real reviewer handles. `TeamWriterSource`
+accepts its concrete `HistoricalPoolDeliveryTests` guard without reactivating
+the author's former live scope. Operator configuration and live owner/unit
 qualification remain separate from synthetic model tests.
+
+```python
+def historical_writer_source():
+    resources = ExitStack()
+    try:
+        deliveries, reviewer = review_driver.open_completed_source(
+            resources, completed_review_context)
+        return TeamWriterSource(
+            resources, deliveries, reviewer,
+            delivery_operation_id=author_operation_id,
+            review_export_id=completed_review_context.operation_id,
+            review_operation_id=completed_review_context.operation_id,
+        )
+    except BaseException:
+        resources.close()
+        raise
+```
+
+The controller supplies this factory as one named writer source and pins its
+canonical historical value's SHA256 in the writer input. It does not pass live
+SQLite handles across Pool threads or turn an existing review opinion into a
+new authority grant.
