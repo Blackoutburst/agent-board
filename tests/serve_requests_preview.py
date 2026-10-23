@@ -5,7 +5,7 @@ import tempfile
 os.environ['BOARD_DATA_DIR'] = tempfile.mkdtemp(prefix='board-requests-ui-')
 os.environ['BOARD_ALLOW_LOCAL_PASSWORDS'] = '1'
 os.environ['BLACKOUT_SHARED_AUTH'] = '0'
-os.environ['BOARD_BASE_URL'] = 'http://127.0.0.1:18767'
+os.environ['BOARD_BASE_URL'] = os.environ.get('BOARD_TEST_BASE_URL', 'http://127.0.0.1:18767')
 
 from app import create_app
 import uvicorn

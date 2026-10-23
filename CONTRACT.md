@@ -1,6 +1,6 @@
-# Board interface contract — 2.17.0
+# Board interface contract — 2.17.1
 
-The browser REST API and MCP act on one database. Application version is `2.17.0`; schema version is `17`; the MCP catalogue has 70 tools. Existing project/task IDs, conversations and device tokens are preserved by migration.
+The browser REST API and MCP act on one database. Application version is `2.17.1`; schema version is `17`; the MCP catalogue has 70 tools. Existing project/task IDs, conversations and device tokens are preserved by migration.
 
 ## Explicit inactive message append (2.17.0, schema 17)
 
@@ -513,6 +513,37 @@ Browser writes keep the existing human authentication and CSRF requirements. The
 `request_human_input` records a targeted information/action/approval request, blocks the task, releases the agent claim, retains its registered persistent identity in `assignee_agent_id`, appends discussion and queues configured notification delivery once. An existing assignment is preserved. The named human responds in the browser. Resolving the last request makes the task available to its assigned identity subject to remaining dependencies, including from a new session of that identity. Human reassignment or clearing the assignment while waiting takes precedence; request retries and repeated answers never restore an older assignment or release resumed work. Legacy sessions without a registered identity retain their existing assignment behavior. Callers can supply `expected_version` to reject a changed task atomically before creating a request. A successful retry returns the existing request before this precondition is checked, so a lost reply remains recoverable after a human answer. Omitting the version preserves older clients; new workers must provide it.
 
 `lookup_human_request` reconciles an attempted creation using the exact original actor/session, idempotency key, ticket, requested owner, question and kind. It returns the current request, including its resolved answer, or `{"found": false}` if that actor has no matching key. Different content with an existing key conflicts. Current work-request permission, project membership and the requested owner's membership are checked even for an existing key. No active claim is required; lookup never creates or changes a request, claim, message, notification or idempotency record. This is a separate tool so an older server rejects an unsupported lookup instead of treating it as a creation request.
+
+### Short human requests (2.17.1, unchanged schema 17)
+
+Ask one short question or action. `request_human_input` and `lookup_human_request`
+also accept optional `summary` (one line, at most 240 characters), `choices`
+(two to six distinct single-line strings, at most 160 characters each), and
+`command` (the exact command, at most 20,000 characters). Use a short summary
+when `question` includes supporting evidence. For example:
+
+```json
+{"question":"Which environment should receive the preview?","summary":"Where should the preview go?","choices":["Staging","Production","Wait"],"command":""}
+```
+
+Needs you and task pages show the summary, labeled A/B/C choices, and a custom
+reply option. No choice is preselected or submitted by selection alone. Actions
+without explicit choices offer Done; approvals offer Approve/Decline. Commands
+appear in a copyable code block; copying never executes or completes them.
+Long legacy questions show a short excerpt with their full unchanged text in
+Details. An excerpt is not an inferred summary, choice or approval.
+
+The REST input form accepts the same fields. Responses return `choices` as
+`[{"id":"A","label":"Staging"}, ...]`. A selected answer is recorded as its
+full label; custom replies use the existing answer path. Recipient, claim,
+notification, CSRF and resumption rules are unchanged. Optional presentation is
+stored in the existing immutable `human_input_requested` event, so no database
+migration is needed. It survives normal backup/restore with the request.
+Original questions and command bytes remain available through full views;
+compact MCP views provide authorized `get_text` locators for summaries,
+commands and choice labels. Creation and lookup retry keys include any supplied
+presentation; callers must resend it exactly. Omitting these fields preserves
+the legacy payload identity and behavior.
 
 ## Activity reads
 
