@@ -15,7 +15,8 @@ SCHEMA='worker-pool-addon-v1'
 MAX_FILE=384*1024*1024
 REQUIRED_SDK_MODULES=('__init__','finite_pool_batch','linux_pool_preparation','cloud_workflow',
     'development_pool_delivery','review_pool','review_client','review_worker','linux_review_binding',
-    'review_lifecycle','review_lifecycle_client')
+    'review_lifecycle','review_lifecycle_client','development_client','development_frame',
+    'development_authorization')
 
 
 class PackageError(Exception):

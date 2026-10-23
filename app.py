@@ -40,6 +40,8 @@ from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
 from development_frames import (get_development_frame as development_frame, wire_frame,
                                 validate_arguments as development_frame_arguments)
+from development_ticket_frames import (get_development_ticket_frame as development_ticket_frame,
+    wire_ticket_frame, validate_arguments as development_ticket_frame_arguments)
 
 ROOT = Path(__file__).resolve().parent
 COOKIE = "board_session"
@@ -55,6 +57,8 @@ class BoardMCP(FastMCP):
         # and pre-parses JSON strings. These closed protocols accept neither.
         if name == 'get_development_frame':
             development_frame_arguments(arguments)
+        elif name == 'get_development_ticket_frame':
+            development_ticket_frame_arguments(arguments)
         elif name in MANAGER_TOOLS:
             validate_manager_arguments(name, arguments)
         elif name in APPEND_MANAGER_TOOLS:
@@ -68,7 +72,7 @@ class BoardMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
-                if tool.name in {'get_development_frame', 'seal_message_execution_admission'}
+                if tool.name in {'get_development_frame', 'get_development_ticket_frame', 'seal_message_execution_admission'}
                 or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS
                 or tool.name in PROFILE_MANAGEMENT_TOOLS else tool for tool in tools]
 
@@ -884,6 +888,12 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return board.get_work(session_actor(session_id),project_id,limit) if view == "full" else wire(views.page(session_actor(session_id),"get_work",board.get_work(session_actor(session_id),project_id,limit,_mcp_all=True),limit=limit,cursor=cursor,filters={"project_id":project_id}))
 
     @mcp.tool()
+    async def get_development_ticket_frame(session_id: RuntimeOpaque, ticket_id: RuntimeOpaque) -> dict:
+        """Read one ordinary ticket's policies, exact ticket before/after and bounded history in one response. Each read revalidates the current device/session/profile and project access. Sequential observations are not atomic or an execution grant: compare both policies and source versions. Refuses delegation-family tickets and oversized data; never registers, claims, renews, sweeps work or starts execution."""
+        return wire_ticket_frame(development_ticket_frame(board, session_actor,
+            session_id=session_id, ticket_id=ticket_id))
+
+    @mcp.tool()
     async def get_development_frame(session_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
                                     family_id: RuntimeOpaque, terminal: RuntimeBool) -> dict:
         """Fixed bounded family read window, not atomic or an execution grant. Rechecks each session and normal Board permissions; returns exact full observations or one bounded error. Never claims work or renews a lease."""
@@ -1218,7 +1228,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.17.2", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management"]}
+        return {"status": "ok", "version": "2.17.3", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

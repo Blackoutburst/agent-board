@@ -113,3 +113,31 @@ run. Le handler SIGTERM pose un Event ; le compagnon persiste Stop au Pool.
 actifs ou retenus restent inconnus/chargés et le lot échoue. Le délai systemd de
 45 secondes peut imposer l’arrêt du groupe ; aucune fausse fin Runtime n’est
 produite. La réconciliation explicite des opérations existantes reste nécessaire.
+
+## Lecture de l’autorisation et mise à jour arrêtée
+
+Le SDK 0.34 exige `get_development_ticket_frame` pour les travaux Development
+autonomes. Cette requête bornée rassemble les observations de permissions,
+ticket et historique. Elle conserve les vérifications avant/après et les
+versions ; elle ne constitue ni une transaction atomique ni une autorisation
+réutilisable. Un outil absent ou une réponse invalide arrête le parcours avant
+le modèle. Le délai de contrôle natif de 1,5 seconde reste inchangé. Les familles
+conservent leur protocole existant.
+
+La commande `upgrade` vérifie le reçu root précédent et l’unité arrêtée. Elle
+exige le même compte, HOME, propriétaire Board, endpoint, outils, limites et
+modèle d’unité. Seule la release publique change. Les métadonnées de la racine
+privée sont vérifiées sans lire son contenu ; connexions, configurations et
+anciens lots sont conservés. Aucun démarrage n’est effectué.
+
+```sh
+python3 -I -B "$BUNDLE/pool_manage.py" upgrade "$BUNDLE" --previous-bundle-id "$PREVIOUS_BUNDLE_ID"
+sudo /usr/bin/python3.10 -I -B "$BUNDLE/pool_manage.py" upgrade "$BUNDLE" --previous-bundle-id "$PREVIOUS_BUNDLE_ID" --expected-bundle-id "$APPROVED_BUNDLE_ID" --apply
+```
+
+Une unité `failed` est acceptée uniquement avec PID et ControlPID nuls, disabled,
+sans drop-in et avec les octets précédents exacts. Après remplacement, elle
+reste inactive. Un échec avant le reçu complet restaure uniquement une unité
+reconnue. Une perte de confirmation du reçu laisse la nouvelle unité arrêtée
+dans un état à examiner, sans adoption ni rejeu. Un lot interrompu exige une
+nouvelle sélection explicite avec un nouvel UUID.

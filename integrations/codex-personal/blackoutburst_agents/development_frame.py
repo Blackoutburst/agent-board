@@ -6,6 +6,7 @@ from .board_reader import BoardReadError
 from .dev_manifest import DevelopmentError
 
 SCHEMA = 'blackoutburst-development-frame-v1'
+TICKET_SCHEMA = 'blackoutburst-development-ticket-frame-v1'
 LEGACY = 'legacy-sequential-v1'
 FRAME = 'development-frame-v1'
 MODES = (LEGACY, FRAME)
@@ -51,3 +52,33 @@ def parse_frame(value, *, scope, manifest, parent_scope, parent_manifest, family
         return deepcopy(value)
     except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
         raise BoardReadError('development_frame_invalid_response') from None
+
+
+def parse_ticket_frame(value, *, scope, manifest):
+    """One standalone read window; no family or reusable permission decision."""
+    try:
+        if (type(value) is not dict or set(value) != {'schema','selection','selected'}
+                or value['schema'] != TICKET_SCHEMA):
+            raise ValueError
+        expected = {key: manifest['scope'][key] for key in
+                    ('owner_id','agent_id','device_id','profile_version')}
+        expected.update(project_id=scope['project_id'],ticket_id=scope['ticket_id'],
+                        session_id=scope['board_session_id'])
+        selection=value['selection']
+        if (type(selection) is not dict or set(selection)!=set(expected)
+                or any(type(selection[key]) is not type(item) or selection[key]!=item
+                       for key,item in expected.items())):
+            raise ValueError
+        selected=value['selected']
+        if (type(selected) is not dict or set(selected)!=
+                {'policy_first','first','pages','last','policy_last'}
+                or any(type(selected[key]) is not dict for key in
+                       ('policy_first','first','last','policy_last'))
+                or type(selected['pages']) is not list or not 1<=len(selected['pages'])<=3):
+            raise ValueError
+        encoded=json.dumps(value,ensure_ascii=True,separators=(',',':'),allow_nan=False).encode('ascii')
+        if len(encoded)>MAX_DATA_BYTES:raise ValueError
+        json.dumps(value,ensure_ascii=False,allow_nan=False).encode('utf-8','strict')
+        return deepcopy(value)
+    except (KeyError,TypeError,ValueError,UnicodeError,RecursionError):
+        raise BoardReadError('development_ticket_frame_invalid_response') from None

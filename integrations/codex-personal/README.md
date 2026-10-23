@@ -4,7 +4,7 @@ Ce module vérifie une connexion ChatGPT personnelle et fournit un exécutant lo
 
 Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connexion personnelle**. Les commandes [`runner`](RUNNER.md) ajoutent les tours de texte avec état durable, reprise exacte, déduplication et annulation. Les commandes [`context`](CONTEXT.md) lisent les sources d’un ticket via le MCP du board, les conservent localement et vérifient leur version avant un tour explicitement demandé. La commande [`worker`](WORKER.md) réserve un ticket choisi explicitement, exécute un tour textuel et publie sa réponse en revue, avec un journal des effets et une reprise après coupure. La commande [`events drain`](EVENTS.md) conserve les événements d’un ticket et peut soumettre un lot au worker sur demande explicite. La commande [`queue`](QUEUE.md) prévisualise les tickets éligibles et peut en sélectionner un seul dans un projet explicitement choisi. Aucun listener, orchestrateur général ou service cloud n’est activé par ce programme.
 
-La source 0.33.0 compose le profil Linux explicite avec des
+Depuis 0.33.0, la source compose le profil Linux explicite avec des
 [espaces Git séparés par travail](GIT_WORKSPACES.md) et un
 [worker de revue distinct de l’auteur](REVIEW-WORKER.md), un
 [pool durable de travailleurs](WORKER-POOL.md), son

@@ -571,7 +571,7 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                 raise BoardError("Message exceeds the exact-source byte limit", 413)
             return result
 
-    def get_thread(self, actor, thread_id, before=None, limit=50):
+    def get_thread(self, actor, thread_id, before=None, limit=50, *, _expire=True):
         limit = self._limit(limit)
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_read")
@@ -585,7 +585,8 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             rows = list(db.execute("SELECT * FROM messages WHERE thread_id=? AND seq<? ORDER BY seq DESC LIMIT ?", (thread_id, boundary, limit + 1)))
             has_more = len(rows) > limit
             rows = rows[:limit]
-            self._expire(db)
+            if _expire:
+                self._expire(db)
             tasks = [self._task(db, row) for row in db.execute("SELECT * FROM tasks WHERE thread_id=? ORDER BY created_at", (thread_id,))]
             return {"thread": self._thread(db, thread, actor["owner_id"]), "messages": [self._message(db, row) for row in reversed(rows)],
                     "tasks": tasks, "next_before": rows[-1]["id"] if has_more else None}

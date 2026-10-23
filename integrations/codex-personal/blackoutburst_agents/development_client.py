@@ -2,6 +2,7 @@
 import copy
 import os
 import math
+import re
 from pathlib import Path
 from .board_reader import BoardReadError, _connection_data, _json, _text, MAX_CONNECTION_BYTES
 from .dev_manifest import absolute_directory, canonical, identity, signature
@@ -11,6 +12,7 @@ from .worker_client import WorkerBoardClient, _arguments
 
 class DevelopmentBoardClient(WorkerBoardClient):
     """Only prepare may register once. Reopened sessions retain their pins."""
+    development_ticket_frame = True
     @classmethod
     def from_connection_file(cls, path, *, session_id, timeout=3):
         # A connection file must have no alias writable through a checkout.
@@ -51,7 +53,9 @@ class DevelopmentBoardClient(WorkerBoardClient):
     def register_initial(self):
         if self._registered:
             raise BoardReadError('development_registration_already_pinned')
-        return super().register()
+        value=super().register()
+        if self.development_ticket_frame:self.require_development_ticket_frame()
+        return value
 
     def register(self):
         raise BoardReadError('development_implicit_registration_forbidden')
@@ -60,6 +64,37 @@ class DevelopmentBoardClient(WorkerBoardClient):
         # The operation has already pinned registration identity/version. A
         # changed profile must fail server authorization, never refresh here.
         self._registered = True
+        if self.development_ticket_frame:self.require_development_ticket_frame()
+
+    def require_development_ticket_frame(self):
+        """Explicit support check before preparation/model; never fallback."""
+        self._development_ticket_frame_ready=False
+        if not self._registered:raise BoardReadError('development_registration_required')
+        self._initialize()
+        result=self._rpc('tools/list',{})
+        try:
+            tools=result['tools']
+            if type(tools) is not list or len(tools)>256:raise ValueError
+            matches=[tool for tool in tools if type(tool) is dict
+                     and tool.get('name')=='get_development_ticket_frame']
+            if len(matches)!=1:raise ValueError
+            schema=matches[0]['inputSchema']
+            if (type(schema) is not dict or set(schema['properties'])!={'session_id','ticket_id'}
+                    or set(schema['required'])!=set(schema['properties'])
+                    or schema.get('additionalProperties') is not False
+                    or any(schema['properties'][key].get('type')!='string'
+                           for key in ('session_id','ticket_id'))):raise ValueError
+        except (KeyError,TypeError,ValueError):
+            raise BoardReadError('development_ticket_frame_unavailable') from None
+        self._development_ticket_frame_ready=True
+
+    def get_development_ticket_frame(self, *, ticket_id):
+        if (not self._registered or not getattr(self,'_development_ticket_frame_ready',False)
+                or any(type(value) is not str or not re.fullmatch(
+                    r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}',value) for value in (self.session_id,ticket_id))):
+            raise BoardReadError('development_ticket_frame_unavailable')
+        self._initialize()
+        return self._tool('get_development_ticket_frame',dict(session_id=self.session_id,ticket_id=ticket_id))
 
     def call(self, name, args):
         if not self._registered:

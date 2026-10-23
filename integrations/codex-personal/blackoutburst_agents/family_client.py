@@ -67,6 +67,8 @@ def _arguments(name,args):
 
 
 class FamilyBoardClient(DevelopmentBoardClient):
+    # Family configuration selects its existing protocol independently.
+    development_ticket_frame = False
     def require_development_frame(self):
         """Explicit preparation probe; never fallback or refresh registration."""
         if not self._registered:raise BoardReadError('development_registration_required')
