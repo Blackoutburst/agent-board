@@ -92,7 +92,7 @@ def test_no_anonymous_private_metadata_and_static_assets(browser):
     assert client.get('/workspace.js').status_code==200
     assert client.get('/connect.py').status_code==200
     health=client.get('/health').json()
-    assert health['version']=='2.17.1' and health['schema_version']== 17
+    assert health['version']=='2.17.2' and health['schema_version']== 17
 
 
 def test_activity_order_is_available_through_rest_and_mcp(browser):

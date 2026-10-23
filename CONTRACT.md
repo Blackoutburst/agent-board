@@ -1,6 +1,6 @@
-# Board interface contract — 2.17.1
+# Board interface contract — 2.17.2
 
-The browser REST API and MCP act on one database. Application version is `2.17.1`; schema version is `17`; the MCP catalogue has 75 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+The browser REST API and MCP act on one database. Application version is `2.17.2`; schema version is `17`; the MCP catalogue has 75 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
 
 ## Explicit inactive message append (2.17.0, schema 17)
 
