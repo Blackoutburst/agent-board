@@ -1,16 +1,25 @@
-# Explicit cloud workflow
+# Explicit cloud workflow: adapter 0.33.0
 
-The installed `run-workflow` entry coordinates existing concrete components in
+The `run-workflow` entry coordinates existing concrete components in
 one finite Linux unit: selected coding jobs, actual tested postimages, a sealed
 commit and GitHub draft PR, author evidence/handoff, then an independent review
 whose opinion is visible on the same ticket. It never marks a ticket done or
 merges a PR. A completed workflow can report a review requesting corrections.
 
+As of 23 October 2026, the new pool unit is not yet installed and remains
+inactive. This source implements the complete finite path; real models and
+GitHub publication through the final owner unit have not been validated. Tests
+use real temporary Board/Git/Runtime components with synthetic model/GitHub
+transports and Linux qualification observations. The
+[current delivery status](CLOUD-WORKERS.md) distinguishes those observations
+from real acceptance.
+
 `run-batch` remains available for the original private-results-only operation.
 The original `linux-finite-pool-batch-v1` still requires exactly four jobs. The
 new explicit `linux-finite-pool-batch-v2` accepts one to four jobs with matching
-local concurrency. Both schemas retain the same closed job fields and durable
-intentions. A previously interrupted batch is historical only; restarting the
+local concurrency; `run-workflow` requires this version. Using version two with
+`run-batch` still retains private results. Both schemas retain the same closed
+job fields and durable intentions. A previously interrupted batch is historical only; restarting the
 unit does not replay submission, claims, qualification, inference or patches.
 
 ## Two protected operator files
@@ -60,6 +69,8 @@ Unchanged paths are omitted; an empty change refuses. The concrete delivery
 proof checks the complete source tree against the real planner, test and
 Runtime receipts. An unexpected edit after testing, undeclared change, new or
 deleted file, mode change, ignored file or missing proof refuses publication.
+This path supports replacement of selected existing files and a fixed named
+Python verifier; it adds no arbitrary shell or model-created files.
 The reviewer receives a bounded exact diff built from the sealed source, runs
 with the concrete Linux review binding, and publishes its exact opinion using
 the lifecycle's durable CAS protocol. Oversized material refuses rather than
@@ -93,3 +104,9 @@ without registration, RPC or execution. It does not promise that a later human
 has left the ticket or GitHub PR unchanged. Four actual simultaneous code models,
 both owners' installations and a live GitHub workflow require separate real
 acceptance; synthetic integration tests do not constitute those observations.
+
+The [manager and writer components](TEAM-ROLES.md) are available separately for
+private plans and historical summaries. This finite workflow selects its
+coder/reviewer jobs from protected operator configuration; it does not consume
+manager plans or schedule a writer. The hierarchy and assignment controller
+remain ticket #52 work.
