@@ -280,6 +280,9 @@ class HumanInput(ProjectBody):
     question: str = Field(min_length=1, max_length=20000)
     kind: Literal["question", "action", "approval"] = "question"
     idempotency_key: str = Field(min_length=1, max_length=200)
+    summary: str = Field(default='', max_length=240)
+    choices: list[str] = Field(default_factory=list, max_length=6)
+    command: str = Field(default='', max_length=20000)
 
 
 class Delegation(ProjectBody):
@@ -1073,15 +1076,19 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @mcp.tool()
     async def request_human_input(session_id: str, ticket_id: str, owner_id: str, question: str,
                                   idempotency_key: str, kind: Literal["question", "action", "approval"] = "question",
-                                  expected_version: Version | None = None, view: Literal["compact", "full"] = "compact") -> dict:
-        """Ask a project human for specific information, an action or approval. Requires your active task claim. Supply expected_version to atomically reject changed task context before a new request; successful retries still return the existing request. Records the request/discussion, blocks the task, releases the work lease while retaining your persistent identity for resumption, and queues a targeted human alert. Later human reassignment takes precedence. Never include credentials."""
-        return _view(board.request_human_input(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind, expected_version),view)
+                                  expected_version: Version | None = None, view: Literal["compact", "full"] = "compact",
+                                  summary: str = '', choices: list[str] | None = None, command: str = '') -> dict:
+        """Ask one short, clear question or action. Use summary (one line, at most 240 characters) when question contains supporting detail; details stay expandable. When useful, offer choices as two to six short, distinct answers; the human can also write a custom reply. For a command to run, use a short summary and put the exact command in command, which is displayed in a copyable code block. Do not bury the requested action in a long explanation. Requires your active task claim. Supply expected_version to reject changed task context; exact retries return the existing request. Records the request, blocks the task and releases the work lease while retaining your persistent identity for resumption. Never include credentials."""
+        return _view(board.request_human_input(session_actor(session_id), ticket_id, owner_id, question, idempotency_key,
+            kind, expected_version, summary, choices, command),view)
 
     @mcp.tool()
     async def lookup_human_request(session_id: str, ticket_id: str, owner_id: str, question: str,
-                                   idempotency_key: str, kind: Literal["question", "action", "approval"] = "question", view: Literal["compact", "full"] = "compact") -> dict:
+                                   idempotency_key: str, kind: Literal["question", "action", "approval"] = "question", view: Literal["compact", "full"] = "compact",
+                                   summary: str = '', choices: list[str] | None = None, command: str = '') -> dict:
         """Reconcile an attempted human request with the exact original actor, retry key and content. Returns its current state, including a resolved answer, or {'found': False}. Requires current work-request permission and project membership, but no claim. Never creates a request, discussion, alert or claim. A key reused with different content conflicts."""
-        return _view(board.lookup_human_request(session_actor(session_id), ticket_id, owner_id, question, idempotency_key, kind),view)
+        return _view(board.lookup_human_request(session_actor(session_id), ticket_id, owner_id, question, idempotency_key,
+            kind, summary, choices, command),view)
 
     @mcp.tool()
     async def list_human_requests(session_id: str, project_id: str = "", include_resolved: bool = False, limit: int = 20, cursor: str | None = None, view: Literal["compact", "full"] = "compact") -> dict:
@@ -1161,7 +1168,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.17.0", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1"]}
+        return {"status": "ok", "version": "2.17.1", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

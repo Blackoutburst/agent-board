@@ -190,7 +190,7 @@ class CoordinationMixin(ProjectsMixin):
         result['blocks'] = [dict(item) for item in db.execute("""SELECT t.id,t.number,t.title,t.status
             FROM ticket_dependencies d JOIN tickets t ON t.id=d.ticket_id
             WHERE d.depends_on_id=? ORDER BY t.number""", (row['id'],))]
-        result['human_requests'] = [self._request(item) for item in db.execute(
+        result['human_requests'] = [self._request(item, db) for item in db.execute(
             'SELECT * FROM human_requests WHERE ticket_id=? ORDER BY created_at', (row['id'],))]
         for request in result['human_requests']:
             if request['status'] == 'open':
@@ -912,9 +912,16 @@ class CoordinationMixin(ProjectsMixin):
             return {'claimed': True, 'ticket': ticket, 'retried': False}
 
     @staticmethod
-    def _request(row):
+    def _request(row, db):
         result = dict(row)
         result['requested_by'] = json.loads(result['requested_by'])
+        event = db.execute("SELECT detail FROM ticket_events WHERE ticket_id=? AND event='human_input_requested' "
+            "AND json_extract(detail,'$.request_id')=? ORDER BY id LIMIT 1",
+            (row['ticket_id'], row['id'])).fetchone()
+        presentation = json.loads(event['detail']).get('presentation', {}) if event else {}
+        result.update(summary=presentation.get('summary', ''), command=presentation.get('command', ''),
+            choices=[{'id': chr(65 + i), 'label': label}
+                     for i, label in enumerate(presentation.get('choices', []))])
         return result
 
     def _human_request_message(self, db, thread_id, request):
@@ -938,7 +945,7 @@ class CoordinationMixin(ProjectsMixin):
             JOIN tickets t ON t.id=r.ticket_id JOIN project_members m ON m.project_id=t.project_id
             WHERE m.owner_id=? AND (?='' OR t.project_id=?) AND (?=1 OR r.status='open') ORDER BY r.created_at""",
             (actor['owner_id'], project_id, project_id, int(include_resolved)))
-        return [self._request(row) for row in rows if self._profile_project_allowed(db, actor, row['project_id'])]
+        return [self._request(row, db) for row in rows if self._profile_project_allowed(db, actor, row['project_id'])]
 
     def list_human_requests(self, actor, project_id='', include_resolved=False):
         if type(include_resolved) is not bool:
@@ -949,7 +956,8 @@ class CoordinationMixin(ProjectsMixin):
                 self._project_member(db, actor, project_id)
             return self._list_requests_tx(db, actor, project_id, include_resolved)
 
-    def _human_request_retry(self, db, actor, ticket_id, owner_id, question, idempotency_key, kind):
+    def _human_request_retry(self, db, actor, ticket_id, owner_id, question, idempotency_key, kind,
+                             summary='', choices=None, command=''):
         _text(question, 'question', 1, 20000)
         _text(idempotency_key, 'idempotency_key', 1, 200)
         if kind not in ('question', 'action', 'approval'):
@@ -958,26 +966,44 @@ class CoordinationMixin(ProjectsMixin):
         row = self._ticket_member(db, actor, ticket_id)
         self._project_assignee(db, row['project_id'], owner_id)
         payload = {'ticket_id': ticket_id, 'owner_id': owner_id, 'question': question, 'kind': kind}
+        summary = _text(summary, 'summary', 0, 240).strip()
+        command = _text(command, 'command', 0, 20000)
+        if '\n' in summary or '\r' in summary:
+            _fail('summary must be one short line')
+        if choices is None:
+            choices = []
+        if not isinstance(choices, list) or (choices and not 2 <= len(choices) <= 6):
+            _fail('choices must contain two to six short answers, or be empty')
+        labels = [_text(label, 'choice', 1, 160).strip() for label in choices]
+        if any(not label or '\n' in label or '\r' in label for label in labels) or len(set(labels)) != len(labels):
+            _fail('choices must be distinct, nonempty single-line answers')
+        presentation = {key: value for key, value in dict(summary=summary, choices=labels, command=command).items() if value}
+        # Keep legacy retry payloads unchanged. The existing immutable request
+        # event stores optional presentation alongside its exact message ID.
+        if presentation:
+            payload['presentation'] = presentation
         previous = self._retry(db, actor, 'request_human_input', idempotency_key, payload)
         return actor, row, payload, previous
 
-    def lookup_human_request(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question'):
+    def lookup_human_request(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question',
+                             summary='', choices=None, command=''):
         """Reconcile an exact attempted request without creating or claiming work."""
         with self._connection() as db:
             _, _, _, previous = self._human_request_retry(
-                db, actor, ticket_id, owner_id, question, idempotency_key, kind)
+                db, actor, ticket_id, owner_id, question, idempotency_key, kind, summary, choices, command)
             if not previous:
                 return {'found': False}
-            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (previous,)).fetchone())
+            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (previous,)).fetchone(), db)
 
-    def request_human_input(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question', expected_version=None):
+    def request_human_input(self, actor, ticket_id, owner_id, question, idempotency_key, kind='question', expected_version=None,
+                            summary='', choices=None, command=''):
         if expected_version is not None:
             _version(expected_version)
         with self._tx() as db:
             actor, row, payload, previous = self._human_request_retry(
-                db, actor, ticket_id, owner_id, question, idempotency_key, kind)
+                db, actor, ticket_id, owner_id, question, idempotency_key, kind, summary, choices, command)
             if previous:
-                return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (previous,)).fetchone())
+                return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (previous,)).fetchone(), db)
             # Compare in the same transaction as the handoff, after successful
             # retries have been reconciled even if the ticket has advanced.
             if expected_version is not None and row['version'] != expected_version:
@@ -1001,9 +1027,12 @@ class CoordinationMixin(ProjectsMixin):
                 assignee_agent_id=COALESCE(assignee_agent_id,?),
                 lease_expires_at=NULL,version=version+1,updated_at=? WHERE id=?""", (agent_id, now, ticket_id))
             self._remember(db, actor, 'request_human_input', idempotency_key, payload, request_id)
-            self._audit(db, actor, 'human_input_requested', {'ticket_id': ticket_id, 'request_id': request_id, 'owner_id': owner_id, 'message_id': message_id})
+            detail = {'ticket_id': ticket_id, 'request_id': request_id, 'owner_id': owner_id, 'message_id': message_id}
+            if 'presentation' in payload:
+                detail['presentation'] = payload['presentation']
+            self._audit(db, actor, 'human_input_requested', detail)
             self._queue_notification(db, row['thread_id'], 'needs_input', 'human-request:'+request_id, [owner_id], row['title'])
-            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone())
+            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone(), db)
 
     def _discussion_event(self, db, actor, thread_id, body, mentions):
         message_id = secrets.token_hex(16)
@@ -1024,7 +1053,7 @@ class CoordinationMixin(ProjectsMixin):
             if actor['owner_id'] != request['owner_id']:
                 _fail('Only the requested human can resolve this request', 403)
             if request['status'] == 'resolved':
-                return self._request(request)
+                return self._request(request, db)
             now = time.time()
             db.execute("UPDATE human_requests SET status='resolved',answer=?,resolved_at=? WHERE id=?", (answer, now, request_id))
             self._discussion_event(db, actor, row['thread_id'], 'Human response: '+answer, [])
@@ -1035,7 +1064,7 @@ class CoordinationMixin(ProjectsMixin):
                 # Other verifiable reasons (dependencies, explicit block) keep it blocked.
                 self._reevaluate_blocked(db, actor, [row['id']], 'human request answered', announce=False)
             self._audit(db, actor, 'human_input_resolved', {'ticket_id': row['id'], 'request_id': request_id})
-            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone())
+            return self._request(db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone(), db)
 
     def list_activity(self, actor, project_id='', ticket_id='', after=0, limit=100, order='desc', *, _mcp_all=False):
         limit = self._limit(limit)

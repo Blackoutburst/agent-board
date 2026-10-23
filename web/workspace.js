@@ -407,17 +407,68 @@ const Workspace = (() => {
 
   function askHuman(t, p) {
     const key = idempotencyKey();
-    const form = el("form", {}, select("Who can help?", "owner_id", p.participants.map(id => [id, ownerName(id)]), state.actor.owner_id), select("Request type", "kind", [["question", "Information"], ["action", "An action"], ["approval", "Approval"]]), field("What do you need?", "question", { type: "textarea", rows: 5, required: true, placeholder: "Ask a specific question or describe the action and how to verify it." }), el("p", { class: "small muted" }, "This task will wait for the selected person. Its current worker can then take other work."), formButtons("Request input"));
-    bindForm(form, async data => { await api(`/tickets/${workPath(t.id)}/input`, { method: "POST", data: { owner_id: data.get("owner_id"), kind: data.get("kind"), question: data.get("question"), idempotency_key: key } }); closeModal(); await ticket(t.id, false); await refreshRequestCount(); });
+    const form = el("form", {}, select("Who can help?", "owner_id", p.participants.map(id => [id, ownerName(id)]), state.actor.owner_id),
+      select("Request type", "kind", [["question", "Information"], ["action", "An action"], ["approval", "Approval"]]),
+      field("What do you need?", "summary", { required: true, maxlength: 240, placeholder: "One short question or action" }),
+      field("Answer choices (optional)", "choices", { type: "textarea", rows: 3, placeholder: "One answer per line", hint: "Two to six choices. A custom reply is always available." }),
+      field("Command (optional)", "command", { type: "textarea", rows: 3, spellcheck: "false", placeholder: "Paste the exact command to run" }),
+      el("details", { class: "request-details" }, el("summary", {}, "Additional context"), field("Details", "details", { type: "textarea", rows: 4 })),
+      el("p", { class: "small muted" }, "This task will wait for the selected person."), formButtons("Request input"));
+    form.elements.namedItem("summary").maxLength = 240;
+    form.elements.namedItem("command").spellcheck = false;
+    bindForm(form, async data => {
+      const summary = String(data.get("summary")).trim(), details = String(data.get("details") || "").trim();
+      await api(`/tickets/${workPath(t.id)}/input`, { method: "POST", data: {
+        owner_id: data.get("owner_id"), kind: data.get("kind"), summary,
+        question: details ? `${summary}\n\n${details}` : summary,
+        choices: String(data.get("choices") || "").split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+        command: data.get("command"), idempotency_key: key,
+      } });
+      closeModal(); await ticket(t.id, false); await refreshRequestCount();
+    });
     openModal("Ask a human", form);
   }
   function requestCard(r, t = null) {
+    const source = String(r.question || "");
+    const firstLine = source.trim().split(/\r?\n/, 1)[0];
+    const brief = r.summary || (firstLine.length > 240 ? firstLine.slice(0, 237) + "…" : firstLine);
     const card = el("article", { class: "human-request" }, el("div", { class: "work-card-heading" }, badge(r.kind === "question" ? "Information needed" : r.kind === "action" ? "Action needed" : "Approval needed", "status-waiting_on_human"), el("span", { class: "small muted" }, `For ${ownerName(r.owner_id)}`)),
-      t ? null : workLink(`#${r.number} ${r.title}`, { ticket: r.ticket_id }), Markdown.block(r.question));
+      t ? null : workLink(`#${r.number} ${r.title}`, { ticket: r.ticket_id }), Markdown.block(brief, "request-prompt"));
+    // A legacy action may already contain a fenced command. Keep it visible,
+    // while retaining the complete original request under Details.
+    const legacyCode = !r.command && r.kind === "action" && source.match(/(?:^|\n)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1[ \t]*(?:\n|$)/);
+    const command = r.command || (legacyCode ? legacyCode[2] : "");
+    if (command) card.append(Markdown.codeBlock(command, "request-command", "Copy command"));
+    if (source.trim() !== brief.trim()) card.append(el("details", { class: "request-details" }, el("summary", {}, "Details"), Markdown.block(source)));
     if (r.status === "resolved") card.append(Markdown.block(r.answer));
     else if (r.owner_id === state.actor.owner_id) {
-      const form = el("form", {}, field("Your response", "answer", { type: "textarea", required: true, placeholder: "Provide the answer or describe the action you completed." }), el("button", { type: "submit", class: "primary" }, "Answer & unblock"));
-      bindForm(form, async data => { await api(`/human-requests/${workPath(r.id)}/resolve`, { method: "POST", data: { answer: data.get("answer") } }); await refreshRequestCount(); if (t) await ticket(t.id, false); else await requests(); notify("Response saved. The task can continue when its other prerequisites are complete."); });
+      const choices = r.choices?.length ? r.choices : r.kind === "approval"
+        ? [{id: "A", label: "Approve"}, {id: "B", label: "Decline"}]
+        : r.kind === "action" ? [{id: "A", label: "Done"}] : [];
+      const response = field("Your response", "answer", { type: "textarea", rows: 2, required: !choices.length, placeholder: "Write a short reply…" });
+      response.hidden = Boolean(choices.length);
+      const submit = el("button", { type: "submit", class: "primary", disabled: true }, "Send answer");
+      const options = choices.length ? el("fieldset", { class: "request-choices" }, el("legend", { class: "sr-only" }, "Choose an answer"),
+        choices.map(choice => el("label", { class: "request-choice" }, el("input", { type: "radio", name: "choice", value: choice.id }),
+          el("span", { class: "choice-letter", "aria-hidden": "true" }, choice.id), el("span", {}, choice.label))),
+        el("label", { class: "request-choice request-custom" }, el("input", { type: "radio", name: "choice", value: "custom" }), el("span", {}, "Write a custom reply"))) : null;
+      const form = el("form", {}, options, response, submit);
+      const update = () => {
+        const selected = new FormData(form).get("choice"), custom = !choices.length || selected === "custom";
+        response.hidden = !custom;
+        response.querySelector("textarea").required = custom;
+        submit.disabled = custom ? !response.querySelector("textarea").value.trim() : !selected;
+      };
+      form.addEventListener("input", update);
+      form.addEventListener("change", update);
+      bindForm(form, async data => {
+        const selected = choices.find(choice => choice.id === data.get("choice"));
+        const answer = selected ? selected.label : String(data.get("answer") || "");
+        if (!answer.trim()) throw new Error("Choose an answer or write a reply.");
+        await api(`/human-requests/${workPath(r.id)}/resolve`, { method: "POST", data: { answer } });
+        await refreshRequestCount(); if (t) await ticket(t.id, false); else await requests();
+        notify("Answer saved.");
+      });
       card.append(form);
     } else card.append(el("p", { class: "small muted" }, `Waiting for ${ownerName(r.owner_id)} to respond.`));
     return card;
@@ -431,7 +482,7 @@ const Workspace = (() => {
   async function requests() {
     const request = ++state.request;
     navigate("requests"); workRoute({ page: "requests" });
-    const body = frame("Needs you", "Questions, approvals, and actions that keep your projects moving.", [btn("Refresh", guard(requests))]);
+    const body = frame("Needs you", "A question or action for you. Choose an answer or write a reply.", [btn("Refresh", guard(requests))]);
     const data = await api("/human-requests");
     if (request !== state.request) return;
     const mine = data.filter(r => r.owner_id === state.actor.owner_id);
