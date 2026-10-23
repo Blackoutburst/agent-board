@@ -1,4 +1,4 @@
-# Addon Linux : un lot explicite de quatre travaux
+# Addon Linux : travaux et revues explicitement sélectionnés
 
 Ce paquet ajoute une release indépendante sous
 `/opt/blackoutburst-agent-pool/releases/<bundle_id>` et une unité
@@ -7,11 +7,13 @@ les comptes existants et leur HOME passwd normal. Elle ne démarre, n’active,
 ne modifie et ne redémarre aucun ancien Host. SDK, versions et inventaires
 globaux restent gérés par la composition principale.
 
-La première tranche finit aux quatre résultats privés du driver Development et
-à leurs preuves de nettoyage. Elle ne publie ni commit, PR, opinion ou ticket.
+Le nouveau mode de l’unité est `run-workflow` : un à quatre codeurs explicitement
+sélectionnés, commit testé, PR brouillon, preuve sur le ticket et avis d’un
+reviewer distinct publié sur le Board. Le parcours historique `run-batch` reste
+disponible et finit aux résultats privés du driver Development.
 Les limites opérateur retenues sont CPU 300 %, MemoryHigh 4 GiB, MemoryMax 6 GiB,
 TasksMax 256, RuntimeMaxSec 3600 et TimeoutStopSec 45. La Board doit autoriser les
-quatre profils/resources et disposer de capacité Runtime réellement suffisante ;
+profils/resources sélectionnés et disposer de capacité Runtime réellement suffisante ;
 un ancien Runtime incertain continue de compter.
 
 ## Préparation et installation arrêtée
@@ -56,7 +58,7 @@ privées, les releases, l’auth normale et toutes les autres unités.
 La racine privée est
 `/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer` avec `config`,
 `connections`, `repositories`, `checkouts`, `git-state`, `verifiers` et `batches`.
-Appairer explicitement quatre nouveaux profils/connexions par le flux existant,
+Appairer explicitement les profils/connexions codeurs et reviewers sélectionnés par le flux existant,
 directement dans `connections`. Fournir un nouveau dépôt local autorisé dans
 `repositories` et des vérificateurs Python fixes approuvés dans `verifiers`.
 La connexion normale du CLI sous ce même UID/HOME peut déjà être valable ; aucun
@@ -74,9 +76,10 @@ Elle refuse les symlinks, propriétaires ou modes inattendus ; elle ne lit aucun
 journal, `fence.lock` ou contenu d’évidence, ne change aucun élément existant et
 n’en déduit aucune preuve de nettoyage.
 
-`config/batch.json` est privé 0600. Son schéma fermé
-`linux-finite-pool-batch-v1` contient `batch_id` UUID, `owner_id`, `board_endpoint`,
-`timeout_seconds` (au plus RuntimeMaxSec−90) et exactement quatre `jobs`.
+`config/batch.json` est privé 0600. Le schéma fermé historique
+`linux-finite-pool-batch-v1` garde exactement quatre `jobs` ; le nouveau
+`linux-finite-pool-batch-v2` accepte de un à quatre travaux. Les deux contiennent
+`batch_id` UUID, `owner_id`, `board_endpoint`, `timeout_seconds` (au plus RuntimeMaxSec−90).
 Chaque job choisit explicitement `name`, `agent_id`, `connection_file`, le grant
 Git complet `repository`, `project_id`, `ticket_id`, `paths`, `resource`, `actions`,
 `verifier_path`, `verifier_sha256`, `test_name`, `test_timeout_seconds`,
@@ -85,15 +88,23 @@ Git complet `repository`, `project_id`, `ticket_id`, `paths`, `resource`, `actio
 Le `workspace_root` explicite est `checkouts/<batch_id>/<name>`. Rien n’est
 sélectionné à partir d’un message, du contenu d’un ticket ou d’un modèle.
 
-L’entrée publique `batch-plan` affiche le SHA de configuration et les quatre
-sélections sans qualification ni RPC. Un démarrage humain explicite de la
-nouvelle unité est nécessaire. `run-batch` exige la release/unité root exactes,
+Le mode de l’unité utilise aussi `config/workflow.json`, privé 0600, pour les
+chemins de publication, textes de PR et le reviewer distinct de chaque travail.
+Le [contrat complet](../../integrations/codex-personal/CLOUD-WORKFLOW.md) décrit
+le schéma et le plan `workflow-plan`. Une première mise en service peut donc
+choisir un codeur et un reviewer. La destination GitHub fixe exige la connexion
+officielle gh normale du même compte, avec droit d’écriture, sans copie d’auth.
+
+Les entrées publiques `batch-plan` et `workflow-plan` affichent les SHA de
+configuration et les sélections sans qualification ni RPC. Un démarrage humain
+explicite de la nouvelle unité est nécessaire. Les deux modes d’exécution
+exigent la release/unité root exactes,
 le compte normal et son cgroup systemd courant. Préparation, qualifications
 natives et exécution ont lieu dans cette même unité. Aucune preuve native UID1000
 ou qualification effectuée hors unité n’est transférée.
 
 Une intention durable précède les effets. Après les UUID fixés par submit,
-quatre préparateurs concrets doivent confirmer leurs retours et leurs reçus
+tous les préparateurs concrets doivent confirmer leurs retours et leurs reçus
 complets épinglés avant une unique intention de dispatch. Une perte de réponse
 après binding refuse tout dispatch. Un redémarrage lit seulement l’historique
 existant ; aucune interruption ne rejoue submit, préparation, qualification ou

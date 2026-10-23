@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.32.0
+## État de la source 0.33.0
 
 | Élément | État |
 | --- | --- |
@@ -15,21 +15,45 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Préparation Git, sélection et qualifications Linux par job | API explicite, sans dispatch automatique |
 | Commit scellé et PR brouillon | API explicite, avec garde de tests et reprise des effets ambigus |
 | Résultat du pool vers livraison et passage en revue | Raccord explicite à un résultat terminé, sans relancer modèle ou tests |
-| Revue indépendante | Worker et raccord Linux explicites |
-| Unité serveur du pool | Installateur séparé et lot fini implémentés ; installation inactive et qualification propriétaire à effectuer |
+| Parcours `run-workflow` | Un à quatre codeurs sélectionnés, PR brouillon et avis exact d’un reviewer distinct sur le même ticket ; intégration testée avec modèles et GitHub simulés |
+| Revue indépendante | Driver Pool, préparation Linux explicite et publication durable de l’avis en statut `review` |
+| Mode historique `run-batch`/schema v1 | Quatre résultats privés ; la fin du lot ne publie pas de PR |
+| Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité non installée et inactive, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
-| Attribution hiérarchique et rôle rédacteur | À implémenter et à valider de bout en bout |
+| Rôles manager et rédacteur | Composants privés implémentés et testés, sans attribution ni dispatch des autres rôles |
+| Contrôleur hiérarchique et attribution | À réaliser et à valider de bout en bout dans le ticket #52 |
 
-Le premier lot de développement produit des résultats privés. Ni la fin d’un
-thread ni le nettoyage d’une réservation ne publient une PR ou ne terminent un
-ticket. Les étapes de livraison, de revue et de publication ont leurs propres
-intentions durables et leurs contrôles d’autorité.
+`run-workflow` compose les étapes de développement, livraison et revue avec
+leurs propres intentions durables et contrôles d’autorité. La fin du parcours
+signifie que la PR brouillon et l’avis sont publiés, même si le reviewer demande
+des corrections. Le ticket reste en revue et la PR reste sans fusion.
+
+Le mode historique `run-batch`/schema v1 produit toujours quatre résultats
+privés. Le schema v2 accepte un à quatre travaux ; utilisé avec `run-batch`,
+il conserve cette sortie privée. Ni la fin d’un thread ni le nettoyage d’une
+réservation ne constituent une publication.
 
 Le [raccord de livraison](DEVELOPMENT_POOL_DELIVERY.md) traite un seul résultat
 sélectionné et terminé : commit vérifié, PR brouillon, preuve sur le ticket,
 puis retrait de l’attribution de l’auteur pour permettre une revue indépendante.
-Le lot du service s’arrête encore aux résultats privés ; ce raccord est une API
-distincte et ne constitue pas encore le contrôleur de l’équipe hiérarchique.
+Le [contrôleur fini `run-workflow`](CLOUD-WORKFLOW.md) appelle ensuite le
+[lifecycle du reviewer](docs/REVIEW-LIFECYCLE.md), qui publie l’avis exact et
+conserve le SHA et le lien de PR sur le ticket. Les fichiers modifiables sont
+des chemins existants choisis par l’opérateur, avec un vérificateur Python
+nommé et épinglé. Le parcours ne fournit pas de shell arbitraire ou de création
+de nouveaux fichiers par le modèle.
+
+Les [composants manager et rédacteur](TEAM-ROLES.md) restent distincts de ce
+contrôleur fini : plan borné au catalogue opérateur pour le manager, synthèse
+de reçus historiques corrélés pour le rédacteur. Leur résultat est privé ; ils
+ne distribuent pas encore les tâches de l’équipe.
+
+Au 23 octobre 2026, la nouvelle unité du pool n’est pas installée et aucun
+modèle réel n’a validé ce nouveau parcours serveur. Les tests d’intégration
+avec Board, Git, journaux et Runtime temporaires vérifient le raccord logiciel ;
+leurs transports de modèle/GitHub et leurs qualifications Linux sont simulés.
+L’authentification des propriétaires, les qualifications dans l’unité finale et
+une recette réelle restent nécessaires avant de déclarer l’équipe active.
 
 ## Validation Linux datée du 21 octobre 2026
 

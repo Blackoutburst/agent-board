@@ -13,6 +13,9 @@ UNIT_DIR=Path('/etc/systemd/system')
 OWNERS=('bb-agent-thescreamer','bb-agent-blackout')
 SCHEMA='worker-pool-addon-v1'
 MAX_FILE=384*1024*1024
+REQUIRED_SDK_MODULES=('__init__','finite_pool_batch','linux_pool_preparation','cloud_workflow',
+    'development_pool_delivery','review_pool','review_client','review_worker','linux_review_binding',
+    'review_lifecycle','review_lifecycle_client')
 
 
 class PackageError(Exception):
@@ -110,8 +113,8 @@ def validate_manifest(value):
     if re.fullmatch(r'/usr/bin/python3\.[0-9]+',python['path']) is None:fail('pool_system_python_required')
     limits(value['unit_limits']);files=value['files']
     required={'pool_entry.py','pool_package.py','pool_manage.py','unit.service.in','source/connect.py',
-        'source/blackoutburst_agents/finite_pool_batch.py','source/blackoutburst_agents/linux_pool_preparation.py',
-        'tools/codex','tools/codex-resources/bwrap','tools/gh'}
+        'tools/codex','tools/codex-resources/bwrap','tools/gh'}|{
+        'source/blackoutburst_agents/'+name+'.py' for name in REQUIRED_SDK_MODULES}
     if type(files) is not dict or not required<=set(files) or not 10<=len(files)<=400:fail('pool_inventory_invalid')
     total=0
     for name,pin in files.items():

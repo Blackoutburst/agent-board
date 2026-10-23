@@ -148,6 +148,26 @@ def test_completed_batch_never_reprepares_or_redispatches(batch_case,monkeypatch
     assert len(f.calls)==8 and len(f.native_calls)==8
 
 
+@pytest.mark.parametrize('count',[1,2,3])
+def test_version_two_explicit_small_batches_run_with_matching_capacity(batch_case,count):
+    f=batch_case
+    value={**f.config,'schema':module.FLEXIBLE_SCHEMA,'jobs':f.jobs[:count]}
+    with PrivateDirectory(f.config_path.parent) as private:private.replace(f.config_path.name,canonical(value))
+    result=f.batch.run(f.config_path)
+    assert result['status']=='complete',canonical(result).decode()
+    assert len(result['pool']['jobs'])==count and result['pool']['configured']==count
+    assert len(f.calls)==count*2 and len(f.native_calls)==count*2
+    assert f.batch.run(f.config_path)=={**result,'historical':True}
+
+
+@pytest.mark.parametrize('count',[0,5])
+def test_version_two_refuses_empty_or_excessive_batches_before_any_effect(batch_case,count):
+    f=batch_case;value={**f.config,'schema':module.FLEXIBLE_SCHEMA,'jobs':(f.jobs+[f.jobs[0]])[:count]}
+    with PrivateDirectory(f.config_path.parent) as private:private.replace(f.config_path.name,canonical(value))
+    with pytest.raises(DevelopmentError):f.batch.run(f.config_path)
+    assert f.clients==[] and not list((f.batch_root/'batches').iterdir())
+
+
 def test_prepare_loss_after_real_binding_never_dispatches_and_crash_retry_is_history_only(batch_case,monkeypatch):
     f=batch_case;bind=preparation.LinuxPoolJobPreparer.prepare;calls=[]
     def lose(self,*args,**kwargs):

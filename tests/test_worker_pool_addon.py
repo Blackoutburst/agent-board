@@ -26,8 +26,7 @@ def bundle(tmp_path,monkeypatch):
     directory=tmp_path/'bundle';directory.mkdir(mode=0o700)
     template=Path('deploy/worker_pool/unit.service.in').read_bytes()
     files={name:b'pass\n' for name in ('pool_entry.py','pool_package.py','pool_manage.py','source/connect.py',
-        'source/blackoutburst_agents/__init__.py','source/blackoutburst_agents/finite_pool_batch.py',
-        'source/blackoutburst_agents/linux_pool_preparation.py')}
+        *('source/blackoutburst_agents/'+name+'.py' for name in p.REQUIRED_SDK_MODULES))}
     files.update({'unit.service.in':template,'tools/codex':elf(),'tools/codex-resources/bwrap':elf(),'tools/gh':elf()})
     value={'schema':p.SCHEMA,'revision':'a'*40,'adapter_version':'0.32.0','architecture':'x86_64',
         'unix_owner':'bb-agent-thescreamer','board_owner':'owner','board_endpoint':'https://board.test/mcp',
@@ -51,6 +50,15 @@ def test_closed_addon_inventory_and_readonly_plan_never_calls_systemctl(bundle,m
     assert not p.BASE.exists() and not p.RELEASES.exists()
 
 
+@pytest.mark.parametrize('module',['cloud_workflow','review_lifecycle','review_lifecycle_client','review_pool','development_pool_delivery'])
+def test_new_workflow_release_cannot_omit_essential_sdk_modules(bundle,module):
+    directory,value,_=bundle
+    del value['files']['source/blackoutburst_agents/'+module+'.py']
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    with pytest.raises(p.PackageError,match='pool_inventory_invalid'):manage.plan_addon(directory)
+    assert not p.RELEASES.exists() and not p.BASE.exists()
+
+
 def test_public_git_preparation_and_isolated_standalone_plan(tmp_path):
     source=tmp_path/'public-source';source.mkdir(mode=0o700)
     for name in ('package.py','manage.py','entry.py','unit.service.in'):
@@ -58,7 +66,7 @@ def test_public_git_preparation_and_isolated_standalone_plan(tmp_path):
         target.write_bytes((Path('deploy/worker_pool')/name).read_bytes())
     for name,raw in {'connect.py':b'pass\n','integrations/codex-personal/pyproject.toml':b'version = "0.32.0"\n',
             **{'integrations/codex-personal/blackoutburst_agents/'+name:b'pass\n' for name in
-                ('__init__.py','finite_pool_batch.py','linux_pool_preparation.py')}}.items():
+                (name+'.py' for name in p.REQUIRED_SDK_MODULES)}}.items():
         path=source/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
     def git(*args):return manage.command(['/usr/bin/git','-C',str(source),*args])
     git('init','--quiet','--initial-branch=main');git('config','user.name','Synthetic package test')
@@ -122,7 +130,7 @@ def test_apply_creates_only_new_disabled_unit_and_rollback_preserves_data(bundle
     root=p.owner_root(value['unix_owner']);(root/'batches'/'preserved').write_bytes(b'never remove evidence')
     unit=p.UNIT_DIR/result['service'];raw=unit.read_text()
     for text in ('Restart=no','CPUQuota=300%','MemoryMax=6442450944','MemoryHigh=4294967296',
-            'TasksMax=256','RuntimeMaxSec=3600','TimeoutStopSec=45','run-batch --batch'):
+            'TasksMax=256','RuntimeMaxSec=3600','TimeoutStopSec=45','run-workflow --batch','--workflow'):
         assert text in raw
     assert 'owner_entry' not in raw and 'Environment=HOME' not in raw and 'CODEX_HOME=' not in raw
     assert old.read_bytes()==b'old R74 unchanged'

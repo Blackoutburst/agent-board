@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import signal
 import stat
 import sys
@@ -96,7 +97,8 @@ def ensure_development_anchor(account):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release',required=True);parser.add_argument('--owner',required=True)
-    parser.add_argument('action',choices=('batch-plan','run-batch','init-development-anchor'));parser.add_argument('--batch')
+    parser.add_argument('action',choices=('batch-plan','workflow-plan','run-batch','run-workflow','init-development-anchor'))
+    parser.add_argument('--batch');parser.add_argument('--workflow')
     args=parser.parse_args(argv)
     try:
         release=p.absolute(args.release);manifest=p.verify_release(release);account=owner_context(manifest,args.owner)
@@ -105,15 +107,24 @@ def main(argv=None):
         root=p.owner_root(args.owner)
         sys.path.insert(0,str(release/'source'))
         from blackoutburst_agents.finite_pool_batch import FiniteLinuxPoolBatch,load_batch
+        from blackoutburst_agents.dev_manifest import DevelopmentError
         if args.batch is None:p.fail('pool_batch_configuration_required')
         batch_path=p.absolute(args.batch)
         if not batch_path.is_relative_to(root/'config'):p.fail('pool_configuration_path_refused')
-        if args.action=='batch-plan':
+        if args.action in ('batch-plan','workflow-plan'):
             batch,pin=load_batch(batch_path,root=root,owner_id=manifest['board_owner'],board_endpoint=manifest['board_endpoint'],
                 max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
             result={'status':'plan','batch_id':batch['batch_id'],'configuration_sha256':pin['sha256'],
                 'jobs':[{key:job[key] for key in ('name','agent_id','project_id','ticket_id','resource','model')} for job in batch['jobs']],
                 'activated':False,'execution_qualified':False}
+            if args.action=='workflow-plan':
+                from blackoutburst_agents.cloud_workflow import load_workflow
+                if args.workflow is None:p.fail('pool_workflow_configuration_required')
+                workflow,workflow_pin=load_workflow(p.absolute(args.workflow),root=root,batch=batch)
+                result['workflow_configuration_sha256']=workflow_pin['sha256']
+                result['workflow']=[dict(name=item['name'],paths=item['paths'],reviewer_agent_id=item['reviewer']['agent_id'],
+                    reviewer_model=item['reviewer']['model']) for item in workflow['jobs']]
+                result['destination']='https://github.com/Blackoutburst/agent-board'
         else:
             in_installed_unit(manifest,release,account)
             stop=threading.Event()
@@ -123,13 +134,25 @@ def main(argv=None):
                     executable=release/'tools/codex',cli_version='codex-cli '+manifest['codex_version'],
                     interpreter=manifest['python']['path'],unshare='/usr/bin/unshare',
                     max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
-                result=batch.run(batch_path,should_stop=stop.is_set)
+                workflow=None
+                if args.action=='run-workflow':
+                    from blackoutburst_agents.cloud_workflow import CloudLinuxWorkflow
+                    if args.workflow is None:p.fail('pool_workflow_configuration_required')
+                    selected,_=load_batch(batch_path,root=root,owner_id=manifest['board_owner'],board_endpoint=manifest['board_endpoint'],
+                        max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
+                    workflow=CloudLinuxWorkflow(p.absolute(args.workflow),root=root,batch=selected,owner_id=manifest['board_owner'],
+                        board_endpoint=manifest['board_endpoint'],gh_executable=release/'tools/gh',python_executable=manifest['python']['path'])
+                elif args.workflow is not None:p.fail('pool_workflow_mode_required')
+                result=batch.run(batch_path,should_stop=stop.is_set,workflow=workflow)
             finally:
                 for number,handler in previous.items():signal.signal(number,handler)
         print(json.dumps(result,sort_keys=True,separators=(',',':')))
         return 0 if result['status'] in ('complete','plan') else 3
-    except Exception:
-        print('{"status":"needs_review","reason":"finite_pool_entry_refused"}')
+    except Exception as error:
+        reason='finite_pool_entry_refused'
+        if isinstance(error,p.PackageError) or 'DevelopmentError' in locals() and isinstance(error,DevelopmentError):
+            if type(error.code) is str and re.fullmatch('[a-z][a-z0-9_]{0,119}',error.code):reason=error.code
+        print(json.dumps({'status':'needs_review','reason':reason},sort_keys=True,separators=(',',':')))
         return 3
 
 if __name__=='__main__':raise SystemExit(main())

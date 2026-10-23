@@ -7,7 +7,7 @@ fields. Schema 17 is unchanged; existing requests and retry identities remain
 valid. This release updates Board source only and does not update or activate
 any separately installed personal owner adapter.
 
-Current source is Board 2.17.1/schema 17 with adapter 0.32.0. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema17, both request barriers, append proofs/statuses and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
+Current source is Board 2.17.1/schema 17 with adapter 0.33.0. An explicit pretransport admission seal is available as a separate metadata-only API; it is not wired into normal workers and does not resolve private journals. See [MESSAGE-ADMISSION-SEAL.md](MESSAGE-ADMISSION-SEAL.md). Confirmed capacity refusals are now durable non-admission records, distinct from executions and cleanup. Code rollback must keep schema17, both request barriers, append proofs/statuses and every refusal tombstone; restoring an earlier database is not a supported rollback. See [RUNTIME-ADMISSION-REFUSALS.md](RUNTIME-ADMISSION-REFUSALS.md). Existing uncertain attempts are not converted; protected owner releases and prepared catalogs require a separate reviewed transition before upgrade. Message managers report ready only after their feed is confirmed. Local append-only staging is inactive preparation and performs no login or provisioning. The browser shows owner Runtime capacity in Agents without delaying Stop/Restart or changing admission. It performs no cleanup or pending-dispatch recovery. It adds explicit owner/device server controls and the managed owner process. Version 2.14.1 also provides human-only profile/provider preparation and visible initial host identifiers; it performs no login or provisioning. Read [SERVER-AGENT-CONTROLS.md](SERVER-AGENT-CONTROLS.md) before installing or enabling that separate service. It preserves
 verifiable task blocks, the explicit fixed development-frame protocol, and an
 inactive Linux input-lock lease foundation. The latter adds no Linux backend
 or planner; its separate kernel observation covers synthetic UID 1000 fixtures
@@ -23,6 +23,51 @@ draft cannot authorize it. A pending B holds positive commands while actual Stop
 delivery and cleanup remain available. Installation performs no upgrade, login
 or activation of an owner service. This reliability path does not deliver the
 hierarchical cloud team or parallel development task execution.
+
+## Finite cloud workflow: adapter 0.33.0
+
+The [cloud workflow](../integrations/codex-personal/CLOUD-WORKFLOW.md) now
+composes one to four explicitly selected coding jobs, sealed tested commits,
+draft PRs, author handoffs and independent reviewer opinions visible on the
+same tickets. Publication keeps each ticket in `review`; it does not mark it
+done or merge its PR. A completed workflow may contain a reviewer requesting
+corrections.
+
+| Entry and schema | Result |
+| --- | --- |
+| Historical `run-batch`, `linux-finite-pool-batch-v1` | Exactly four private coding results |
+| `run-workflow`, `linux-finite-pool-batch-v2` | One to four selected coders, draft PR and visible independent review per ticket |
+
+Version-two batches also work with `run-batch`; that entry retains private
+results and does not run the publication/reviewer phases. `run-workflow`
+requires both private operator files, `config/batch.json` and
+`config/workflow.json`, with the same batch UUID. Existing paths, fixed named
+Python verifier, repository/base, profiles, paired connections, models and
+budgets are explicit operator selections. No arbitrary shell or model-created
+new files are added.
+
+As of 23 October 2026, the new pool unit is **not installed and inactive**.
+The [separate addon installer](../deploy/worker_pool/README.md) prepares a
+disabled, stopped unit; source publication or Board deployment does not start
+it or upgrade existing owner hosts. The `workflow-plan` action inspects the
+selected metadata without registration, qualification or model execution.
+Owner pairing and normal official Codex/gh authentication, exact-source
+backend/planner qualification in the final unit, and an explicit installation
+and start remain separate operator steps.
+
+The integration tests exercise real temporary Board, Git, Pool, journals and
+Runtime with synthetic model/GitHub transports and Linux qualification
+observations. They do not validate real models on this new server path, four
+simultaneous real coders, or both owners' installations. Keep historical native
+receipts tied to their original source and environment; see
+[CLOUD-WORKERS.md](../integrations/codex-personal/CLOUD-WORKERS.md).
+
+The [manager and writer adapters](../integrations/codex-personal/TEAM-ROLES.md)
+produce private bounded plans and historical summaries. The general hierarchy
+and assignment controller remain ticket #52 work. An interrupted finite batch
+keeps its intentions and returns history without replaying claims, models or
+publication. Stop reaches the actual publication and reviewer phases, and
+uncertain cleanup remains unresolved rather than being treated as completion.
 
 
 Board 2.16.3 keeps Stop available when a budget-limited instance has stopped
