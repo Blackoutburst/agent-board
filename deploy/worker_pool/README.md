@@ -126,7 +126,10 @@ conservent leur protocole existant.
 
 La commande `upgrade` vérifie le reçu root précédent et l’unité arrêtée. Elle
 exige le même compte, HOME, propriétaire Board, endpoint, outils, limites et
-modèle d’unité. Seule la release publique change. Les métadonnées de la racine
+modèle d’unité. L’unique exception est le passage exact du modèle livré en
+0.35.0/0.36.0 vers 0.37.0, qui ajoute `AF_NETLINK` pour la préparation réseau
+de bubblewrap. Toute autre différence de modèle reste refusée ; les octets
+relus doivent correspondre aux empreintes des deux manifestes. Les métadonnées de la racine
 privée sont vérifiées sans lire son contenu ; connexions, configurations et
 anciens lots sont conservés. Aucun démarrage n’est effectué.
 

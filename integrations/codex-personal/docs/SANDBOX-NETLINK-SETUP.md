@@ -22,6 +22,14 @@ template or a different version transition remains refused. The previous
 receipted unit is verified and saved before replacement, private state is
 retained, and installation never starts the unit.
 
+A rootless Linux comparison on 26 October used the exact public 0.163 CLI,
+unchanged canary and fresh HOME directories. Both child processes enabled
+no-new-privileges. The baseline passed all five checks; a second process with
+only `socket(AF_NETLINK)` rejected by an inherited seccomp rule exited 1,
+returned no canary JSON and reported the fixed Netlink-route socket error with
+errno 97. Both process groups were cleaned up; no model or owner service ran.
+This reproduces the mechanism without claiming owner workflow acceptance.
+
 This corrects a setup dependency. A synthetic comparison is separate from a
 fresh owner workflow acceptance: failed historical batches stay preserved and
 must not be replayed.
