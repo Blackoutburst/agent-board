@@ -10,7 +10,11 @@ When qualification fails, adapter 0.36 retains the existing first stdout line
   cleanup as success;
 - `phase`: one of `cli_version`, `host_fixtures`, `canary_pins`,
   `canary_execution`, `canary_result`, `cleanup`, `final_pins`;
-- optional `errno`: a controller `OSError` number in 1–4095.
+- optional `errno`: a controller `OSError` number in 1–4095;
+- optional `runner`, only for `canary_execution` and `canary_result`: the
+  bounded return code (`null` or an integer from -255 to 255), known process
+  failure enum, stdout state (`empty`, `json_invalid`, `json_valid` or
+  `non_bytes`), and a boolean indicating whether stderr was present.
 
 The optional errno describes a controller operation. It does not identify the
 errno of an individual check inside the sandbox; the canary output retains its
@@ -20,7 +24,12 @@ caused a failed check.
 Only the exact `PlannerPolicyError` type with an allowlisted qualification
 reason and a fully validated payload produces this line. The entry rejects
 extra fields, unknown checks, integer substitutes for booleans, unexpected
-phases and out-of-range errnos. Copies prevent alias changes after capture.
+phases and out-of-range errnos. Copies prevent alias changes after capture, including the nested runner.
+An empty `checks` object does not establish a host failure: empty or invalid
+JSON from a sandbox child also fails before the checks are assigned. The
+runner facts distinguish this branch without exposing either output stream.
+`json_valid` describes decoding only; the original shape and five-check
+validation still decide whether qualification succeeds.
 There is no exception text, stdout/stderr, path, fingerprint, account identity,
 grant, conversation or model output in the projection.
 
