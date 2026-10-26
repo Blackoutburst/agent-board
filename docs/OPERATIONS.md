@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.17.3/schema 17 with adapter 0.35.0. Standalone Development
+Current source is Board 2.17.3/schema 17 with adapter 0.36.0. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
@@ -16,6 +16,14 @@ Private and mutable files still use full reads, and the fresh supervisor
 disables this cache before loading its job and applying its descriptor limit.
 See [protected public pins](../integrations/codex-personal/docs/PROTECTED-PUBLIC-PINS.md).
 This adapter-only change does not require a Board database migration or restart.
+
+Adapter 0.36 adds a closed diagnostic line after the existing refusal summary
+when Linux planner qualification fails. It exposes only the fixed five canary
+booleans (or no checks if none were decoded), confirmed cleanup, a fixed phase,
+and an optional bounded controller errno. The entry revalidates the exact error
+type and payload; messages, paths, command output, fingerprints and owner
+context are excluded. Persisted receipts, refusal decisions and exit status
+are unchanged. See [planner refusal diagnostics](../integrations/codex-personal/docs/PLANNER-REFUSAL-DIAGNOSTICS.md).
 
 Board 2.17.2 added explicitly human-delegated Management / Lead profiles and five
 bounded MCP tools for ordinary profile management. Schema 17 is unchanged.

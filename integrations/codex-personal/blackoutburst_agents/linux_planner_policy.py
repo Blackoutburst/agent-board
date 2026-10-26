@@ -58,6 +58,8 @@ raise SystemExit(0 if all(checks.values()) else 78)
 MAX_PLAN_BYTES = 64 * 1024
 MAX_SOURCE_FILE = 256 * 1024
 MAX_SOURCE_TOTAL = 4 * 1024 * 1024
+QUALIFICATION_PHASES = frozenset({'cli_version','host_fixtures','canary_pins',
+    'canary_execution','canary_result','cleanup','final_pins'})
 LINUX_EXECUTION_SOURCES = ('__init__.py', 'board_reader.py', 'board_worker.py', 'client_lifecycle.py', 'cloud_workflow.py', 'codex_turn.py', 'context.py', 'context_cache.py', 'decision_memory.py', 'dev_broker.py', 'dev_fence.py', 'dev_journal.py', 'dev_manifest.py', 'dev_planner.py', 'dev_planner_journal.py', 'dev_runtime.py', 'dev_test_backend.py', 'dev_test_supervisor.py', 'development_authorization.py', 'development_cleanup.py', 'development_cli.py', 'development_client.py', 'development_delivery.py', 'development_frame.py', 'development_git_authority.py', 'development_pool.py', 'development_pool_delivery.py', 'development_pool_selection.py', 'development_review_handoff.py', 'development_worker.py', 'event_journal.py', 'family_audit.py', 'family_cli.py', 'family_client.py', 'family_journal.py', 'family_plan.py', 'family_sources.py', 'family_worker.py', 'finite_pool_batch.py', 'git_delivery.py', 'git_publication.py', 'git_publication_guardian.py', 'git_workspace.py', 'host_config.py', 'linux_execution_qualification.py', 'linux_execution_state.py', 'linux_input_admission.py', 'linux_input_plan.py', 'linux_input_snapshot.py', 'linux_input_state.py', 'linux_planner_policy.py', 'linux_pool_preparation.py', 'linux_review_binding.py', 'linux_test_backend.py', 'linux_test_namespace.py', 'linux_test_protocol.py', 'linux_test_supervisor.py', 'message_abandon_protocol.py', 'message_admission_seal.py', 'message_config.py', 'message_journal.py', 'message_scope.py', 'model_policy.py', 'persistent_transport.py', 'planner_policy.py', 'pool_journal.py', 'protected_public_pins.py', 'review_client.py', 'review_lifecycle.py', 'review_lifecycle_client.py', 'review_pool.py', 'review_worker.py', 'run_store.py', 'runner.py', 'runtime_admission.py', 'runtime_client.py', 'runtime_guard.py', 'runtime_journal.py', 'subscription_probe.py', 'team_role_contract.py', 'team_role_pool.py', 'team_writer_source.py', 'work_journal.py', 'worker_client.py', 'worker_pool.py')
 NS_NAMES = ('cgroup','ipc','mnt','net','pid','pid_for_children','time','time_for_children','user','uts')
 CAP_NAMES = ('CapInh','CapPrm','CapEff','CapBnd','CapAmb')
@@ -68,6 +70,48 @@ ENV_FIELDS = {'schema','host','uid','euid','gid','egid','groups','procfs_magic',
 
 def _fail(code='linux_planner_environment_unconfirmed'):
     raise PlannerPolicyError(code) from None
+
+
+RUNNER_FAILURES = frozenset({'timeout','output_limit','launch_failed',
+    'process_io_failed','unsupported_platform','cleanup_failed'})
+RUNNER_STDOUT_STATES = frozenset({'empty','json_invalid','json_valid','non_bytes'})
+
+
+def _runner_observation(result):
+    """Project bounded process facts, without retaining either output stream."""
+    if (not (result.returncode is None or type(result.returncode) is int and -255 <= result.returncode <= 255)
+            or not (result.failure is None or type(result.failure) is str and result.failure in RUNNER_FAILURES)
+            or type(result.stderr) is not bytes):
+        return None
+    state = ('non_bytes' if type(result.stdout) is not bytes else
+             'empty' if not result.stdout else 'json_invalid')
+    return {'returncode':result.returncode,'failure':result.failure,
+            'stdout_state':state,'stderr_present':bool(result.stderr)}
+
+
+def _qualification_failure(reason, checks, cleanup_confirmed, phase, error_number, runner=None):
+    """In-memory closed facts only; no packet, message, path or durable change."""
+    error = PlannerPolicyError(reason)
+    if (type(checks) is dict and (not checks or set(checks) == CHECKS)
+            and all(type(key) is str and type(value) is bool for key,value in checks.items())
+            and type(cleanup_confirmed) is bool and type(phase) is str and phase in QUALIFICATION_PHASES):
+        diagnostic = {'checks':dict(checks),'cleanup_confirmed':cleanup_confirmed,'phase':phase}
+        if type(error_number) is int and 1 <= error_number <= 4095:
+            diagnostic['errno'] = error_number
+        if (phase in {'canary_execution','canary_result'} and type(runner) is dict
+                and set(runner) == {'returncode','failure','stdout_state','stderr_present'}
+                and (runner['returncode'] is None or type(runner['returncode']) is int and -255 <= runner['returncode'] <= 255)
+                and (runner['failure'] is None or type(runner['failure']) is str and runner['failure'] in RUNNER_FAILURES)
+                and type(runner['stdout_state']) is str and runner['stdout_state'] in RUNNER_STDOUT_STATES
+                and type(runner['stderr_present']) is bool):
+            diagnostic['runner'] = dict(runner)
+        error._linux_planner_canary_diagnostic = diagnostic
+    return error
+
+
+def _os_error_number(error):
+    value = error.errno if isinstance(error,OSError) else None
+    return value if type(value) is int and 1 <= value <= 4095 else None
 
 
 def _number(value, minimum=0, maximum=(1 << 64)-1):
@@ -579,6 +623,8 @@ class LinuxPlannerPolicy:
             except DevelopmentError: _fail('linux_planner_attempt_not_reusable')
             marker_hash = digest(canonical(marker))
             checks,reason,process_cleanup = {},None,True
+            phase,error_number,cleanup_error_number = 'cli_version',None,None
+            runner = None
             listener = inside_fd = outside_fd = workspace_fd = None
             owned = []
             cleanup = False
@@ -592,6 +638,7 @@ class LinuxPlannerPolicy:
                 if (type(version.returncode) is not int or type(version.stdout) is not bytes or version.failure or version.returncode != 0
                         or version.stdout.decode('utf-8','strict').strip() != self._plan['cli_version']):
                     _fail('linux_planner_cli_version_changed')
+                phase = 'host_fixtures'
                 workspace_fd = absolute_directory(self.workspace)
                 if list(identity(os.fstat(workspace_fd))) != self._plan['workspace_identity']:
                     _fail('linux_planner_policy_changed')
@@ -606,6 +653,7 @@ class LinuxPlannerPolicy:
                 private_expected.add(outside)
                 listener = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
                 listener.bind(('127.0.0.1',0));listener.listen(1)
+                phase = 'canary_pins'
                 self._pins(fixture=fixture)
                 payload = {'inside':self.workspace+'/'+fixture,'inside_write':self.workspace+'/'+fixture+'-write',
                     'outside':str(self.private.path/outside),'outside_write':str(self.private.path/(outside+'-write')),
@@ -614,11 +662,15 @@ class LinuxPlannerPolicy:
                     'sandbox','--permission-profile',PROFILE_NAME,'--include-managed-config',
                     '--',self._plan['interpreter'],'-I','-S','-c',LINUX_CANARY,canonical(payload).decode()]
                 _canary_host_fixtures(owned)
+                phase = 'canary_execution'
                 run = _run_bounded(command,self.workspace,15,8192,env)
+                phase = 'canary_result'
                 process_cleanup = process_cleanup and _known_process_cleanup(run)
                 _canary_host_fixtures(owned)
+                runner = _runner_observation(run)
                 if type(run.stdout) is not bytes: _fail('linux_planner_canary_output_invalid')
                 value = decode(run.stdout)
+                if runner is not None: runner['stdout_state'] = 'json_valid'
                 if (type(value) is not dict or set(value) != {'schema','checks'}
                         or type(value['schema']) is not int or value['schema'] != 1
                         or type(value['checks']) is not dict or set(value['checks']) != CHECKS
@@ -636,6 +688,7 @@ class LinuxPlannerPolicy:
                 if type(run.returncode) is not int or run.failure or run.returncode != 0 or any(item is not True for item in checks.values()):
                     _fail('linux_planner_native_policy_unqualified')
             except (DevelopmentError,OSError,ValueError,UnicodeError) as error:
+                error_number = _os_error_number(error)
                 allowed = {'linux_planner_cli_version_changed','linux_planner_policy_changed',
                     'linux_planner_canary_output_invalid','linux_planner_canary_created_file',
                     'linux_planner_native_policy_unqualified'}
@@ -671,8 +724,9 @@ class LinuxPlannerPolicy:
                             or (workspace_fd is not None and os.listdir(workspace_fd))):
                         _fail('linux_planner_qualification_cleanup_unconfirmed')
                     cleanup = True
-                except (DevelopmentError,OSError,ValueError,TypeError):
+                except (DevelopmentError,OSError,ValueError,TypeError) as error:
                     cleanup = False
+                    cleanup_error_number = _os_error_number(error)
                 finally:
                     for descriptor in (inside_fd,outside_fd):
                         if descriptor is not None:
@@ -685,15 +739,20 @@ class LinuxPlannerPolicy:
                             if list(identity(os.fstat(workspace_fd))) == self._plan['workspace_identity']: os.close(workspace_fd)
                         except OSError: pass
             cleanup = cleanup and process_cleanup
-            if not cleanup: reason = 'linux_planner_qualification_cleanup_unconfirmed'
+            if not cleanup:
+                reason = 'linux_planner_qualification_cleanup_unconfirmed'
+                phase,error_number = 'cleanup',cleanup_error_number
             if reason is None:
+                phase = 'final_pins'
                 try:
                     self._pins()
                     if self.private.read('planner-attempt.json',8192) != canonical(marker):
                         _fail('linux_planner_policy_changed')
                     if self.private.read('planner-qualification.json',8192) != canonical(None):
                         _fail('linux_planner_policy_changed')
-                except (DevelopmentError,OSError): reason = 'linux_planner_policy_changed'
+                except (DevelopmentError,OSError) as error:
+                    reason = 'linux_planner_policy_changed'
+                    error_number = _os_error_number(error)
             if reason is not None:
                 refusal = {'schema':'blackoutburst-linux-planner-refusal-v1','fingerprint':self.fingerprint,
                     'attempt_sha256':marker_hash,'checks':checks,'cleanup_confirmed':cleanup,'reason':reason,
@@ -704,7 +763,7 @@ class LinuxPlannerPolicy:
                     if self.private.read('planner-qualification.json',8192) == canonical(None):
                         self.private.replace('planner-qualification.json',canonical(refusal))
                 except (DevelopmentError,OSError): pass
-                _fail(reason)
+                raise _qualification_failure(reason,checks,cleanup,phase,error_number,runner) from None
             receipt = {'schema':PLAN_SCHEMA,'fingerprint':self.fingerprint,
                 'environment_sha256':self.environment_sha256,
                 'source_pins_sha256':digest(canonical(self._plan['source_pins'])),
