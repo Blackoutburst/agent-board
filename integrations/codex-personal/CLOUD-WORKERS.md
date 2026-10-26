@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.35.0
+## État de la source 0.36.0
 
 | Élément | État |
 | --- | --- |
@@ -20,6 +20,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Mode historique `run-batch`/schema v1 | Quatre résultats privés ; la fin du lot ne publie pas de PR |
 | Autorisation Development autonome | Lecture bornée en une requête ; contrôles de contexte, révocation et délai natif inchangés |
 | Empreintes des fichiers publics protégés | Empreintes initiales complètes, puis contrôle des descripteurs, métadonnées, parents et privilèges ; aucun cache des fichiers privés ou des décisions du board |
+| Diagnostic des refus de qualification du planner | Projection bornée des contrôles synthétiques et du nettoyage ; aucun contenu de conversation, commande, chemin ou authentification |
 | Mise à jour du pool arrêté | Remplacement de la release publique avec conservation des données privées, sans démarrage |
 | Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité installée, arrêtée et désactivée au démarrage, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
@@ -51,8 +52,13 @@ contrôleur fini : plan borné au catalogue opérateur pour le manager, synthès
 de reçus historiques corrélés pour le rédacteur. Leur résultat est privé ; ils
 ne distribuent pas encore les tâches de l’équipe.
 
-Au 26 octobre 2026, l’unité SDK0.34 est arrêtée après un refus de qualification, avant toute prise de ticket ou appel de modèle. Trois scénarios ont passé ; le scénario d’expiration du script a été interrompu avant SOURCE par l’expiration de l’autorisation, avec nettoyage confirmé des quatre scénarios. La source SDK0.35 réduit les lectures répétées des seuls fichiers publics protégés ; sa recette dans l’unité propriétaire reste à effectuer. Aucun
-modèle réel n’a validé ce nouveau parcours serveur. Les tests d’intégration
+Au 26 octobre 2026, SDK0.35 est installé et le nouveau lot propriétaire s’est
+arrêté pendant la qualification du planner, avant toute prise de ticket. Les
+neuf scénarios backend et cinq sondes planner passent dans une fixture Linux
+distincte UID1000 sous NNP1 ; cela ne qualifie pas le service propriétaire.
+SDK0.36 ajoute une projection fermée des prochains refus pour en observer les
+contrôles sans exposer de contenu privé. Aucun modèle réel n’a validé ce
+nouveau parcours serveur. Les tests d’intégration
 avec Board, Git, journaux et Runtime temporaires vérifient le raccord logiciel ;
 leurs transports de modèle/GitHub et leurs qualifications Linux sont simulés.
 L’authentification des propriétaires, les qualifications dans l’unité finale et
