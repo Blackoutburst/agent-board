@@ -175,11 +175,28 @@ def _replace_unit(path,expected,replacement):
         if temporary.exists():temporary.unlink()
 
 
+def _unit_template_upgrade_allowed(previous,manifest,previous_release,directory):
+    """Only the shipped 0.35/0.36 template may gain sandbox setup Netlink."""
+    if previous['files']['unit.service.in']==manifest['files']['unit.service.in']:
+        return True
+    if previous['adapter_version'] not in {'0.35.0','0.36.0'} or manifest['adapter_version']!='0.37.0':
+        return False
+    old=p.read_regular(previous_release/'unit.service.in',16384)
+    new=p.read_regular(directory/'unit.service.in',16384)
+    for raw,pin in ((old,previous['files']['unit.service.in']),(new,manifest['files']['unit.service.in'])):
+        if len(raw)!=pin['size'] or hashlib.sha256(raw).hexdigest()!=pin['sha256']:
+            return False
+    line=b'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n'
+    return (hashlib.sha256(old).hexdigest()=='8db5a568a5ec5df5f03434dfa1e1eab3d651546a59d3b5133b70a784d6f6d446'
+        and old.count(line)==1
+        and new==old.replace(line,b'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n'))
+
+
 def upgrade_addon(directory,*,previous_bundle_id,apply=False,expected_bundle_id=None):
     """Replace only a receipted stopped unit; never inspect owner-private contents.
 
-    The prior and new tools, owner, endpoint, limits and unit template must be
-    identical. Only public source/revision changes are accepted by this path.
+    Tools, owner, endpoint and limits must remain identical. Unit templates also
+    remain identical except the exact shipped 0.35/0.36-to-0.37 Netlink addition.
     A completion-ACK loss remains stopped and uncertain, never auto-replayed.
     """
     plan=plan_addon(directory);previous_bundle_id=p.sha(previous_bundle_id)
@@ -205,7 +222,8 @@ def upgrade_addon(directory,*,previous_bundle_id,apply=False,expected_bundle_id=
                     'codex_version','gh_version','unit_limits')
         if (any(previous[key]!=manifest[key] for key in continuity)
                 or any(previous['files'][name]!=manifest['files'][name] for name in
-                    ('unit.service.in','tools/codex','tools/codex-resources/bwrap','tools/gh'))):
+                    ('tools/codex','tools/codex-resources/bwrap','tools/gh'))
+                or not _unit_template_upgrade_allowed(previous,manifest,previous_release,directory)):
             p.fail('pool_upgrade_scope_changed')
         old_receipt=p.BASE/'installations'/(previous_bundle_id+'.complete.json')
         p.protected(old_receipt);record=p.decode(p.read_regular(old_receipt,128*1024))
