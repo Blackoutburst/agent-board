@@ -55,7 +55,8 @@ def test_real_false_check_attaches_only_closed_in_memory_facts(fixture):
     error, record = failed_qualification(case)
     assert error.code == 'linux_planner_native_policy_unqualified'
     assert error._linux_planner_canary_diagnostic == {
-        'checks':record['checks'],'cleanup_confirmed':True,'phase':'canary_result'}
+        'checks':record['checks'],'cleanup_confirmed':True,'phase':'canary_result',
+        'runner':{'returncode':78,'failure':None,'stdout_state':'json_valid','stderr_present':False}}
     assert case.commands[-1][0][-2] == policy_module.LINUX_CANARY
     assert case.commands[-1][2:4] == (15,8192)
 
@@ -115,3 +116,60 @@ def test_success_and_nonreusable_attempt_do_not_gain_a_diagnostic(fixture):
             policy.qualify()
     assert stopped.value.code == 'linux_planner_attempt_not_reusable'
     assert not hasattr(stopped.value,'_linux_planner_canary_diagnostic')
+
+
+@pytest.mark.parametrize('stdout,state,reason',[
+    (b'','empty','linux_planner_native_policy_unqualified'),
+    (b'private malformed /secret','json_invalid','linux_planner_native_policy_unqualified'),
+    (b'{"schema":1,"schema":1}','json_invalid','linux_planner_native_policy_unqualified'),
+    (b'\xff','json_invalid','linux_planner_native_policy_unqualified'),
+    (b'{"private":"/secret"}','json_valid','linux_planner_canary_output_invalid'),
+    ('private non-byte output /secret','non_bytes','linux_planner_canary_output_invalid'),
+])
+def test_runner_output_state_preserves_original_decode_refusal(fixture,stdout,state,reason):
+    case = fixture
+    def invalid(argv,*args):
+        result = case.fake_run(argv,*args)
+        if 'sandbox' in argv:
+            result.stdout,result.stderr,result.returncode = stdout,b'private stderr /secret',78
+        return result
+    case.run.side_effect = invalid
+    error, record = failed_qualification(case)
+    assert error.code == reason and record['checks'] == {}
+    assert error._linux_planner_canary_diagnostic == {
+        'checks':{},'cleanup_confirmed':True,'phase':'canary_result',
+        'runner':{'returncode':78,'failure':None,'stdout_state':state,'stderr_present':True}}
+    assert '/secret' not in str(error._linux_planner_canary_diagnostic)
+    assert 'runner' not in record
+
+
+@pytest.mark.parametrize('failure,returncode',[
+    ('launch_failed',None),('timeout',-15),('output_limit',-9),('process_io_failed',1),
+    ('unsupported_platform',None),
+])
+def test_runner_failure_is_bounded_and_does_not_replace_original_refusal(fixture,failure,returncode):
+    case = fixture
+    def stopped(argv,*args):
+        result = case.fake_run(argv,*args)
+        if 'sandbox' in argv:
+            result.stdout,result.stderr = b'',b'private process detail /secret'
+            result.failure,result.returncode = failure,returncode
+        return result
+    case.run.side_effect = stopped
+    error, _ = failed_qualification(case)
+    assert error.code == 'linux_planner_native_policy_unqualified'
+    assert error._linux_planner_canary_diagnostic['runner'] == {
+        'returncode':returncode,'failure':failure,'stdout_state':'empty','stderr_present':True}
+
+
+def test_cleanup_failure_keeps_runner_private_outside_canary_phases(fixture):
+    case = fixture
+    def stopped(argv,*args):
+        result = case.fake_run(argv,*args)
+        if 'sandbox' in argv:
+            result.failure,result.stdout = 'cleanup_failed',b''
+        return result
+    case.run.side_effect = stopped
+    error, _ = failed_qualification(case)
+    assert error.code == 'linux_planner_qualification_cleanup_unconfirmed'
+    assert error._linux_planner_canary_diagnostic == {'checks':{},'cleanup_confirmed':False,'phase':'cleanup'}

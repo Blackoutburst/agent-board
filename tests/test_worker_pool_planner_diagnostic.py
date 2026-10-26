@@ -14,6 +14,7 @@ from blackoutburst_agents import finite_pool_batch
 CHECKS = {'inside_read':True,'inside_write_denied':True,'outside_read_denied':True,
           'outside_write_denied':False,'network_loopback_denied':True}
 DIAGNOSTIC = {'checks':CHECKS,'cleanup_confirmed':True,'phase':'canary_result'}
+RUNNER = {'returncode':78,'failure':None,'stdout_state':'json_valid','stderr_present':False}
 
 
 @pytest.fixture
@@ -86,7 +87,7 @@ def test_real_qualification_refusal_reaches_actual_entry_unchanged(run_entry):
                 policy.qualify()
         lines = run_entry(stopped.value)
         assert lines == [{'status':'needs_review','reason':stopped.value.code},
-            {'status':'qualification_diagnostic','kind':'linux_planner_canary',**DIAGNOSTIC}]
+            {'status':'qualification_diagnostic','kind':'linux_planner_canary',**DIAGNOSTIC,'runner':RUNNER}]
     finally:
         case.doCleanups()
 
@@ -122,3 +123,71 @@ def test_malicious_or_ambiguous_projection_is_not_partially_exported(run_entry,c
 ])
 def test_absent_wrong_type_or_unrelated_error_emits_no_diagnostic(run_entry,error):
     assert len(run_entry(error)) == 1
+
+
+@pytest.mark.parametrize('phase',['canary_execution','canary_result'])
+def test_entry_copies_closed_runner_facts(run_entry,phase):
+    payload = {**DIAGNOSTIC,'phase':phase,'runner':dict(RUNNER)}
+    error = error_with(payload)
+    projected = entry._planner_qualification_diagnostic(error)
+    error._linux_planner_canary_diagnostic['runner']['failure'] = '/private/secret'
+    assert projected == {'status':'qualification_diagnostic','kind':'linux_planner_canary',**payload}
+    assert run_entry(error_with(payload))[1] == projected
+
+
+@pytest.mark.parametrize('change',[
+    lambda p:p['runner'].update(stdout='private output'),
+    lambda p:p['runner'].update(stderr='private output'),
+    lambda p:p['runner'].update(returncode=True),
+    lambda p:p['runner'].update(returncode=256),
+    lambda p:p['runner'].update(returncode=-256),
+    lambda p:p['runner'].update(returncode=1.0),
+    lambda p:p['runner'].update(failure='private error /secret'),
+    lambda p:p['runner'].update(failure=False),
+    lambda p:p['runner'].update(stdout_state='private stdout /secret'),
+    lambda p:p['runner'].update(stdout_state=None),
+    lambda p:p['runner'].update(stderr_present=1),
+    lambda p:p['runner'].pop('returncode'),
+    lambda p:p.update(runner=[]),
+    lambda p:p.update(runner=type('CustomRunner',(dict,),{})(RUNNER)),
+    lambda p:p.update(phase='host_fixtures'),
+    lambda p:p.update(phase='cleanup'),
+])
+def test_entry_rejects_whole_ambiguous_runner_projection(run_entry,change):
+    payload = {**deepcopy(DIAGNOSTIC),'runner':dict(RUNNER)};change(payload)
+    assert run_entry(error_with(payload)) == [
+        {'status':'needs_review','reason':'linux_planner_native_policy_unqualified'}]
+
+
+@pytest.mark.parametrize('stdout,failure,returncode,state',[
+    (b'',None,78,'empty'),
+    (b'private malformed /secret',None,78,'json_invalid'),
+    (b'{"schema":1,"schema":1}',None,78,'json_invalid'),
+    (b'\xff',None,78,'json_invalid'),
+    (b'','launch_failed',None,'empty'),
+    (b'','timeout',-15,'empty'),
+])
+def test_actual_qualification_runner_refusal_reaches_entry_without_output(
+        run_entry,stdout,failure,returncode,state):
+    from blackoutburst_agents.linux_planner_policy import LinuxPlannerPolicy
+    import test_linux_planner_policy as fixture_module
+    case = fixture_module.LinuxPolicyTests('runTest');case.setUp()
+    try:
+        case.prepare()
+        def refused(argv,*args):
+            result = case.fake_run(argv,*args)
+            if 'sandbox' in argv:
+                result.stdout,result.stderr = stdout,b'private stderr /secret'
+                result.failure,result.returncode = failure,returncode
+            return result
+        case.run.side_effect = refused
+        with LinuxPlannerPolicy(case.state) as policy:
+            with pytest.raises(PlannerPolicyError) as stopped:
+                policy.qualify()
+        assert run_entry(stopped.value) == [
+            {'status':'needs_review','reason':'linux_planner_native_policy_unqualified'},
+            {'status':'qualification_diagnostic','kind':'linux_planner_canary','checks':{},
+             'cleanup_confirmed':True,'phase':'canary_result',
+             'runner':{'returncode':returncode,'failure':failure,'stdout_state':state,'stderr_present':True}}]
+    finally:
+        case.doCleanups()

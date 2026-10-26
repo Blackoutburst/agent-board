@@ -72,7 +72,24 @@ def _fail(code='linux_planner_environment_unconfirmed'):
     raise PlannerPolicyError(code) from None
 
 
-def _qualification_failure(reason, checks, cleanup_confirmed, phase, error_number):
+RUNNER_FAILURES = frozenset({'timeout','output_limit','launch_failed',
+    'process_io_failed','unsupported_platform','cleanup_failed'})
+RUNNER_STDOUT_STATES = frozenset({'empty','json_invalid','json_valid','non_bytes'})
+
+
+def _runner_observation(result):
+    """Project bounded process facts, without retaining either output stream."""
+    if (not (result.returncode is None or type(result.returncode) is int and -255 <= result.returncode <= 255)
+            or not (result.failure is None or type(result.failure) is str and result.failure in RUNNER_FAILURES)
+            or type(result.stderr) is not bytes):
+        return None
+    state = ('non_bytes' if type(result.stdout) is not bytes else
+             'empty' if not result.stdout else 'json_invalid')
+    return {'returncode':result.returncode,'failure':result.failure,
+            'stdout_state':state,'stderr_present':bool(result.stderr)}
+
+
+def _qualification_failure(reason, checks, cleanup_confirmed, phase, error_number, runner=None):
     """In-memory closed facts only; no packet, message, path or durable change."""
     error = PlannerPolicyError(reason)
     if (type(checks) is dict and (not checks or set(checks) == CHECKS)
@@ -81,6 +98,13 @@ def _qualification_failure(reason, checks, cleanup_confirmed, phase, error_numbe
         diagnostic = {'checks':dict(checks),'cleanup_confirmed':cleanup_confirmed,'phase':phase}
         if type(error_number) is int and 1 <= error_number <= 4095:
             diagnostic['errno'] = error_number
+        if (phase in {'canary_execution','canary_result'} and type(runner) is dict
+                and set(runner) == {'returncode','failure','stdout_state','stderr_present'}
+                and (runner['returncode'] is None or type(runner['returncode']) is int and -255 <= runner['returncode'] <= 255)
+                and (runner['failure'] is None or type(runner['failure']) is str and runner['failure'] in RUNNER_FAILURES)
+                and type(runner['stdout_state']) is str and runner['stdout_state'] in RUNNER_STDOUT_STATES
+                and type(runner['stderr_present']) is bool):
+            diagnostic['runner'] = dict(runner)
         error._linux_planner_canary_diagnostic = diagnostic
     return error
 
@@ -600,6 +624,7 @@ class LinuxPlannerPolicy:
             marker_hash = digest(canonical(marker))
             checks,reason,process_cleanup = {},None,True
             phase,error_number,cleanup_error_number = 'cli_version',None,None
+            runner = None
             listener = inside_fd = outside_fd = workspace_fd = None
             owned = []
             cleanup = False
@@ -642,8 +667,10 @@ class LinuxPlannerPolicy:
                 phase = 'canary_result'
                 process_cleanup = process_cleanup and _known_process_cleanup(run)
                 _canary_host_fixtures(owned)
+                runner = _runner_observation(run)
                 if type(run.stdout) is not bytes: _fail('linux_planner_canary_output_invalid')
                 value = decode(run.stdout)
+                if runner is not None: runner['stdout_state'] = 'json_valid'
                 if (type(value) is not dict or set(value) != {'schema','checks'}
                         or type(value['schema']) is not int or value['schema'] != 1
                         or type(value['checks']) is not dict or set(value['checks']) != CHECKS
@@ -736,7 +763,7 @@ class LinuxPlannerPolicy:
                     if self.private.read('planner-qualification.json',8192) == canonical(None):
                         self.private.replace('planner-qualification.json',canonical(refusal))
                 except (DevelopmentError,OSError): pass
-                raise _qualification_failure(reason,checks,cleanup,phase,error_number) from None
+                raise _qualification_failure(reason,checks,cleanup,phase,error_number,runner) from None
             receipt = {'schema':PLAN_SCHEMA,'fingerprint':self.fingerprint,
                 'environment_sha256':self.environment_sha256,
                 'source_pins_sha256':digest(canonical(self._plan['source_pins'])),

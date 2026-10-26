@@ -27,7 +27,7 @@ def _planner_qualification_diagnostic(error):
                 'linux_planner_qualification_cleanup_unconfirmed','linux_planner_policy_changed'}:
             return None
         supplied = vars(error).get('_linux_planner_canary_diagnostic')
-        if type(supplied) is not dict or len(supplied) not in (3,4):
+        if type(supplied) is not dict or not 3 <= len(supplied) <= 5:
             return None
         value = dict(supplied)
         if type(value.get('checks')) is not dict:
@@ -38,17 +38,34 @@ def _planner_qualification_diagnostic(error):
         phases = {'cli_version','host_fixtures','canary_pins','canary_execution',
                   'canary_result','cleanup','final_pins'}
         if (any(type(key) is not str for key in value)
-                or set(value) not in ({'checks','cleanup_confirmed','phase'},
-                                     {'checks','cleanup_confirmed','phase','errno'})
+                or not {'checks','cleanup_confirmed','phase'} <= set(value)
+                or not set(value) <= {'checks','cleanup_confirmed','phase','errno','runner'}
                 or any(type(key) is not str or type(item) is not bool for key,item in value['checks'].items())
                 or value['checks'] and set(value['checks']) != checks
                 or type(value['cleanup_confirmed']) is not bool
                 or type(value['phase']) is not str or value['phase'] not in phases
                 or 'errno' in value and (type(value['errno']) is not int or not 1 <= value['errno'] <= 4095)):
             return None
+        if 'runner' in value:
+            runner = value['runner']
+            if type(runner) is not dict:
+                return None
+            runner = dict(runner)
+            if (value['phase'] not in {'canary_execution','canary_result'}
+                    or any(type(key) is not str for key in runner)
+                    or set(runner) != {'returncode','failure','stdout_state','stderr_present'}
+                    or not (runner['returncode'] is None or type(runner['returncode']) is int and -255 <= runner['returncode'] <= 255)
+                    or not (runner['failure'] is None or type(runner['failure']) is str and runner['failure'] in
+                        {'timeout','output_limit','launch_failed','process_io_failed','unsupported_platform','cleanup_failed'})
+                    or type(runner['stdout_state']) is not str or runner['stdout_state'] not in
+                        {'empty','json_invalid','json_valid','non_bytes'}
+                    or type(runner['stderr_present']) is not bool):
+                return None
+            value['runner'] = runner
         return {'status':'qualification_diagnostic','kind':'linux_planner_canary',
                 'checks':dict(value['checks']),'cleanup_confirmed':value['cleanup_confirmed'],
-                'phase':value['phase'],**({'errno':value['errno']} if 'errno' in value else {})}
+                'phase':value['phase'],**({'errno':value['errno']} if 'errno' in value else {}),
+                **({'runner':value['runner']} if 'runner' in value else {})}
     except (AttributeError,TypeError,ValueError,RuntimeError):
         return None
 
