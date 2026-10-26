@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.17.3/schema 17 with adapter 0.37.0. Standalone Development
+Current source is Board 2.17.3/schema 17 with adapter 0.37.1. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
@@ -10,11 +10,17 @@ Adapter 0.37 permits `AF_NETLINK` in the outer pool unit so Codex 0.163's
 bubblewrap helper can configure loopback in its new network namespace. Its
 previous `RestrictAddressFamilies` list blocked that setup before the canary
 could run. The stopped upgrader accepts only the exact shipped 0.35/0.36 to
-0.37 template change; tools, owner, endpoint, budgets and all other unit
+0.37.0/0.37.1 template change; tools, owner, endpoint, budgets and all other unit
 controls remain pinned. Parent processes gain access to this socket family;
 no host network administration capability is added. The planner's inner
 network restrictions and the native test backend's socket denial remain in
 force. See [sandbox Netlink setup](../integrations/codex-personal/docs/SANDBOX-NETLINK-SETUP.md).
+
+Adapter 0.37.1 normalizes the CLI string paths before reading the two unit
+templates. The regression tests exercise `main` with real argument strings,
+temporary releases and receipts, and simulated root/systemd metadata; successful
+upgrades remain stopped and disabled. A template mismatch still refuses before
+publishing a release or writing an upgrade intent.
 
 Adapter 0.35 avoids repeated content reads of protected public binaries and
 runtime files in the parent controller. Its process-local held-descriptor pins

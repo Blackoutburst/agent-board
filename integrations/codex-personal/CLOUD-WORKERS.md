@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.37.0
+## État de la source 0.37.1
 
 | Élément | État |
 | --- | --- |
@@ -59,7 +59,9 @@ distincte UID1000 sous NNP1 ; cela ne qualifie pas le service propriétaire.
 SDK0.37 autorise aussi la famille Netlink dans l'unité extérieure pour la
 préparation du réseau isolé de bubblewrap, sans modifier les cinq critères
 planner ni les filtres réseau intérieurs. La qualification et le parcours
-réels dans la nouvelle unité restent à vérifier.
+réels dans la nouvelle unité restent à vérifier. SDK0.37.1 corrige aussi la
+conversion des chemins reçus par la CLI de mise à jour ; ses tests passent
+par la vraie interface en ligne de commande sur des fichiers temporaires.
 SDK0.36 ajoute une projection fermée des prochains refus pour en observer les
 contrôles sans exposer de contenu privé. Aucun modèle réel n’a validé ce
 nouveau parcours serveur. Les tests d’intégration

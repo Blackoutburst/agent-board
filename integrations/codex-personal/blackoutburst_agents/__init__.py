@@ -1,3 +1,3 @@
 """Tools for personal agents connected to the Blackoutburst board."""
 
-__version__ = "0.37.0"
+__version__ = "0.37.1"
