@@ -19,6 +19,14 @@ REQUIRED_SDK_MODULES=('__init__','finite_pool_batch','linux_pool_preparation','c
     'development_authorization')
 
 
+def required_sdk_modules(version):
+    # The installer must still verify a receipted 0.34 release during a stopped
+    # upgrade. Only releases using protected pins require the added module.
+    if type(version) is not str or re.fullmatch(r'0\.[0-9]+\.[0-9]+',version) is None:fail()
+    return REQUIRED_SDK_MODULES + (('protected_public_pins',) if
+        tuple(int(part) for part in version.split('.')) >= (0,35,0) else ())
+
+
 class PackageError(Exception):
     def __init__(self,code):self.code=code;super().__init__(code)
 
@@ -115,7 +123,7 @@ def validate_manifest(value):
     limits(value['unit_limits']);files=value['files']
     required={'pool_entry.py','pool_package.py','pool_manage.py','unit.service.in','source/connect.py',
         'tools/codex','tools/codex-resources/bwrap','tools/gh'}|{
-        'source/blackoutburst_agents/'+name+'.py' for name in REQUIRED_SDK_MODULES}
+        'source/blackoutburst_agents/'+name+'.py' for name in required_sdk_modules(value['adapter_version'])}
     if type(files) is not dict or not required<=set(files) or not 10<=len(files)<=400:fail('pool_inventory_invalid')
     total=0
     for name,pin in files.items():

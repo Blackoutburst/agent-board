@@ -222,6 +222,8 @@ def source_window_ready(private):
 
 
 def supervise(directory):
+    from .protected_public_pins import disable_protected_public_pins_for_process
+    disable_protected_public_pins_for_process()
     from .linux_test_backend import load_supervisor_job, validate_native_receipt
     private, job, plan, state = load_supervisor_job(directory)
     lock = None; launcher = launcher_fd = init_fd = None

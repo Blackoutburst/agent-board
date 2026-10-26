@@ -26,7 +26,7 @@ from .linux_input_snapshot import (capture_input_snapshot_locked, _chain, _fence
 from .linux_test_protocol import (EXECUTION_REQUEST_SCHEMA, encode_input_packet,
     linux_execution_backend_id, validate_execution_request_shape, validate_linux_execution_request)
 from .linux_test_namespace import (MAX_INPUT_PACKET, REQUIRED_CHECKS, public_runtime,
-                                   read_public, seccomp_program)
+                                   read_public, check_public_pin, seccomp_program)
 
 PLAN_SCHEMA = 'blackoutburst-linux-execution-plan-v1'
 NATIVE_SCHEMA = 'blackoutburst-linux-native-observation-v1'
@@ -125,13 +125,13 @@ def validate_current_plan(plan):
     require(observed == original and plan['root'] == original['root']
             and plan['root_identity'] == original['root_chain'][-1]['identity'], 'linux_execution_script_changed')
     for path, pin in ((plan['interpreter'], plan['interpreter_pin']), (plan['unshare'], plan['unshare_pin'])):
-        read_public(path, root_owned=True, expected=pin)
+        check_public_pin(path, root_owned=True, expected=pin)
     require(plan['interpreter'] == str(Path(sys.executable).resolve(strict=True)),
             'linux_execution_interpreter_changed')
     require(type(plan['runtime']) is dict and 1 <= len(plan['runtime']) <= 256)
     total = 0
     for path, pin in plan['runtime'].items():
-        _, current = read_public(path, root_owned=True, expected=pin,
+        current = check_public_pin(path, root_owned=True, expected=pin,
             maximum=min(64*1024*1024,128*1024*1024-total),allow_empty=True)
         total += current['size']
         require(total <= 128 * 1024 * 1024, 'linux_execution_runtime_limit')

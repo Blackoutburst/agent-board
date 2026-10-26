@@ -92,6 +92,29 @@ def read_public(path, *, root_owned=False, maximum=64 * 1024 * 1024, expected=No
             os.close(fd)
 
 
+def check_public_pin(path, *, root_owned=False, maximum=64*1024*1024, expected=None, allow_empty=False):
+    """Pin-only controller check; byte consumers always keep read_public.
+
+    The first eligible observation hashes the held public file normally. Later
+    observations use only the concrete protected reader's unchanged FD/context
+    proof. Ineligible paths retain the exact full-read validator. An activated
+    proof that changes is an error, never a new baseline or a full-read retry.
+    """
+    from .protected_public_pins import protected_public_pin,ProtectedPublicPinsError
+    try:
+        public=protected_public_pin(path,maximum=maximum,allow_empty=allow_empty)
+    except ProtectedPublicPinsError:
+        raise ProbeError('linux_runtime_changed') from None
+    if public is None:
+        return read_public(path,root_owned=root_owned,maximum=maximum,expected=expected,allow_empty=allow_empty)[1]
+    require(type(allow_empty) is bool)
+    pin={key:public[key] for key in ('identity','size','sha256','uid','gid','mode','nlink')}
+    if expected is not None:
+        require(type(expected) is dict and set(expected)==set(pin),'linux_runtime_changed')
+        require(pin==expected,'linux_runtime_changed')
+    return pin
+
+
 def public_runtime():
     """Only this process's loaded public files, never accounts or other maps."""
     require(len(sys.modules)<=4096,'linux_runtime_inventory_limit')
