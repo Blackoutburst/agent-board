@@ -1,10 +1,19 @@
 # Operations and release procedure
 
-Current source is Board 2.17.3/schema 17 with adapter 0.37.1. Standalone Development
+Current source is Board 2.17.3/schema 17 with adapter 0.38.0. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
+
+Adapter 0.38 adds closed, in-memory backend qualification diagnostics. A
+refusal reports the current synthetic case, native checks and cleanup flags,
+and the first controller refusal without exception text, commands or paths.
+The preparation callback also retains its most recent result and duration,
+including a successful collection that exceeds the existing control window.
+The refusal decision, exit status, private receipt schemas, 1.5-second window
+and SOURCE boundary checks stay unchanged. See
+[backend qualification diagnostics](../integrations/codex-personal/docs/BACKEND-QUALIFICATION-DIAGNOSTICS.md).
 
 Adapter 0.37 permits `AF_NETLINK` in the outer pool unit so Codex 0.163's
 bubblewrap helper can configure loopback in its new network namespace. Its

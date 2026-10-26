@@ -37,6 +37,91 @@ CASE_SECONDS = 22
 OBSERVATION_SECONDS = 5
 ACK_SECONDS = 0.8
 NODES = ('driver','supervisor','launcher','init')
+DIAGNOSTIC_PHASES = frozenset({'helper_launch_intent','namespace_launch_intent',
+    'source_boundary_requested','source_release_intent','source_ack_written','complete'})
+DIAGNOSTIC_STAGES = frozenset({'case','execution','native','native_expected','fault','proof'})
+CONTROL_CODES = frozenset({'permission_revoked','supervisor_clock_unavailable','supervisor_clock_changed',
+    'supervisor_control_invalid','supervisor_authorization_expired','supervisor_control_write_failed',
+    'linux_qualification_eof','linux_qualification_source_revoked','linux_source_boundary_unconfirmed'})
+SCOPE_CODES = frozenset({'linux_pool_preparation_changed','linux_pool_job_changed','linux_pool_job_not_queued',
+    'linux_pool_ticket_not_ready','linux_pool_selection_changed','development_stop_requested',
+    'development_registration_mismatch','development_grants_unavailable','development_ticket_unavailable',
+    'development_claim_lost','development_claim_invalid','development_context_changed','development_claim_changed'})
+NATIVE_REASONS = frozenset({'completed','script_failed','linux_authorization_expired','linux_startup_expired',
+    'linux_source_boundary_missing','linux_kernel_guard_failed','linux_script_wall_expired',
+    'linux_output_limit','linux_native_unconfirmed'})
+
+
+def qualification_diagnostic(value):
+    """Closed copied observations only; never a proof, path, packet or exception text."""
+    try:
+        if type(value) is not dict:return None
+        value=dict(value)
+        if (any(type(key) is not str for key in value)
+                or set(value) not in ({'case','stage','phase','controller','native'},
+                {'case','stage','phase','controller','native','scope_check'})
+                or type(value['case']) is not str or value['case'] not in CASES
+                or type(value['stage']) is not str or value['stage'] not in DIAGNOSTIC_STAGES
+                or not (value['phase'] is None or type(value['phase']) is str and value['phase'] in DIAGNOSTIC_PHASES)):
+            return None
+        if value['controller'] is not None:
+            if type(value['controller']) is not dict:return None
+            item=dict(value['controller'])
+            if (any(type(key) is not str for key in item)
+                    or set(item)!={'operation','bucket','code'} or type(item['operation']) is not str
+                    or item['operation'] not in {'initial_window','initial_send','heartbeat_window','heartbeat_send',
+                        'source_window','source_publish','source_send'}
+                    or type(item['bucket']) is not str or item['bucket'] not in {'development','os_error'}
+                    or not (item['code'] is None or type(item['code']) is str and item['code'] in CONTROL_CODES)
+                    or item['bucket']=='os_error' and item['code'] is not None):return None
+            value['controller']=item
+        if value['native'] is not None:
+            if type(value['native']) is not dict:return None
+            item=dict(value['native'])
+            if (any(type(key) is not str for key in item)
+                    or set(item)!={'reason','launcher_attempted','source_release_intent','source_released','checks','cleanup'}):return None
+            if type(item['checks']) is not dict or type(item['cleanup']) is not dict:return None
+            item['checks'],item['cleanup']=dict(item['checks']),dict(item['cleanup'])
+            from .linux_test_backend import CHECKS
+            if (type(item['reason']) is not str or item['reason'] not in NATIVE_REASONS
+                    or any(type(item[name]) is not bool for name in ('launcher_attempted','source_release_intent','source_released'))
+                    or item['checks'] and set(item['checks'])!=CHECKS
+                    or any(type(key) is not str or type(flag) is not bool for key,flag in item['checks'].items())
+                    or set(item['cleanup'])!={'init_identity_received','init_terminal','launcher_reaped','cleanup_confirmed','numeric_pid_signalled'}
+                    or any(type(key) is not str or type(flag) is not bool for key,flag in item['cleanup'].items())):return None
+            value['native']=item
+        if 'scope_check' in value:
+            if type(value['scope_check']) is not dict:return None
+            item=dict(value['scope_check'])
+            if (any(type(key) is not str for key in item)
+                    or set(item)!={'stage','allowed','bucket','code','elapsed_ms'} or type(item['stage']) is not str
+                    or item['stage'] not in {'held','fresh','scope'}
+                    or type(item['allowed']) is not bool
+                    or not (item['bucket'] is None or type(item['bucket']) is str and item['bucket'] in {'development','os_error','other'})
+                    or not (item['code'] is None or type(item['code']) is str and item['code'] in SCOPE_CODES)
+                    or type(item['elapsed_ms']) is not int or not 0<=item['elapsed_ms']<=600000):return None
+            value['scope_check']=item
+        return value
+    except Exception:return None
+
+
+def _case_observation(case):
+    return {'case':case,'stage':'case','phase':None,'controller':None,'native':None}
+
+
+def _observe(backend,case,**facts):
+    try:
+        value=getattr(backend,'_qualification_observation',None)
+        if type(value) is dict and value.get('case')==case:
+            if value.get('controller') is not None:facts.pop('phase',None)
+            value.update(facts)
+    except Exception:pass
+
+
+def _native_summary(value):
+    if type(value) is not dict:return None
+    return {name:value.get(name) for name in
+        ('reason','launcher_attempted','source_release_intent','source_released','checks','cleanup')}
 
 
 def require(condition, code='linux_qualification_unconfirmed'):
@@ -122,11 +207,13 @@ def _native(backend,case,request):
     from .linux_test_backend import read_native_observation
     private,job,state=_job(backend,case,request)
     with private:
+        _observe(backend,case,stage='native',phase=state['phase'])
         require(state['phase']=='complete','linux_qualification_native_missing')
         raw,value=_read_document(private,'native-receipt.json',128*1024)
         require(digest(raw)==state['native_receipt_sha256'],'linux_qualification_native_changed')
         observed=read_native_observation(private,job,backend.plan)
         require(_same(observed,value),'linux_qualification_native_changed')
+        _observe(backend,case,native=_native_summary(value))
         require(value['cleanup']['cleanup_confirmed'] is True
                 and value['broker_snapshot_admitted'] is False,'linux_qualification_cleanup_unconfirmed')
         return raw,value
@@ -185,7 +272,8 @@ def _ordinary(backend,case):
     result=backend._qualify_case(case)
     require(type(result) is dict and set(result)=={'request','native','native_receipt_sha256'})
     proof=_base_proof(backend,case,result['request'])
-    raw,native=_native(backend,case,result['request']);_expected_native(case,native)
+    raw,native=_native(backend,case,result['request'])
+    _observe(backend,case,stage='native_expected');_expected_native(case,native)
     require(_same(native,result['native']) and digest(raw)==result['native_receipt_sha256'])
     replay=corruption=False
     if case=='replay_and_corruption':
@@ -548,6 +636,7 @@ def _fault(backend,case):
         private,job,state=_job(backend,case,request)
         with private:
             require(_same(state,message['state']) and state['phase']=='source_ack_written')
+            _observe(backend,case,stage='fault',phase=state['phase'])
             require(observer.acquire(message['supervisor_pid']) is True,'linux_qualification_observer_required')
             # Read the exact linked state again after kernel handle acquisition.
             require(private.read('state.json',8192)==canonical(state)
@@ -570,7 +659,8 @@ def _fault(backend,case):
         observation.update(kind='independent_fault',source_ack_sha256=digest(canonical(state)),
             driver_outcome='self_sigkill' if case=='controller_loss' else 'supervisor_loss_confirmed')
         if case=='controller_loss':
-            raw,native=_native(backend,case,request);_expected_native(case,native)
+            raw,native=_native(backend,case,request)
+            _observe(backend,case,stage='native_expected');_expected_native(case,native)
             proof['native_receipt_sha256']=digest(raw)
         else:
             with PrivateDirectory(backend._job_directory(request)) as private:
@@ -627,7 +717,8 @@ def _validate_proof(backend,case,proof):
                   _matrix_binding(backend)),'linux_qualification_origin_changed')
     _validate_observation(case,proof['observation'])
     if case!='supervisor_loss':
-        raw,native=_native(backend,case,proof['request']);_expected_native(case,native)
+        raw,native=_native(backend,case,proof['request'])
+        _observe(backend,case,stage='native_expected');_expected_native(case,native)
         require(digest(raw)==proof['native_receipt_sha256'])
         if case=='controller_loss':
             private,job,state=_job(backend,case,proof['request'])
@@ -667,8 +758,18 @@ def qualify_execution_backend(backend):
             require(time.monotonic()-started<MATRIX_SECONDS,'linux_qualification_matrix_expired')
             backend._pins()
             private.create(case+'-intent.json',canonical({'schema':MATRIX_SCHEMA,'case':case,'origin':intent['origin']}))
-            proof=_fault(backend,case) if case in FAULT_CASES else _ordinary(backend,case)
-            _validate_proof(backend,case,proof)
+            backend._qualification_observation=_case_observation(case)
+            try:
+                _observe(backend,case,stage='fault' if case in FAULT_CASES else 'execution')
+                proof=_fault(backend,case) if case in FAULT_CASES else _ordinary(backend,case)
+                _observe(backend,case,stage='proof')
+                _validate_proof(backend,case,proof)
+            except DevelopmentError as error:
+                try:
+                    observation=qualification_diagnostic(backend._qualification_observation)
+                    if observation is not None:error._linux_backend_qualification_diagnostic=observation
+                except Exception:pass
+                raise
             raw=canonical(proof);require(len(raw)<=MAX_PROOF)
             private.create(case+'.json',raw);hashes[case]=digest(raw)
         backend._pins();_real_host(backend)

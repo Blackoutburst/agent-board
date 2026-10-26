@@ -692,6 +692,16 @@ class SupervisedLinuxNamedPythonBackend:
 
     def _run_job(self, request, inputs, script, context, *, qualification, qualification_case=None):
         from .linux_test_supervisor import helper_command
+        observation=(context._diagnostic if qualification and type(context) is _QualificationContext else None)
+        def observe_refusal(operation,error):
+            try:
+                if observation is not None and observation['controller'] is None:
+                    from .linux_execution_qualification import CONTROL_CODES
+                    code=(error.code if type(error) is DevelopmentError and type(error.code) is str
+                        and error.code in CONTROL_CODES else None)
+                    observation['controller']={'operation':operation,
+                        'bucket':'os_error' if isinstance(error,OSError) else 'development','code':code}
+            except Exception:pass
         def authorize_current():
             self._pins()
             return context.authorize()
@@ -707,7 +717,9 @@ class SupervisedLinuxNamedPythonBackend:
             private.create('script.py', script); private.create('input.packet', inputs)
             os.mkdir('root', 0o700, dir_fd=private.fd); os.fsync(private.fd)
             nonce = uuid.uuid4().hex
-            first = _fresh_control_window(authorize_current, nonce=nonce, sequence=1)
+            try:first = _fresh_control_window(authorize_current, nonce=nonce, sequence=1)
+            except (DevelopmentError,OSError) as error:
+                observe_refusal('initial_window',error);raise
             job = {'schema': KIND, 'nonce': nonce, 'request': request,
                 'backend_directory': str(self.private.path), 'plan_sha256': self.document['plan_hash'],
                 'script_sha256': digest(script), 'timeout_seconds': request['timeout_seconds'],
@@ -718,6 +730,7 @@ class SupervisedLinuxNamedPythonBackend:
                 'phase': 'helper_launch_intent', 'boundary_sequence': None,
                 'source_challenge': None, 'native_receipt_sha256': None}
             private.create('state.json', canonical(state))
+            if observation is not None:observation['phase']=state['phase']
             self._pins()
             # Durable ambiguity is already committed; never replay even on Popen error.
             child = subprocess.Popen(helper_command(self.plan, 'supervise', directory),
@@ -729,10 +742,12 @@ class SupervisedLinuxNamedPythonBackend:
             deadline = _control_clock() + request['timeout_seconds'] + 12
             try:
                 _send_control_window(child.stdin.fileno(), first)
-            except (DevelopmentError, OSError):
+            except (DevelopmentError, OSError) as error:
+                observe_refusal('initial_send',error)
                 revoked = True
             while _control_clock() < deadline:
                 state = _state(decode(private.read('state.json', 8192)), job)
+                if observation is not None and observation['controller'] is None:observation['phase']=state['phase']
                 if qualification:
                     context.observe_controller_state(child, state, request)
                 if state['phase'] == 'complete':
@@ -743,13 +758,16 @@ class SupervisedLinuxNamedPythonBackend:
                 if child.poll() is not None:
                     raise DevelopmentError('linux_supervisor_lost')
                 if not revoked:
+                    operation='heartbeat_window'
                     try:
                         if state['phase'] in ('source_boundary_requested','source_release_intent'):
+                            operation='source_window'
                             require(boundary_sent or state['phase']=='source_boundary_requested',
                                     'linux_source_boundary_unconfirmed')
                             if not boundary_sent:
                                 fresh = _fresh_control_window(source_current, nonce=nonce,
                                     sequence=previous['sequence'] + 1, previous=previous)
+                                operation='source_publish'
                                 private.create('source-window.json', canonical({'nonce': nonce,
                                     'challenge': state['source_challenge'],
                                     'request_sha256': digest(canonical(request)),
@@ -758,14 +776,17 @@ class SupervisedLinuxNamedPythonBackend:
                                 # write. Publish an empty no-replace marker only
                                 # after its bytes and directory entry are durable.
                                 private.create('source-window.ready', b'')
+                                operation='source_send'
                                 _send_control_window(child.stdin.fileno(), fresh, previous=previous)
                                 previous, boundary_sent = fresh, True
                         else:
                             fresh = _fresh_control_window(authorize_current, nonce=nonce,
                                 sequence=previous['sequence'] + 1, previous=previous)
+                            operation='heartbeat_send'
                             _send_control_window(child.stdin.fileno(), fresh, previous=previous)
                             previous = fresh
-                    except (DevelopmentError, OSError):
+                    except (DevelopmentError, OSError) as error:
+                        observe_refusal(operation,error)
                         revoked = True
                 if revoked and not child.stdin.closed:
                     child.stdin.close(); deadline = min(deadline, _control_clock() + 5)
@@ -801,6 +822,7 @@ class SupervisedLinuxNamedPythonBackend:
             'timeout_seconds': 1 if case == 'wall_timeout' else 5, 'max_output_bytes': 4096,
             'input_plan_sha256': self.plan['input_plan_sha256'], 'fence_sha256': digest(b'qualification-no-broker')}
         context = _QualificationContext(self, case, fault_authorizer=fault_authorizer)
+        self._qualification_observation=context._diagnostic
         native = self._run_job(request, packet, script, context, qualification=True, qualification_case=case)
         return {'request': request, 'native': native, 'native_receipt_sha256': digest(canonical(native))}
 
@@ -835,6 +857,9 @@ class _QualificationContext:
     def __init__(self, backend, case, *, fault_authorizer=None):
         self.backend, self.case, self.stage = backend, case, None
         self.fault_authorizer,self.fault_observed=fault_authorizer,False
+        from .linux_execution_qualification import _case_observation
+        self._diagnostic=_case_observation(case)
+        self._diagnostic['stage']='execution'
     def authorize(self):
         self.backend._authorize()
         require(not (self.case == 'eof_running' and self.stage == 'source_ack_written'),

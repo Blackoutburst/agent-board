@@ -9,6 +9,7 @@ import fcntl
 import os
 from pathlib import Path
 import re
+import time
 
 from .development_authorization import DevelopmentAuthorization
 from .development_client import DevelopmentBoardClient
@@ -32,6 +33,20 @@ from .worker_pool import WorkerPool
 
 MAX_DOCUMENT = 128 * 1024
 SCHEMA = 'linux-pool-preparation-v1'
+
+
+def _scope_check(stage,allowed,error,started):
+    """Bounded metadata for our own callback, never exception text or authority."""
+    try:
+        from .linux_execution_qualification import SCOPE_CODES
+        if type(started) is not int:return None
+        elapsed=max(0,min(600000,(time.monotonic_ns()-started)//1000000))
+        code=(error.code if type(error) is DevelopmentError and type(error.code) is str
+            and error.code in SCOPE_CODES else None)
+        bucket=(None if error is None else 'development' if isinstance(error,DevelopmentError)
+            else 'os_error' if isinstance(error,OSError) else 'other')
+        return {'stage':stage,'allowed':allowed,'bucket':bucket,'code':code,'elapsed_ms':elapsed}
+    except Exception:return None
 
 
 def fail(code='linux_pool_preparation_changed'):
@@ -242,11 +257,24 @@ class LinuxPoolJobPreparer:
                     baseline=self._fresh(authority,request)
                     manifest_scope=authority.manifest['scope']
                     self._record(private,'registration.json',{'scope':manifest_scope,'baseline':baseline})
+                    scope_check={}
                     def authorize(given,action,wanted):
+                        scope_check.clear();started=None;scope_stage='held';allowed=False;failure=None
+                        try:started=time.monotonic_ns()
+                        except Exception:pass
                         try:
-                            held();self._fresh(authority,request,baseline)
-                            return given==manifest_scope and action in request['actions'] and wanted==request['resource']
-                        except Exception:return False
+                            held();scope_stage='fresh';self._fresh(authority,request,baseline)
+                            scope_stage='scope'
+                            allowed=given==manifest_scope and action in request['actions'] and wanted==request['resource']
+                            return allowed
+                        except Exception as error:
+                            failure=error
+                            return False
+                        finally:
+                            try:
+                                observed=_scope_check(scope_stage,allowed,failure,started)
+                                if observed is not None:scope_check.update(observed)
+                            except Exception:pass
                     stage='git'
                     self._record(private,'02-git-intent.json',{'request_sha256':request_sha,'scope':manifest_scope})
                     self.workspaces.plan(operation_id=operation_id,scope=manifest_scope)
@@ -277,7 +305,17 @@ class LinuxPoolJobPreparer:
                     self._fresh(authority,request,baseline);held()
                     self._record(private,'04-backend-qualification-intent.json',{'plan_sha256':digest(canonical(plan))})
                     with closing(SupervisedLinuxNamedPythonBackend(backend,manifest=manifest,authorize_scope=authorize)) as concrete:
-                        concrete.qualify()
+                        try:concrete.qualify()
+                        except DevelopmentError as error:
+                            try:
+                                from .linux_execution_qualification import qualification_diagnostic
+                                observation=qualification_diagnostic(vars(error).get('_linux_backend_qualification_diagnostic'))
+                                if observation is not None and scope_check:
+                                    observation['scope_check']=dict(scope_check)
+                                    observation=qualification_diagnostic(observation)
+                                    if observation is not None:error._linux_backend_qualification_diagnostic=observation
+                            except Exception:pass
+                            raise
                         if not concrete.qualified_for(digest(canonical(manifest)),suite.document()):fail('linux_pool_backend_unqualified')
                         environment=concrete.environment
                 with self._registered(request,expected_scope=manifest_scope) as authority:

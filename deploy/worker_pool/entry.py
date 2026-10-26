@@ -70,6 +70,18 @@ def _planner_qualification_diagnostic(error):
         return None
 
 
+def _backend_qualification_diagnostic(error):
+    """Revalidate a copied closed SDK observation; never print arbitrary errors."""
+    try:
+        from blackoutburst_agents.dev_manifest import DevelopmentError
+        from blackoutburst_agents.linux_execution_qualification import qualification_diagnostic
+        if type(error) is not DevelopmentError:return None
+        value=qualification_diagnostic(vars(error).get('_linux_backend_qualification_diagnostic'))
+        if value is None:return None
+        return {'status':'qualification_diagnostic','kind':'linux_backend',**value}
+    except Exception:return None
+
+
 def owner_context(manifest,owner):
     if owner!=manifest['unix_owner'] or os.geteuid()==0:p.fail('pool_owner_login_required')
     account=pwd.getpwnam(owner)
@@ -207,6 +219,10 @@ def main(argv=None):
         print(json.dumps({'status':'needs_review','reason':reason},sort_keys=True,separators=(',',':')))
         if 'PlannerPolicyError' in locals() and type(error) is PlannerPolicyError:
             diagnostic = _planner_qualification_diagnostic(error)
+            if diagnostic is not None:
+                print(json.dumps(diagnostic,sort_keys=True,separators=(',',':')))
+        if 'DevelopmentError' in locals() and type(error) is DevelopmentError:
+            diagnostic = _backend_qualification_diagnostic(error)
             if diagnostic is not None:
                 print(json.dumps(diagnostic,sort_keys=True,separators=(',',':')))
         return 3
