@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.37.1
+## État de la source 0.38.0
 
 | Élément | État |
 | --- | --- |
@@ -21,6 +21,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Autorisation Development autonome | Lecture bornée en une requête ; contrôles de contexte, révocation et délai natif inchangés |
 | Empreintes des fichiers publics protégés | Empreintes initiales complètes, puis contrôle des descripteurs, métadonnées, parents et privilèges ; aucun cache des fichiers privés ou des décisions du board |
 | Diagnostic des refus de qualification du planner | Projection bornée des contrôles synthétiques et du nettoyage ; aucun contenu de conversation, commande, chemin ou authentification |
+| Diagnostic des refus de qualification du backend | Scénario, premier refus du contrôleur, dernière collecte d’autorisation et résultat natif bornés ; aucun texte d’exception ni contenu privé |
 | Mise à jour du pool arrêté | Remplacement de la release publique avec conservation des données privées, sans démarrage |
 | Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité installée, arrêtée et désactivée au démarrage, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
@@ -52,23 +53,17 @@ contrôleur fini : plan borné au catalogue opérateur pour le manager, synthès
 de reçus historiques corrélés pour le rédacteur. Leur résultat est privé ; ils
 ne distribuent pas encore les tâches de l’équipe.
 
-Au 26 octobre 2026, SDK0.35 est installé et le nouveau lot propriétaire s’est
-arrêté pendant la qualification du planner, avant toute prise de ticket. Les
-neuf scénarios backend et cinq sondes planner passent dans une fixture Linux
-distincte UID1000 sous NNP1 ; cela ne qualifie pas le service propriétaire.
-SDK0.37 autorise aussi la famille Netlink dans l'unité extérieure pour la
-préparation du réseau isolé de bubblewrap, sans modifier les cinq critères
-planner ni les filtres réseau intérieurs. La qualification et le parcours
-réels dans la nouvelle unité restent à vérifier. SDK0.37.1 corrige aussi la
-conversion des chemins reçus par la CLI de mise à jour ; ses tests passent
-par la vraie interface en ligne de commande sur des fichiers temporaires.
-SDK0.36 ajoute une projection fermée des prochains refus pour en observer les
-contrôles sans exposer de contenu privé. Aucun modèle réel n’a validé ce
-nouveau parcours serveur. Les tests d’intégration
-avec Board, Git, journaux et Runtime temporaires vérifient le raccord logiciel ;
-leurs transports de modèle/GitHub et leurs qualifications Linux sont simulés.
-L’authentification des propriétaires, les qualifications dans l’unité finale et
-une recette réelle restent nécessaires avant de déclarer l’équipe active.
+Au 26 octobre 2026, SDK0.37.1 est installé dans le service propriétaire. Les
+cinq premiers scénarios natifs passent ; le scénario `eof_running` refuse avant
+l’identité init et la libération de SOURCE, sans modèle ni prise de ticket.
+La coupure EOF volontaire exige un ACK ultérieur et n’a donc pas été atteinte.
+Une sonde distincte UID1000 avec autorisation locale fait passer les neuf cas ;
+elle ne reproduit ni les appels d’autorisation propriétaire ni les limites de
+l’unité et ne qualifie pas ce service. SDK0.38 expose le code et la durée de la
+dernière collecte ainsi que le premier refus du contrôleur, pour distinguer les
+causes jusque-là absorbées. Les délais, SOURCE et critères de nettoyage restent
+identiques. Le parcours propriétaire réel reste à valider avant de déclarer
+l’équipe active.
 
 ## Vérification Linux du 23 octobre 2026
 
