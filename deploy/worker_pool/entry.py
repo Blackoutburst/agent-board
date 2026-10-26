@@ -19,6 +19,40 @@ else:
     import pool_package as p
 
 
+def _planner_qualification_diagnostic(error):
+    """Revalidate every exported fact; arbitrary exception payloads stay private."""
+    try:
+        if type(error.code) is not str or error.code not in {'linux_planner_cli_version_changed','linux_planner_canary_output_invalid',
+                'linux_planner_canary_created_file','linux_planner_native_policy_unqualified',
+                'linux_planner_qualification_cleanup_unconfirmed','linux_planner_policy_changed'}:
+            return None
+        supplied = vars(error).get('_linux_planner_canary_diagnostic')
+        if type(supplied) is not dict or len(supplied) not in (3,4):
+            return None
+        value = dict(supplied)
+        if type(value.get('checks')) is not dict:
+            return None
+        value['checks'] = dict(value['checks'])
+        checks = {'inside_read','inside_write_denied','outside_read_denied',
+                  'outside_write_denied','network_loopback_denied'}
+        phases = {'cli_version','host_fixtures','canary_pins','canary_execution',
+                  'canary_result','cleanup','final_pins'}
+        if (any(type(key) is not str for key in value)
+                or set(value) not in ({'checks','cleanup_confirmed','phase'},
+                                     {'checks','cleanup_confirmed','phase','errno'})
+                or any(type(key) is not str or type(item) is not bool for key,item in value['checks'].items())
+                or value['checks'] and set(value['checks']) != checks
+                or type(value['cleanup_confirmed']) is not bool
+                or type(value['phase']) is not str or value['phase'] not in phases
+                or 'errno' in value and (type(value['errno']) is not int or not 1 <= value['errno'] <= 4095)):
+            return None
+        return {'status':'qualification_diagnostic','kind':'linux_planner_canary',
+                'checks':dict(value['checks']),'cleanup_confirmed':value['cleanup_confirmed'],
+                'phase':value['phase'],**({'errno':value['errno']} if 'errno' in value else {})}
+    except (AttributeError,TypeError,ValueError,RuntimeError):
+        return None
+
+
 def owner_context(manifest,owner):
     if owner!=manifest['unix_owner'] or os.geteuid()==0:p.fail('pool_owner_login_required')
     account=pwd.getpwnam(owner)
@@ -108,6 +142,7 @@ def main(argv=None):
         sys.path.insert(0,str(release/'source'))
         from blackoutburst_agents.finite_pool_batch import FiniteLinuxPoolBatch,load_batch
         from blackoutburst_agents.dev_manifest import DevelopmentError
+        from blackoutburst_agents.planner_policy import PlannerPolicyError
         if args.batch is None:p.fail('pool_batch_configuration_required')
         batch_path=p.absolute(args.batch)
         if not batch_path.is_relative_to(root/'config'):p.fail('pool_configuration_path_refused')
@@ -153,6 +188,10 @@ def main(argv=None):
         if isinstance(error,p.PackageError) or 'DevelopmentError' in locals() and isinstance(error,DevelopmentError):
             if type(error.code) is str and re.fullmatch('[a-z][a-z0-9_]{0,119}',error.code):reason=error.code
         print(json.dumps({'status':'needs_review','reason':reason},sort_keys=True,separators=(',',':')))
+        if 'PlannerPolicyError' in locals() and type(error) is PlannerPolicyError:
+            diagnostic = _planner_qualification_diagnostic(error)
+            if diagnostic is not None:
+                print(json.dumps(diagnostic,sort_keys=True,separators=(',',':')))
         return 3
 
 if __name__=='__main__':raise SystemExit(main())
