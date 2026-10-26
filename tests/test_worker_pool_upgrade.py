@@ -12,8 +12,12 @@ from test_worker_pool_addon import bundle,root_fixture
 
 
 @pytest.fixture
-def installed(bundle,monkeypatch,tmp_path):
-    directory,old,_=bundle;old['adapter_version']='0.34.0'
+def installed(bundle,monkeypatch,tmp_path,request):
+    directory,old,_=bundle;version=getattr(request,'param','0.34.0');old['adapter_version']=version
+    if version=='0.38.0':
+        name='source/blackoutburst_agents/protected_public_pins.py';raw=b'# synthetic public pin module\n'
+        (directory/name).write_bytes(raw)
+        old['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
     (directory/'manifest.json').write_bytes(p.encoded(old))
     directory,old,_,calls=root_fixture(bundle,monkeypatch,tmp_path)
     account=SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid(),
@@ -28,8 +32,8 @@ def installed(bundle,monkeypatch,tmp_path):
     monkeypatch.setattr(p,'verify_release',verify)
     first=manage.install_addon(directory,apply=True,expected_bundle_id=p.manifest_id(old))
     new_dir=tmp_path/'new-bundle';shutil.copytree(directory,new_dir)
-    new=p.decode((new_dir/'manifest.json').read_bytes());new['revision']='c'*40;new['adapter_version']='0.34.0'
-    path='source/blackoutburst_agents/__init__.py';raw=b'__version__="0.34.0"\n'
+    new=p.decode((new_dir/'manifest.json').read_bytes());new['revision']='c'*40;new['adapter_version']=version
+    path='source/blackoutburst_agents/__init__.py';raw=('__version__='+repr(version)+'\n').encode()
     (new_dir/path).write_bytes(raw);new['files'][path]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
     (new_dir/'manifest.json').write_bytes(p.encoded(new))
     unit=p.UNIT_DIR/first['service'];old_unit=unit.read_bytes()
@@ -161,3 +165,21 @@ def test_lost_complete_ack_retains_stopped_new_unit_and_forbids_replay(installed
     assert s.sentinel.read_bytes()==b'keep this old trace'
     with pytest.raises(p.PackageError):apply(s)
     assert s.unit.read_bytes()==expected
+
+
+@pytest.mark.parametrize('installed',['0.38.0'],indirect=True)
+def test_cli_upgrades_038_to_039_with_identical_unit_template_and_no_start(installed,capsys):
+    s=installed;s.new['adapter_version']='0.39.0'
+    name='source/blackoutburst_agents/__init__.py';raw=b'__version__="0.39.0"\n'
+    (s.directory/name).write_bytes(raw)
+    s.new['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    (s.directory/'manifest.json').write_bytes(p.encoded(s.new))
+    assert s.new['files']['unit.service.in']==s.old['files']['unit.service.in']
+    assert manage.main(['upgrade',str(s.directory),'--previous-bundle-id',p.manifest_id(s.old),
+        '--expected-bundle-id',p.manifest_id(s.new),'--apply'])==0
+    result=__import__('json').loads(capsys.readouterr().out)
+    assert result['status']=='upgraded_disabled' and result['activated'] is False
+    assert s.sentinel.read_bytes()==b'keep this old trace' and s.state['active']=='inactive'
+    assert s.unit.read_bytes()==p.render_unit((s.directory/'unit.service.in').read_text(),s.new,
+        p.RELEASES/p.manifest_id(s.new),'/var/lib/blackoutburst-agent-host/owners/bb-agent-thescreamer').encode()
+    assert all(row[1] in ('show','daemon-reload','reset-failed') for row in s.calls)

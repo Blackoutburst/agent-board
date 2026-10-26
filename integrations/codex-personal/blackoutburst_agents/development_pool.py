@@ -261,7 +261,8 @@ class _DevelopmentRun:
         except Exception as error:
             self._failure_notice(error)
             raise
-        if status!='complete':self._failure_notice(result.get('reason'),cleaned)
+        if status!='complete' or cleaned is not True:
+            self._failure_notice(result.get('reason') if status!='complete' else 'development_cleanup_requires_review',cleaned)
         return PoolOutcome(context.operation_id, context.session_id, status, cleaned)
 
     def _failure_notice(self, code, cleaned=False):

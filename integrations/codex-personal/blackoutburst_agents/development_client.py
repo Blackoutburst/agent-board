@@ -12,10 +12,13 @@ from .worker_client import WorkerBoardClient, _arguments
 
 
 FAILURE_NOTICE_CODES = frozenset({'development_run_requires_review',
+    'development_cleanup_requires_review',
     'development_control_requires_review', 'development_context_changed',
     'development_grants_unavailable', 'development_claim_lost',
     'development_stop_requested', 'development_planner_scope_mismatch',
     'planner_control_requires_review', 'planner_runtime_stopped',
+    'planner_turns_budget_exhausted', 'planner_actions_budget_exhausted',
+    'planner_bytes_budget_exhausted',
     'supervisor_authorization_expired', 'permission_revoked'})
 
 
@@ -119,6 +122,8 @@ class DevelopmentBoardClient(WorkerBoardClient):
         normal server checks the current profile's message permission. No claim,
         Runtime operation, registration, retry or permission fallback is added.
         """
+        if type(notice) is not dict:raise BoardReadError('invalid_failure_notice')
+        notice=dict(notice)  # Validate and serialize one snapshot, never a caller's mutable dict.
         if (self._closed is not False or self._registered is not True or self._initialized is not True
                 or type(thread_id) is not str or not _text(thread_id,200)
                 or type(idempotency_key) is not str or re.fullmatch(
@@ -131,7 +136,7 @@ class DevelopmentBoardClient(WorkerBoardClient):
             raise BoardReadError('invalid_failure_notice')
         body='Cloud execution needs review.\n'+canonical(notice).decode('utf-8')
         value=self._tool('post_message',dict(session_id=self.session_id,thread_id=thread_id,
-            body=body,idempotency_key=idempotency_key,reply_to=None,mentions=[],attachment_ids=[]))
+            body=body,idempotency_key=idempotency_key,reply_to=None,mentions=[],attachment_ids=[],view='full'))
         if (type(value) is not dict or type(value.get('id')) is not str or not _text(value['id'],200)
                 or value.get('thread_id')!=thread_id or value.get('body')!=body
                 or type(value.get('author')) is not dict or value['author'].get('kind')!='agent'

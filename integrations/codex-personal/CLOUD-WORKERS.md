@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.38.0
+## État de la source 0.39.0
 
 | Élément | État |
 | --- | --- |
@@ -22,6 +22,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Empreintes des fichiers publics protégés | Empreintes initiales complètes, puis contrôle des descripteurs, métadonnées, parents et privilèges ; aucun cache des fichiers privés ou des décisions du board |
 | Diagnostic des refus de qualification du planner | Projection bornée des contrôles synthétiques et du nettoyage ; aucun contenu de conversation, commande, chemin ou authentification |
 | Diagnostic des refus de qualification du backend | Scénario, premier refus du contrôleur, dernière collecte d’autorisation et résultat natif bornés ; aucun texte d’exception ni contenu privé |
+| Avis fermé après échec du codeur | Message idempotent dans la discussion du ticket, avec la session et les droits messages existants ; aucune modification de claim ou de nettoyage |
 | Mise à jour du pool arrêté | Remplacement de la release publique avec conservation des données privées, sans démarrage |
 | Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité installée, arrêtée et désactivée au démarrage, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
@@ -32,6 +33,11 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 leurs propres intentions durables et contrôles d’autorité. La fin du parcours
 signifie que la PR brouillon et l’avis sont publiés, même si le reviewer demande
 des corrections. Le ticket reste en revue et la PR reste sans fusion.
+
+Les [avis d’échec](docs/FAILURE-NOTICES.md) couvrent un refus pendant le run du
+codeur ou un résultat privé prêt dont le nettoyage reste non confirmé. Ils
+conservent le résultat initial ; cette observabilité ne qualifie pas le parcours
+propriétaire et ne corrige pas sa cause d’échec.
 
 Le mode historique `run-batch`/schema v1 produit toujours quatre résultats
 privés. Le schema v2 accepte un à quatre travaux ; utilisé avec `run-batch`,

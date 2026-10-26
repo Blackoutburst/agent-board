@@ -267,3 +267,44 @@ def test_conflicting_notice_intent_never_uses_a_new_key_or_mutates_old_evidence(
     assert not s.posts
     queue=f.base/'pool/workers'/job['worker_id']/'queue'
     assert (queue/'development-failure-notice-intent.json').read_bytes()==conflict
+
+
+def test_notice_uses_one_closed_snapshot_when_caller_mutates_before_serialization(case,monkeypatch):
+    # Regression for the independent review's concurrent-mutation finding.
+    from blackoutburst_agents import development_client as client_module
+    s=case;notice=failure_notice('development_context_changed');original=client_module.canonical
+    def mutate_before_encoding(value):
+        notice['raw']='PRIVATE_CONCURRENT_CALLER_DATA'
+        notice['code']='PRIVATE_CHANGED_REASON'
+        return original(value)
+    monkeypatch.setattr(client_module,'canonical',mutate_before_encoding)
+    receipt=s.client.post_failure_notice(thread_id=s.thread,idempotency_key=s.key,notice=notice)
+    assert receipt['message_id']==messages(s)[0]['id']
+    body=messages(s)[0]['body']
+    assert 'PRIVATE' not in body
+    assert json.loads(body.split('\n',1)[1])==failure_notice('development_context_changed')
+    assert s.calls[-1][1]['arguments']['view']=='full'
+
+
+def test_review_ready_with_unconfirmed_cleanup_posts_unknown_without_changing_pool_outcome(pool_case,monkeypatch):
+    s=pool_case;f=s.f;job,data=f.selected()
+    def unavailable(*args,**kwargs):raise DevelopmentError('development_pool_cleanup_unconfirmed')
+    monkeypatch.setattr(f.driver,'_cleanup',unavailable)
+    f.pool.dispatch_pending();jobs=f.wait()
+    assert jobs[0]['state']=='retained' and jobs[0]['outcome']=='complete'
+    assert jobs[0]['cleanup_confirmed'] is False and f.pool.status()['capacity_held']==1
+    assert len(s.posts)==1 and all(before==after for before,after in s.snapshots)
+    notice=json.loads(s.posts[0]['arguments']['body'].split('\n',1)[1])
+    assert notice['code']=='development_cleanup_requires_review' and notice['cleanup_state']=='unknown'
+    assert len(f.calls)==2 # Real successful synthetic turns are never repeated.
+
+
+@pytest.mark.parametrize('code',['planner_turns_budget_exhausted','planner_actions_budget_exhausted',
+    'planner_bytes_budget_exhausted'])
+def test_real_planner_budget_refusal_codes_survive_the_closed_wire_projection(case,code):
+    s=case;before=s.board.get_ticket(s.human,s.ticket['id']);runtime=s.board.get_runtime(s.human)
+    s.client.post_failure_notice(thread_id=s.thread,idempotency_key=s.key,notice=failure_notice(code))
+    data=json.loads(messages(s)[0]['body'].split('\n',1)[1])
+    assert data=={'schema':1,'phase':'worker_run','code':code,'cleanup_state':'unknown'}
+    assert s.board.get_ticket(s.human,s.ticket['id'])==before
+    assert s.board.get_runtime(s.human)==runtime

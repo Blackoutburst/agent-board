@@ -1,10 +1,18 @@
 # Operations and release procedure
 
-Current source is Board 2.17.3/schema 17 with adapter 0.38.0. Standalone Development
+Current source is Board 2.17.3/schema 17 with adapter 0.39.0. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
+
+Adapter 0.39 can post a closed failure notice to the selected ticket discussion
+from the code worker's existing initialized session. The message requires its
+current reply permission; denied or unavailable notification preserves the
+original run result, claim and cleanup state. A durable intent and stable key
+prevent duplicate messages after a lost acknowledgement. This adds no model
+retry, Runtime repair or new service, and does not resolve the failed owner
+workflow's cause. See [failure notices](../integrations/codex-personal/docs/FAILURE-NOTICES.md).
 
 Adapter 0.38 adds closed, in-memory backend qualification diagnostics. A
 refusal reports the current synthetic case, native checks and cleanup flags,
