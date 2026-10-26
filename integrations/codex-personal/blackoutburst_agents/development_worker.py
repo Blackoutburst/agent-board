@@ -19,7 +19,7 @@ from .dev_broker import DevelopmentBroker
 from .dev_fence import DevelopmentFence, canonical_anchor
 from .dev_journal import DevelopmentJournal
 from .dev_manifest import DevelopmentError, canonical, check_content, digest, opaque, sha256
-from .dev_planner import DevelopmentPlanner, _agent_id, _directory_pin
+from .dev_planner import DevelopmentPlanner, _agent_id, _directory_pin, _reasoning_configuration
 from .dev_runtime import development_work_id
 from .dev_planner_journal import PlannerBudgets
 from .dev_test_supervisor import SupervisedNativeNamedPythonBackend, _ancestor_identities
@@ -202,8 +202,10 @@ class DevelopmentBoardWorker:
         return digest(canonical(value))
 
     def prepare(self, *, scope, request_id, instruction, broker_directory, backend_directory,
-                planner_policy_directory, model, budgets=None, operation_id=None, registration=None):
+                planner_policy_directory, model, budgets=None, operation_id=None, registration=None,
+                reasoning_effort=None):
         """Pure read/plan phase; no claim, Runtime reservation, model or test."""
+        reasoning = _reasoning_configuration(reasoning_effort)
         if (type(instruction) is not str or not instruction.strip()
                 or len(instruction.encode('utf-8','surrogatepass'))>16384):
             raise DevelopmentError('invalid_planner_instruction')
@@ -267,6 +269,7 @@ class DevelopmentBoardWorker:
                 config={'schema':1,'kind':'development','instruction':instruction,'model':model,'budgets':limits,
                     'pins':pins,'manifest_hash':manifest.manifest_hash,'policy_hash':policy.fingerprint,
                     'backend_hash':self._backend_pin(backend)}
+                config.update(reasoning)
                 if manifest._linux_execution_profile:
                     config.update(execution_profile='linux-python-execution-v1',
                                   linux_execution_plan_sha256=backend.document['plan_hash'])
@@ -516,6 +519,7 @@ class DevelopmentBoardWorker:
                             control_client=self.control,board_scope=op['scope'],planner_policy=policy,
                             authorization=authorization,claim_id=op['payload']['claim_id'],
                             instruction=config['instruction'],model=config['model'],
+                            **_reasoning_configuration(config.get('reasoning_effort')),
                             budgets=PlannerBudgets(**op['payload']['planner_budgets']),enabled=True,
                             context=op['payload']['context'],
                             parent_operation={'binding':parent_binding,'operation_id':op['id']},

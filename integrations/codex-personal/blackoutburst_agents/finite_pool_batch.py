@@ -13,7 +13,7 @@ import time
 
 from .dev_journal import PrivateDirectory,decode
 from .dev_manifest import Budgets,DevelopmentError,canonical,digest,identity,opaque,relative_path,sha256
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .development_pool import DevelopmentPoolDriver
 from .development_pool_selection import file_document
@@ -52,7 +52,10 @@ def load_batch(path,*,root,owner_id,board_endpoint,max_seconds):
             or not 1<=len(value['jobs'])<=4 or value['schema']==SCHEMA and len(value['jobs'])!=4):fail()
     uuid_value(value['batch_id']);names=set();agents=set();tickets=set();resources=set();connections=set()
     for job in value['jobs']:
-        if type(job) is not dict or set(job)!=JOB_FIELDS:fail()
+        if type(job) is not dict or set(job) not in (JOB_FIELDS,JOB_FIELDS|{'reasoning_effort'}):fail()
+        if 'reasoning_effort' in job:
+            if job['reasoning_effort'] is None:fail('invalid_planner_reasoning_effort')
+            _reasoning_configuration(job['reasoning_effort'])
         identifier(job['name']);opaque(job['agent_id']);opaque(job['project_id']);opaque(job['ticket_id'])
         opaque(job['resource']);opaque(job['model'],'invalid_development_model',128)
         for seen,key in ((names,'name'),(agents,'agent_id'),(tickets,'ticket_id'),(resources,'resource')):
@@ -246,6 +249,7 @@ class FiniteLinuxPoolBatch:
                     preparer=LinuxPoolJobPreparer(private.path/('preparation-'+job['name']),pool=pool,
                         driver=drivers[job['name']],workspaces=controller,driver_id=job['name'])
                     arguments={key:deepcopy(job[key]) for key in JOB_FIELDS-{'name','agent_id','connection_file','repository'}}
+                    arguments.update(_reasoning_configuration(job.get('reasoning_effort')))
                     arguments.update(planner_budgets=PlannerBudgets(**job['planner_budgets']),
                         broker_budgets=Budgets(**job['broker_budgets']),cli_version=self.cli_version,
                         **{key:item['path'] for key,item in self.tools.items()})

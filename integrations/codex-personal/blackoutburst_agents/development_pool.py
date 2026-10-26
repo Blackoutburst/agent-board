@@ -19,7 +19,7 @@ from .development_worker import DevelopmentBoardWorker, execution_factories
 from .dev_journal import PrivateDirectory, decode
 from .dev_fence import standalone_fence_wait
 from .dev_manifest import DevelopmentError, canonical, digest
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .dev_runtime import development_work_id
 from .run_store import RunStore
@@ -204,6 +204,8 @@ class DevelopmentPoolDriver:
                 or config.get('model') != bound['selection']['model']
                 or config.get('instruction') != bound['instruction']
                 or config.get('budgets') != bound['selection']['budgets']
+                or _reasoning_configuration(config.get('reasoning_effort')) !=
+                    _reasoning_configuration(bound['selection'].get('reasoning_effort'))
                 or any(config['pins'].get(name) != _directory_pin(path) for name, path in expected.items())):
             fail('development_pool_work_scope_mismatch')
         return op
@@ -289,6 +291,7 @@ class _DevelopmentRun:
                 instruction=self.bound['instruction'], broker_directory=selection['broker_directory'],
                 backend_directory=selection['backend_directory'],
                 planner_policy_directory=selection['planner_policy_directory'], model=selection['model'],
+                **_reasoning_configuration(selection.get('reasoning_effort')),
                 budgets=PlannerBudgets(**selection['budgets']), operation_id=context.operation_id)
         self.driver._operation(self.worker, context, self.bound)
         self.companion = _StopCompanion(context)

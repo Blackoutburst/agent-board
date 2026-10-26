@@ -24,6 +24,13 @@ from .subscription_probe import (
 )
 
 _PROMPT_LIMIT = 65536
+_REASONING_EFFORTS = frozenset({'low', 'medium', 'high', 'xhigh'})
+
+
+def _reasoning_effort(value):
+    if value is not None and (type(value) is not str or value not in _REASONING_EFFORTS):
+        raise ValueError('invalid_reasoning_effort')
+    return value
 
 
 def _uuid(value: object) -> str | None:
@@ -64,7 +71,8 @@ def _error_category(text: str) -> str:
 
 
 def _arguments(settings: ProbeSettings, executable: Path, session_id: str | None,
-               planner_arguments: list[str] | None = None) -> list[str]:
+               planner_arguments: list[str] | None = None, reasoning_effort=None) -> list[str]:
+    reasoning_effort = _reasoning_effort(reasoning_effort)
     # exec owns the sandbox flag; the resume subcommand does not accept it.
     arguments = [str(executable), "exec"]
     arguments.extend(["--sandbox", "read-only"] if planner_arguments is None else planner_arguments)
@@ -81,6 +89,8 @@ def _arguments(settings: ProbeSettings, executable: Path, session_id: str | None
         arguments.extend(["-c", f"features.{feature}=false"])
     if settings.model is not None:
         arguments.extend(["--model", settings.model])
+    if reasoning_effort is not None:
+        arguments.extend(["-c", 'model_reasoning_effort=' + json.dumps(reasoning_effort)])
     if session_id is not None:
         arguments.append(session_id)
     arguments.append("-")  # Prompt bytes are written to stdin, never argv.
@@ -133,6 +143,7 @@ def execute_turn(
     should_cancel: Callable[[], bool] | None = None,
     planner_policy=None,
     before_prompt: Callable[[], None] | None = None,
+    reasoning_effort=None,
 ) -> dict[str, object]:
     """Run one text turn, returning only its final message and safe checks.
 
@@ -156,6 +167,7 @@ def execute_turn(
         result["reason"] = "unsupported_platform"
         return result
     try:
+        reasoning_effort = _reasoning_effort(reasoning_effort)
         if not isinstance(prompt, str):
             return result
         if before_prompt is not None and not callable(before_prompt):
@@ -219,7 +231,7 @@ def execute_turn(
             return result
     try:
         process = subprocess.Popen(
-            _arguments(settings, executable, resume_session_id, planner_arguments), cwd=str(directory),
+            _arguments(settings, executable, resume_session_id, planner_arguments, reasoning_effort), cwd=str(directory),
             env=sanitized_environment(), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
             start_new_session=True,

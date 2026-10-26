@@ -10,7 +10,7 @@ import threading
 from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import (DevelopmentError, canonical, check_content, digest,
                            opaque, signature, validate_manifest)
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .pool_journal import uuid_value
 from .work_journal import _scope
@@ -63,7 +63,7 @@ class DevelopmentSelections:
 
     def validate(self, selection, job, payload):
         identity = job_identity(job)
-        if (type(selection) is not dict or set(selection) != FIELDS
+        if (type(selection) is not dict or set(selection) not in (FIELDS, FIELDS | {'reasoning_effort'})
                 or type(selection['schema']) is not int or selection['schema'] != 1
                 or type(payload) is not dict or set(payload) != {'project_id', 'ticket_id'}): fail()
         if any(selection[name] != identity[key] for name, key in
@@ -72,6 +72,9 @@ class DevelopmentSelections:
         _scope(expected)
         if selection['scope'] != expected: fail()
         opaque(selection['model'], 'invalid_development_model', 128)
+        if 'reasoning_effort' in selection:
+            if selection['reasoning_effort'] is None: fail('invalid_planner_reasoning_effort')
+            _reasoning_configuration(selection['reasoning_effort'])
         if (type(selection['budgets']) is not dict
                 or set(selection['budgets']) != set(PlannerBudgets().document())): fail()
         PlannerBudgets(**selection['budgets']).document()

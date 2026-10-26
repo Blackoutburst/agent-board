@@ -18,7 +18,7 @@ from .development_pool_selection import REVISION, file_document
 from .dev_journal import PrivateDirectory, DevelopmentJournal, decode
 from .dev_manifest import (ACTIONS, Budgets, DevelopmentError, NamedTest,
     RepositoryFiles, canonical, check_content, digest, identity, opaque, relative_path, sha256)
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .git_workspace import LocalGitWorkspaceController
 from .linux_input_snapshot import _path
@@ -201,8 +201,9 @@ class LinuxPoolJobPreparer:
     def prepare(self, operation_id, *, project_id, ticket_id, paths, resource, actions,
                 verifier_path, verifier_sha256, test_name, test_timeout_seconds, test_max_output_bytes,
                 executable, cli_version, interpreter, unshare, instruction, model,
-                planner_budgets, broker_budgets):
+                planner_budgets, broker_budgets, reasoning_effort=None):
         """One explicit clone + native backend/policy qualification + binding."""
+        reasoning = _reasoning_configuration(reasoning_effort)
         if type(planner_budgets) is not PlannerBudgets or type(broker_budgets) is not Budgets:
             fail('linux_pool_explicit_budgets_required')
         project_id,ticket_id,resource,model=(opaque(value) for value in (project_id,ticket_id,resource,model))
@@ -233,7 +234,7 @@ class LinuxPoolJobPreparer:
             'verifier_pin':verifier_pin,'verifier_sha256':verifier_sha256,'test':test.document(),
             **{key:tools[key]['path'] for key in tools},'tools':tools,'cli_version':cli_version,
             'instruction':instruction,'model':model,'planner_budgets':planner_budgets.document(),
-            'broker_budgets':broker_budgets.document(),'connection':self.connection,'sources':linux_source_pins()}
+            'broker_budgets':broker_budgets.document(),'connection':self.connection,'sources':linux_source_pins(), **reasoning}
         raw=canonical(request)
         if len(raw)>MAX_DOCUMENT:fail('linux_pool_preparation_limit')
         request=decode(raw);request_sha=digest(raw)
@@ -339,7 +340,7 @@ class LinuxPoolJobPreparer:
                     selection={'schema':1,'operation_id':job['id'],'worker_id':job['worker_id'],'session_id':job['session_id'],
                         'scope':request['scope'],'broker_directory':str(broker),'backend_directory':str(backend),
                         'planner_policy_directory':str(policy),'instruction_file':str(private.path/'instruction.txt'),
-                        'model':request['model'],'budgets':request['planner_budgets']}
+                        'model':request['model'],'budgets':request['planner_budgets'], **reasoning}
                     self._record(private,'selection.json',selection)
                     self._fresh(final,request,baseline);held()
                     # Dispatch and Stop share this short local metadata bracket.
