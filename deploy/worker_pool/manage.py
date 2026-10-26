@@ -179,10 +179,11 @@ def _unit_template_upgrade_allowed(previous,manifest,previous_release,directory)
     """Only the shipped 0.35/0.36 template may gain sandbox setup Netlink."""
     if previous['files']['unit.service.in']==manifest['files']['unit.service.in']:
         return True
-    if previous['adapter_version'] not in {'0.35.0','0.36.0'} or manifest['adapter_version']!='0.37.0':
+    if (previous['adapter_version'] not in {'0.35.0','0.36.0'}
+            or manifest['adapter_version'] not in {'0.37.0','0.37.1'}):
         return False
-    old=p.read_regular(previous_release/'unit.service.in',16384)
-    new=p.read_regular(directory/'unit.service.in',16384)
+    old=p.read_regular(Path(previous_release)/'unit.service.in',16384)
+    new=p.read_regular(Path(directory)/'unit.service.in',16384)
     for raw,pin in ((old,previous['files']['unit.service.in']),(new,manifest['files']['unit.service.in'])):
         if len(raw)!=pin['size'] or hashlib.sha256(raw).hexdigest()!=pin['sha256']:
             return False

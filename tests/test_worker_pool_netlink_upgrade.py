@@ -39,13 +39,18 @@ def candidate(tmp_path, old_version='0.35.0', new_version='0.37.0', old=None, ne
 
 
 @pytest.mark.parametrize('version', ['0.35.0', '0.36.0'])
-def test_exact_setup_dependency_upgrade_allowed(tmp_path, version):
-    assert manage._unit_template_upgrade_allowed(*candidate(tmp_path, old_version=version))
+@pytest.mark.parametrize('destination', ['0.37.0', '0.37.1'])
+@pytest.mark.parametrize('string_paths', [False, True])
+def test_exact_setup_dependency_upgrade_allowed(tmp_path, version, destination, string_paths):
+    previous, manifest, before, after = candidate(tmp_path, old_version=version, new_version=destination)
+    if string_paths:
+        before, after = str(before), str(after)
+    assert manage._unit_template_upgrade_allowed(previous, manifest, before, after)
 
 
 @pytest.mark.parametrize('old_version,new_version', [
     ('0.34.0', '0.37.0'), ('0.35.1', '0.37.0'), ('0.36.1', '0.37.0'),
-    ('0.37.0', '0.37.0'), ('0.36.0', '0.37.1'), ('0.36.0', '0.38.0'),
+    ('0.37.0', '0.37.0'), ('0.36.0', '0.37.2'), ('0.36.0', '0.38.0'),
 ])
 def test_changed_template_cannot_use_other_version_transitions(tmp_path, old_version, new_version):
     assert not manage._unit_template_upgrade_allowed(*candidate(tmp_path, old_version, new_version))
