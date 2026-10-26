@@ -6,7 +6,7 @@ vérifient et des rédacteurs documentent. Chaque rôle correspond à un profil,
 une configuration de modèle et des autorisations explicites. Un profil créé,
 un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 
-## État de la source 0.34.0
+## État de la source 0.35.0
 
 | Élément | État |
 | --- | --- |
@@ -19,6 +19,7 @@ un thread local ou une réservation ne prouvent pas qu’un modèle travaille.
 | Revue indépendante | Driver Pool, préparation Linux explicite et publication durable de l’avis en statut `review` |
 | Mode historique `run-batch`/schema v1 | Quatre résultats privés ; la fin du lot ne publie pas de PR |
 | Autorisation Development autonome | Lecture bornée en une requête ; contrôles de contexte, révocation et délai natif inchangés |
+| Empreintes des fichiers publics protégés | Empreintes initiales complètes, puis contrôle des descripteurs, métadonnées, parents et privilèges ; aucun cache des fichiers privés ou des décisions du board |
 | Mise à jour du pool arrêté | Remplacement de la release publique avec conservation des données privées, sans démarrage |
 | Unité serveur du pool | Installateur et entrée `run-workflow` implémentés ; nouvelle unité installée, arrêtée et désactivée au démarrage, qualification propriétaire à effectuer |
 | Quatre modèles réels simultanés | À valider avec les comptes propriétaires |
@@ -50,7 +51,7 @@ contrôleur fini : plan borné au catalogue opérateur pour le manager, synthès
 de reçus historiques corrélés pour le rédacteur. Leur résultat est privé ; ils
 ne distribuent pas encore les tâches de l’équipe.
 
-Au 23 octobre 2026, la nouvelle unité du pool est installée, arrêtée et désactivée au démarrage. Aucun
+Au 26 octobre 2026, l’unité SDK0.34 est arrêtée après un refus de qualification, avant toute prise de ticket ou appel de modèle. Trois scénarios ont passé ; le scénario d’expiration du script a été interrompu avant SOURCE par l’expiration de l’autorisation, avec nettoyage confirmé des quatre scénarios. La source SDK0.35 réduit les lectures répétées des seuls fichiers publics protégés ; sa recette dans l’unité propriétaire reste à effectuer. Aucun
 modèle réel n’a validé ce nouveau parcours serveur. Les tests d’intégration
 avec Board, Git, journaux et Runtime temporaires vérifient le raccord logiciel ;
 leurs transports de modèle/GitHub et leurs qualifications Linux sont simulés.

@@ -59,6 +59,27 @@ def test_new_workflow_release_cannot_omit_essential_sdk_modules(bundle,module):
     assert not p.RELEASES.exists() and not p.BASE.exists()
 
 
+@pytest.mark.parametrize('version',['0.32.0','0.34.0','0.34.99'])
+def test_pre_pin_releases_still_verify_without_the_new_module(bundle,version):
+    directory,value,_=bundle;value['adapter_version']=version
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    assert p.load_bundle(directory)==value
+    assert 'protected_public_pins' not in p.required_sdk_modules(version)
+
+
+@pytest.mark.parametrize('version',['0.35.0','0.35.1','0.36.0','0.100.0'])
+def test_protected_pin_releases_require_the_new_module_before_install(bundle,version):
+    directory,value,_=bundle;value['adapter_version']=version
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    with pytest.raises(p.PackageError,match='pool_inventory_invalid'):manage.plan_addon(directory)
+    assert not p.RELEASES.exists() and not p.BASE.exists()
+    name='source/blackoutburst_agents/protected_public_pins.py';raw=b'# synthetic pin module\n'
+    (directory/name).write_bytes(raw)
+    value['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    assert p.load_bundle(directory)==value
+
+
 def test_public_git_preparation_and_isolated_standalone_plan(tmp_path):
     source=tmp_path/'public-source';source.mkdir(mode=0o700)
     for name in ('package.py','manage.py','entry.py','unit.service.in'):

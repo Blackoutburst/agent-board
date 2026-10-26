@@ -30,7 +30,7 @@ class RecipeTests(unittest.TestCase):
             '--expected-uid','1000','--root',str(self.root/'new'),'--output',str(self.root/'report.json')])
 
     def test_inventory_requires_exact_full_roster_and_retains_bytes_without_import(self):
-        self.assertEqual(len(recipe.ALLOWED_SOURCES),84)
+        self.assertEqual(len(recipe.ALLOWED_SOURCES),85)
         self.assertEqual(recipe.ALLOWED_SOURCES,tuple(sorted(set(recipe.ALLOWED_SOURCES))))
         # The held-byte launcher and both concrete execution policies must pin
         # the exact closed import graph, including the separate command helper.

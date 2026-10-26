@@ -163,6 +163,20 @@ def _binary(path):
                 or before.st_mode & 0o022 or before.st_uid not in (0, os.geteuid())
                 or before.st_size > 512 * 1024 * 1024):
             raise DevelopmentError('invalid_backend_executable')
+        public=None
+        if platform.system()=='Linux':
+            from .protected_public_pins import protected_public_pin,ProtectedPublicPinsError
+            try:
+                public=protected_public_pin(value,maximum=512*1024*1024,executable=True)
+            except ProtectedPublicPinsError:
+                raise DevelopmentError('backend_executable_changed') from None
+        if public is not None:
+            keys=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+            current=[getattr(before,key) for key in keys]
+            after=os.fstat(descriptor)
+            if public['signature']!=current or current!=[getattr(after,key) for key in keys]:
+                raise DevelopmentError('backend_executable_changed')
+            return public['sha256']
         hashed = hashlib.sha256()
         total = 0
         while True:

@@ -13,6 +13,8 @@ from test_worker_pool_addon import bundle,root_fixture
 
 @pytest.fixture
 def installed(bundle,monkeypatch,tmp_path):
+    directory,old,_=bundle;old['adapter_version']='0.34.0'
+    (directory/'manifest.json').write_bytes(p.encoded(old))
     directory,old,_,calls=root_fixture(bundle,monkeypatch,tmp_path)
     account=SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid(),
         pw_dir='/var/lib/blackoutburst-agent-host/owners/bb-agent-thescreamer')
@@ -83,6 +85,22 @@ def test_upgrade_preserves_private_history_and_stays_disabled(installed,starting
     assert s.state['active']=='inactive'
     assert all(row[1] in ('show','daemon-reload','reset-failed') for row in s.calls)
     assert sum(row[1]=='reset-failed' for row in s.calls)==(starting=='failed')
+
+
+def test_current_pin_release_upgrades_a_receipted_pre_pin_release(installed):
+    s=installed
+    assert s.old['adapter_version']=='0.34.0'
+    assert 'source/blackoutburst_agents/protected_public_pins.py' not in s.old['files']
+    s.new['adapter_version']='0.35.0'
+    name='source/blackoutburst_agents/protected_public_pins.py';raw=b'# synthetic pin module\n'
+    (s.directory/name).write_bytes(raw)
+    s.new['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    (s.directory/'manifest.json').write_bytes(p.encoded(s.new))
+    result=apply(s)
+    assert result['status']=='upgraded_disabled' and result['activated'] is False
+    assert s.sentinel.read_bytes()==b'keep this old trace'
+    assert (p.RELEASES/p.manifest_id(s.old)).exists()
+    assert (p.RELEASES/p.manifest_id(s.new)/name).read_bytes()==raw
 
 
 @pytest.mark.parametrize('change',['live','enabled','dropins','unit','receipt','root_mode','tool'])

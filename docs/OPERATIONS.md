@@ -1,10 +1,21 @@
 # Operations and release procedure
 
-Current source is Board 2.17.3/schema 17 with adapter 0.34.0. Standalone Development
+Current source is Board 2.17.3/schema 17 with adapter 0.35.0. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
+
+Adapter 0.35 avoids repeated content reads of protected public binaries and
+runtime files in the parent controller. Its process-local held-descriptor pins
+require a complete first hash and a non-root, no-new-privileges controller in
+the initial user namespace, with no active, permitted, inheritable or ambient
+capabilities. Every use rechecks the controller and root-owned, non-writable
+file ancestry and metadata; drift refuses instead of adopting a new baseline.
+Private and mutable files still use full reads, and the fresh supervisor
+disables this cache before loading its job and applying its descriptor limit.
+See [protected public pins](../integrations/codex-personal/docs/PROTECTED-PUBLIC-PINS.md).
+This adapter-only change does not require a Board database migration or restart.
 
 Board 2.17.2 added explicitly human-delegated Management / Lead profiles and five
 bounded MCP tools for ordinary profile management. Schema 17 is unchanged.
