@@ -1,10 +1,20 @@
 # Operations and release procedure
 
-Current source is Board 2.17.3/schema 17 with adapter 0.36.0. Standalone Development
+Current source is Board 2.17.3/schema 17 with adapter 0.37.0. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
+
+Adapter 0.37 permits `AF_NETLINK` in the outer pool unit so Codex 0.163's
+bubblewrap helper can configure loopback in its new network namespace. Its
+previous `RestrictAddressFamilies` list blocked that setup before the canary
+could run. The stopped upgrader accepts only the exact shipped 0.35/0.36 to
+0.37 template change; tools, owner, endpoint, budgets and all other unit
+controls remain pinned. Parent processes gain access to this socket family;
+no host network administration capability is added. The planner's inner
+network restrictions and the native test backend's socket denial remain in
+force. See [sandbox Netlink setup](../integrations/codex-personal/docs/SANDBOX-NETLINK-SETUP.md).
 
 Adapter 0.35 avoids repeated content reads of protected public binaries and
 runtime files in the parent controller. Its process-local held-descriptor pins
