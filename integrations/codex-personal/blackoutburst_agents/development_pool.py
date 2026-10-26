@@ -1,20 +1,22 @@
 """Concrete opt-in Linux development driver for WorkerPool.
 
-One selected operation ends at a private result. Settled Pool capacity is never
-publication, release of a Board claim, ticket completion or Git delivery.
+Successful code results remain private. A failed run may publish only closed
+diagnostic telemetry on its selected ticket using its existing message rights.
+Settled Pool capacity is never release of a Board claim, ticket completion or
+Git delivery; notification never changes cleanup or execution authority.
 """
 from contextlib import ExitStack, closing
 from pathlib import Path
 import threading
 
 from .client_lifecycle import own_client
-from .development_client import DevelopmentBoardClient
+from .development_client import DevelopmentBoardClient, failure_notice
 from .development_pool_selection import (DevelopmentSelections, REVISION, fail,
                                          file_document)
 from .development_worker import DevelopmentBoardWorker, execution_factories
 from .dev_journal import PrivateDirectory, decode
 from .dev_fence import standalone_fence_wait
-from .dev_manifest import canonical, digest
+from .dev_manifest import DevelopmentError, canonical, digest
 from .dev_planner import _directory_pin
 from .dev_planner_journal import PlannerBudgets
 from .dev_runtime import development_work_id
@@ -242,20 +244,64 @@ class _DevelopmentRun:
         with PrivateDirectory(context.journals['queue']) as private:
             private.create('development-run-intent.json', canonical({
                 'operation_id': context.operation_id, 'session_id': context.session_id}))
-        with standalone_fence_wait():
-            result = self.worker.run(context.operation_id)
-        self.companion.close(); self.companion = None
-        cleaned = False
         try:
             with standalone_fence_wait():
-                cleaned = self.driver._cleanup(self.worker, context, self.bound, reconcile=True)
-        except Exception: pass  # Unknown is retained; never manufacture cleanup.
-        status = 'complete' if result.get('status') == 'review_ready' else 'needs_review'
-        with PrivateDirectory(context.journals['queue']) as private:
-            private.create('development-result.json', canonical({'operation_id': context.operation_id,
-                'session_id': context.session_id, 'code_status': 'private_review_ready' if status == 'complete' else 'needs_review',
-                'ticket_published': False, 'cleanup_confirmed': cleaned}))
+                result = self.worker.run(context.operation_id)
+            self.companion.close(); self.companion = None
+            cleaned = False
+            try:
+                with standalone_fence_wait():
+                    cleaned = self.driver._cleanup(self.worker, context, self.bound, reconcile=True)
+            except Exception: pass  # Unknown is retained; never manufacture cleanup.
+            status = 'complete' if result.get('status') == 'review_ready' else 'needs_review'
+            with PrivateDirectory(context.journals['queue']) as private:
+                private.create('development-result.json', canonical({'operation_id': context.operation_id,
+                    'session_id': context.session_id, 'code_status': 'private_review_ready' if status == 'complete' else 'needs_review',
+                    'ticket_published': False, 'cleanup_confirmed': cleaned}))
+        except Exception as error:
+            self._failure_notice(error)
+            raise
+        if status!='complete' or cleaned is not True:
+            self._failure_notice(result.get('reason') if status!='complete' else 'development_cleanup_requires_review',cleaned)
         return PoolOutcome(context.operation_id, context.session_id, status, cleaned)
+
+    def _failure_notice(self, code, cleaned=False):
+        """Best effort only: never alter execution outcome or invent cleanup.
+
+        The intent precedes the one RPC. An explicit repeat can only reuse the
+        same notice/key; Pool reconciliation never invokes this method.
+        """
+        try:
+            if type(code) is DevelopmentError:code=code.code
+            client=self.worker.client
+            if (type(client) is not DevelopmentBoardClient or client._registered is not True
+                    or client._initialized is not True):return
+            context=self.context;scope=self.bound['selection']['scope']
+            if (client.endpoint!=scope['board_endpoint'] or client.session_id!=context.session_id
+                    or file_document(self.driver.selections.connection_file)[1]!=self.bound['connection']):return
+            op=self.driver._operation(self.worker,context,self.bound)
+            ticket=op['payload']['initial_selected_ticket']
+            if (ticket['id']!=scope['ticket_id'] or ticket['project_id']!=scope['project_id']):return
+            notice=failure_notice(code,cleaned)
+            intent={'schema':1,'operation_id':context.operation_id,'session_id':context.session_id,
+                'ticket_id':scope['ticket_id'],'project_id':scope['project_id'],'thread_id':ticket['thread_id'],
+                'idempotency_key':'development-failure-notice-'+context.operation_id,'notice':notice}
+            with PrivateDirectory(context.journals['queue']) as private:
+                try:private.create('development-failure-notice-intent.json',canonical(intent))
+                except DevelopmentError as error:
+                    if error.code!='private_file_exists':raise
+                    if private.read('development-failure-notice-intent.json',4096)!=canonical(intent):return
+                receipt=client.post_failure_notice(thread_id=intent['thread_id'],
+                    idempotency_key=intent['idempotency_key'],notice=notice)
+                record={'schema':1,'intent_sha256':digest(canonical(intent)),**receipt}
+                try:private.create('development-failure-notice-receipt.json',canonical(record))
+                except DevelopmentError as error:
+                    if error.code!='private_file_exists':raise
+                    if private.read('development-failure-notice-receipt.json',4096)!=canonical(record):return
+        except BaseException:
+            # Notification is optional even during interrupted shutdown. Its
+            # failure must not replace an existing run error or Pool outcome.
+            return
 
     def close(self):
         if self.closed: return
