@@ -1,5 +1,6 @@
 """Pinned explicit-development MCP channel; no queue or implicit registration."""
 import copy
+import hashlib
 import os
 import math
 import re
@@ -8,6 +9,21 @@ from .board_reader import BoardReadError, _connection_data, _json, _text, MAX_CO
 from .dev_manifest import absolute_directory, canonical, identity, signature
 from .dev_journal import PrivateDirectory
 from .worker_client import WorkerBoardClient, _arguments
+
+
+FAILURE_NOTICE_CODES = frozenset({'development_run_requires_review',
+    'development_control_requires_review', 'development_context_changed',
+    'development_grants_unavailable', 'development_claim_lost',
+    'development_stop_requested', 'development_planner_scope_mismatch',
+    'planner_control_requires_review', 'planner_runtime_stopped',
+    'supervisor_authorization_expired', 'permission_revoked'})
+
+
+def failure_notice(code, cleanup_confirmed=False):
+    """Closed telemetry only; never retain an exception or arbitrary reason."""
+    return {'schema':1,'phase':'worker_run',
+        'code':code if type(code) is str and code in FAILURE_NOTICE_CODES else 'development_run_requires_review',
+        'cleanup_state':'confirmed' if cleanup_confirmed is True else 'unknown'}
 
 
 class DevelopmentBoardClient(WorkerBoardClient):
@@ -95,6 +111,34 @@ class DevelopmentBoardClient(WorkerBoardClient):
             raise BoardReadError('development_ticket_frame_unavailable')
         self._initialize()
         return self._tool('get_development_ticket_frame',dict(session_id=self.session_id,ticket_id=ticket_id))
+
+    def post_failure_notice(self, *, thread_id, idempotency_key, notice):
+        """One closed notice using the already initialized session, never register.
+
+        This method is not part of call() or the planner's tool channel. The
+        normal server checks the current profile's message permission. No claim,
+        Runtime operation, registration, retry or permission fallback is added.
+        """
+        if (self._closed is not False or self._registered is not True or self._initialized is not True
+                or type(thread_id) is not str or not _text(thread_id,200)
+                or type(idempotency_key) is not str or re.fullmatch(
+                    r'development-failure-notice-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',idempotency_key) is None
+                or type(notice) is not dict or set(notice)!={'schema','phase','code','cleanup_state'}
+                or type(notice['schema']) is not int or notice['schema']!=1
+                or type(notice['phase']) is not str or notice['phase']!='worker_run' or type(notice['code']) is not str
+                or notice['code'] not in FAILURE_NOTICE_CODES
+                or type(notice['cleanup_state']) is not str or notice['cleanup_state'] not in ('confirmed','unknown')):
+            raise BoardReadError('invalid_failure_notice')
+        body='Cloud execution needs review.\n'+canonical(notice).decode('utf-8')
+        value=self._tool('post_message',dict(session_id=self.session_id,thread_id=thread_id,
+            body=body,idempotency_key=idempotency_key,reply_to=None,mentions=[],attachment_ids=[]))
+        if (type(value) is not dict or type(value.get('id')) is not str or not _text(value['id'],200)
+                or value.get('thread_id')!=thread_id or value.get('body')!=body
+                or type(value.get('author')) is not dict or value['author'].get('kind')!='agent'
+                or value['author'].get('session_id')!=self.session_id):
+            raise BoardReadError('failure_notice_unconfirmed')
+        return {'message_id':value['id'],'thread_id':thread_id,
+            'body_sha256':hashlib.sha256(body.encode('utf-8')).hexdigest()}
 
     def call(self, name, args):
         if not self._registered:
