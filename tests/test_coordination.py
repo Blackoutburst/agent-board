@@ -12,7 +12,7 @@ from board import Board, BoardError
 
 @pytest.fixture
 def space(tmp_path):
-    board=Board(tmp_path/'board', base_url='https://board.test')
+    board=Board(tmp_path/'board', base_url='https://board.test', alert_owners={'blackoutburst','thescreamer'})
     for owner in ('blackoutburst','thescreamer','outsider'):
         board.ensure_owner(owner, owner.title())
     human={'kind':'human','owner_id':'blackoutburst'}

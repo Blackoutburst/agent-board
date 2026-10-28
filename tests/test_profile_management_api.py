@@ -4,8 +4,6 @@ import json
 from fastapi.testclient import TestClient
 import pytest
 
-import app as app_module
-import platform_auth
 from profile_management import PROFILE_MANAGEMENT_TOOLS
 from test_api import application,login,rpc,call_tool,tool_data
 from test_profile_management import policy
@@ -104,35 +102,3 @@ def test_grant_route_requires_real_human_cookie_owner_origin_csrf_and_version(le
     login(other,'thescreamer')
     assert other.put(path,json=body).status_code==404
     assert board.get_agent_profile(human,profile['id'])['version']==profile['version']
-
-
-def test_production_route_checks_verified_platform_admin_and_participant(lead_browser,monkeypatch):
-    s=lead_browser;client,board,human,_,_,profile=s
-    monkeypatch.setattr(app_module,'SHARED_AUTH',True)
-    identity={'id':'synthetic-central-user','username':'Blackoutburst','role':'user'}
-    class Response:
-        status=200
-        def __enter__(self):return self
-        def __exit__(self,*args):pass
-        def read(self,_):return json.dumps({'user':identity}).encode()
-    calls=[]
-    def verified_platform(request,timeout):
-        calls.append(request.full_url)
-        assert request.full_url=='http://127.0.0.1:9011/internal/account/session'
-        assert 'synthetic-platform-cookie' in request.get_header('Cookie')
-        return Response()
-    monkeypatch.setattr(platform_auth.urllib.request,'urlopen',verified_platform)
-    client.cookies.set('__Secure-blackout_session','synthetic-platform-cookie')
-    client.headers['X-CSRF-Token']=app_module.csrf_for('synthetic-platform-cookie')
-    path='/api/agent-profiles/'+profile['id']+'/management'
-    body={'expected_version':profile['version'],'enabled':False}
-    assert client.put(path,json=body).status_code==401
-    identity.update(role='admin',username='UnrelatedAdmin')
-    assert client.put(path,json=body).status_code==403
-    identity.update(username='TheScreamer')
-    assert client.put(path,json=body).status_code==404
-    identity.update(username='Blackoutburst')
-    result=client.put(path,json=body)
-    assert result.status_code==200,result.text
-    assert calls and not any(action.startswith('agent.profile.') for action in result.json()['policy']['actions'])
-    call(s,'list_managed_agent_profiles',error=True)

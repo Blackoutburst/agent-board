@@ -119,7 +119,7 @@ def check_configuration(config, manifest, release, username):
             raise PackageError('dedicated_workspace_required')
         private_path(workspace, base, directory=True)
         connection_path = absolute(target.get('connection_file'))
-        if not connection_path.is_relative_to(base / '.config/blackoutburst-board'):
+        if not connection_path.is_relative_to(base / '.config/agent-board'):
             raise PackageError('outside_owner_connection_directory')
         private_path(connection_path, base)
         # Credentials stay in memory here and are never printed or copied.

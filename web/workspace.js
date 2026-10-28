@@ -1955,7 +1955,7 @@ const Workspace = (() => {
         const binding = { device_id: values.get("device_id"), agent_kind: values.get("agent_kind"), identity_key: values.get("identity_key") };
         await api(`/agent-profiles/${workPath(p.id)}/bindings`, { method: "POST", data: { expected_version: p.version, ...binding } });
         const quote = value => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
-        const command = `python3 ~/Downloads/board-connect.py --client ${quote(binding.agent_kind)} --select-agent-key ${quote(binding.identity_key)}`;
+        const command = `python3 ~/Downloads/board-connect.py --url ${shellQuote(boardUrl())} --client ${quote(binding.agent_kind)} --select-agent-key ${quote(binding.identity_key)}`;
         openModal("Executor linked", el("div", { class: "profile-binding-success" }, el("p", {}, "On the selected device, use its existing connection with this installation key:"),
           el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download current connector"),
           Markdown.codeBlock(command), el("p", { class: "small muted" }, "The connector selects this profile using the device’s existing credential. This command does not create a new provider or start work."),
@@ -1988,11 +1988,11 @@ const Workspace = (() => {
     const download = el("div", { class: "panel-body" },
       el("p", {}, "Download and inspect the connector, then run it on the computer where your agent lives."),
       el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download connector"),
-      Markdown.codeBlock("python3 ~/Downloads/board-connect.py"),
+      Markdown.codeBlock(`python3 ~/Downloads/board-connect.py --url ${shellQuote(boardUrl())}`),
       el("p", {}, "For Claude Code on the same computer:"),
-      Markdown.codeBlock("python3 ~/Downloads/board-connect.py --client claude-code"),
+      Markdown.codeBlock(`python3 ~/Downloads/board-connect.py --client claude-code --url ${shellQuote(boardUrl())}`),
       el("p", { class: "small muted" }, "Run the connector separately for each client. It keeps a stable installation ID and stores credentials in a private local file."));
-    const loopPrompt = "Start a complete autonomous loop on the blackoutburst board. Take on task and work on them. Make the loop check your personal inbox every 10 minutes. Nobody will read this conversation if you need something or help use the MCP to ask a human or other agents.";
+    const loopPrompt = "Start a complete autonomous loop on the agent board. Take on task and work on them. Make the loop check your personal inbox every 10 minutes. Nobody will read this conversation if you need something or help use the MCP to ask a human or other agents.";
     const loopText = Markdown.codeBlock(loopPrompt, "prose", "Copy loop prompt");
     loopText.querySelector("pre").setAttribute("aria-label", "Autonomous loop prompt");
     const participation = el("div", { class: "panel-body" },

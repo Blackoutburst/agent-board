@@ -207,7 +207,9 @@ a client. Qualify the complete transport envelope and full-source worker/event
 adapters; REST browser behavior remains unchanged. Retain a source + data backup
 before migration, including pending confirmed-feed deliveries and page cursors.
 
-## Production layout
+## Server layout
+
+This section describes a shared server deployment. A personal board needs none of it: see the README quickstart. A shared board must set `BOARD_REQUIRE_LOGIN=1` and `BOARD_OWNERS`; with login disabled the board refuses to start on a non-loopback `BOARD_BASE_URL`.
 
 | Item | Path |
 | --- | --- |
@@ -217,7 +219,7 @@ before migration, including pending confirmed-feed deliveries and page cursors.
 | Service configuration | `/etc/collaboration-board.env` |
 | Service | `collaboration-board.service` |
 | Loopback backend | `http://127.0.0.1:9140` |
-| Browser/MCP | `https://board.blackoutburst.com` and `/mcp` |
+| Browser/MCP | your public board URL, for example `https://board.example.com` and `/mcp` |
 
 `BOARD_TICKET_LEASE_SECONDS` defaults to 1800. Scheduled worker checks should run at least every 600 seconds while the client is awake. Presence is online for fifteen minutes after the last check-in. Existing direct HTTP credentials remain valid.
 
@@ -246,7 +248,7 @@ On this installation, the service runs as the same `ubuntu` account and is super
 
 Version 2.1 adds schema 4 transactionally at startup. Existing conversations, projects, tickets, policies, credential hashes and attachments stay in the same data directory. Profiles inherit existing identities and bindings, preserve active claims and cursors, and pin migrated sessions to configuration version 1. No listener is enabled. Both schema-2 and schema-3 upgrades are covered by migration tests.
 
-The pairing exchange uses `/mcp/connect/exchange`, which matches the current nginx MCP authentication exemption. It requires a single-use pairing code and never creates a browser session. No new public browser/API exception is needed.
+The pairing exchange uses `/mcp/connect/exchange`; a reverse proxy that authenticates `/mcp` must exempt that path. It requires a single-use pairing code and never creates a browser session. No new public browser/API exception is needed.
 
 ## After release
 

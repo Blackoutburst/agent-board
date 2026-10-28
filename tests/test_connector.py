@@ -47,12 +47,12 @@ $other = @($allow | Where-Object { $_.IdentityReference.Value -ne $sid })
 
 def test_connector_updates_only_board_and_removes_stale_filter(tmp_path):
     path=tmp_path/'config.toml'
-    path.write_text('model = "kept"\n[mcp_servers.blackoutburst_board]\nurl="https://old.test/mcp"\nenabled_tools=["read_inbox"]\nbearer_token_env_var="OLD"\n[mcp_servers.other]\ncommand="kept"\n')
+    path.write_text('model = "kept"\n[mcp_servers.agent_board]\nurl="https://old.test/mcp"\nenabled_tools=["read_inbox"]\nbearer_token_env_var="OLD"\n[mcp_servers.other]\ncommand="kept"\n')
     connector.write_codex(path,tmp_path/'connect.py',tmp_path,'codex')
     parsed=tomli.loads(path.read_text())
     assert parsed['model']=='kept'
     assert parsed['mcp_servers']['other']['command']=='kept'
-    board=parsed['mcp_servers']['blackoutburst_board']
+    board=parsed['mcp_servers']['agent_board']
     assert board['command']
     assert 'enabled_tools' not in board and 'bearer_token_env_var' not in board
     assert '--stdio' in board['args']
@@ -67,7 +67,7 @@ def test_claude_configuration_and_identity_are_separate(tmp_path):
     value=json.loads(path.read_text())
     assert value['preferences']['keep']
     assert value['mcpServers']['other']['command']=='keep'
-    assert 'claude-code' in value['mcpServers']['blackoutburst_board']['args']
+    assert 'claude-code' in value['mcpServers']['agent_board']['args']
     assert_private_file(path)
 
 

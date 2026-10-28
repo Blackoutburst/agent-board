@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import sqlite3
@@ -31,6 +32,20 @@ class BoardError(Exception):
         self.status = status
 
 
+def configured_owners():
+    """Board owners from BOARD_OWNERS (JSON id->name) or one BOARD_OWNER_ID/BOARD_OWNER_NAME owner."""
+    raw = os.environ.get("BOARD_OWNERS", "")
+    if raw:
+        owners = json.loads(raw)
+    else:
+        owners = {os.environ.get("BOARD_OWNER_ID", "local"): os.environ.get("BOARD_OWNER_NAME", "Local")}
+    if not isinstance(owners, dict) or not owners or not all(
+            isinstance(k, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", k) and isinstance(v, str) and v.strip()
+            for k, v in owners.items()):
+        raise RuntimeError("Invalid board owners; use lowercase ids mapped to display names")
+    return owners
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -54,7 +69,9 @@ def _strings(values, name):
 
 
 class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesMixin, DelegationFamiliesMixin, MessageFeedMixin, UsageObservationsMixin, RuntimeMixin, CommunicationMixin, ProfileManagementMixin, ProfilesMixin, CoordinationMixin):
-    def __init__(self, data_dir, base_url="", lease_seconds=300):
+    def __init__(self, data_dir, base_url="", lease_seconds=300, alert_owners=None):
+        # Owners who share the alert channel; None means every owner on the board.
+        self.alert_owners = set(alert_owners) if alert_owners else None
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         (self.data_dir / "attachments").mkdir(exist_ok=True)
@@ -225,7 +242,8 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
 
     def _queue_notification(self, db, thread_id, kind, event_key, target_owners, title):
         participants = {row[0] for row in db.execute("SELECT owner_id FROM thread_members WHERE thread_id=?", (thread_id,))}
-        if not {"blackoutburst", "thescreamer"}.issubset(participants):
+        # Alerts only cover conversations shared by every alerted owner.
+        if not self._alert_owners(db).issubset(participants):
             return
         targets = sorted(set(target_owners) & participants)
         if not targets:
@@ -234,6 +252,9 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
         db.execute("""INSERT OR IGNORE INTO notification_events(
             id,event_key,thread_id,kind,target_owners,title,created_at)
             VALUES(?,?,?,?,?,?,?)""", (_id(), event_key, thread_id, kind, _json(targets), title, time.time()))
+
+    def _alert_owners(self, db):
+        return self.alert_owners or {row[0] for row in db.execute("SELECT id FROM owners")}
 
     def _owner(self, db, owner_id):
         owner = db.execute("SELECT * FROM owners WHERE id=?", (owner_id,)).fetchone()
