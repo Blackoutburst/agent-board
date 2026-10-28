@@ -1,5 +1,6 @@
 """Synthetic local CLI streams and usage snapshots; no model or network."""
 import copy
+from dataclasses import asdict
 import json
 import time
 
@@ -139,7 +140,7 @@ def test_observation_is_ephemeral_bound_to_result_and_fresh(turn, monkeypatch):
     changed = copy.deepcopy(result)
     changed['reason'] = 'other'
     assert not disposition.classify_provider_result(changed, proof, enabled=True)['pause_candidate']
-    assert not disposition.classify_provider_result(result, proof.__dict__, enabled=True)['pause_candidate']
+    assert not disposition.classify_provider_result(result, asdict(proof), enabled=True)['pause_candidate']
     monkeypatch.setattr(disposition.time, 'monotonic', lambda: proof.monotonic_at + 121)
     assert not disposition.classify_provider_result(result, proof, enabled=True)['pause_candidate']
 
@@ -181,8 +182,8 @@ def test_usage_preflight_is_fresh_typed_candidate_only(monkeypatch, allowed, cla
         calls.append((executable, timeout))
         return usage(allowed)
     monkeypatch.setattr(disposition, 'read_usage', read)
-    proof = disposition.observe_provider_availability('/synthetic/codex', timeout=1)
-    candidate = disposition.classify_provider_availability(proof, enabled=True)
+    proof = disposition.observe_provider_availability('/synthetic/codex', binding_sha256='a' * 64, timeout=1)
+    candidate = disposition.classify_provider_availability(proof, binding_sha256='a' * 64, enabled=True)
     assert calls == [('/synthetic/codex', 1)]
     assert candidate['classification'] == classification
     assert candidate['pause_candidate'] is pause and candidate['wake_candidate'] is wake
@@ -193,18 +194,33 @@ def test_usage_preflight_is_fresh_typed_candidate_only(monkeypatch, allowed, cla
 @pytest.mark.parametrize('age', [-1, 121])
 def test_usage_stale_or_future_observation_cannot_pause_or_wake(monkeypatch, age):
     monkeypatch.setattr(disposition, 'read_usage', lambda *a, **k: usage(True))
-    proof = disposition.observe_provider_availability('/synthetic/codex')
+    proof = disposition.observe_provider_availability('/synthetic/codex', binding_sha256='a' * 64)
     monkeypatch.setattr(disposition.time, 'monotonic', lambda: proof.monotonic_at + age)
-    assert disposition.classify_provider_availability(proof, enabled=True)['classification'] == 'needs_review'
+    assert disposition.classify_provider_availability(proof, binding_sha256='a' * 64, enabled=True)['classification'] == 'needs_review'
 
 
 def test_usage_serialized_unavailable_and_previous_read_cannot_authorize(monkeypatch):
     monkeypatch.setattr(disposition, 'read_usage', lambda *a, **k: usage(False, status='unavailable'))
-    proof = disposition.observe_provider_availability('/synthetic/codex')
-    assert disposition.classify_provider_availability(proof, enabled=True)['classification'] == 'needs_review'
-    assert disposition.classify_provider_availability(proof.__dict__, enabled=True)['classification'] == 'needs_review'
+    proof = disposition.observe_provider_availability('/synthetic/codex', binding_sha256='a' * 64)
+    assert disposition.classify_provider_availability(proof, binding_sha256='a' * 64, enabled=True)['classification'] == 'needs_review'
+    assert disposition.classify_provider_availability(asdict(proof), binding_sha256='a' * 64, enabled=True)['classification'] == 'needs_review'
     value = usage(False)
     value['observed_at'] -= 121
     monkeypatch.setattr(disposition, 'read_usage', lambda *a, **k: value)
     with pytest.raises(ValueError):
-        disposition.observe_provider_availability('/synthetic/codex')
+        disposition.observe_provider_availability('/synthetic/codex', binding_sha256='a' * 64)
+
+
+def test_usage_cannot_cross_context_process_or_owner(monkeypatch):
+    monkeypatch.setattr(disposition, 'read_usage', lambda *a, **k: usage(False))
+    proof = disposition.observe_provider_availability('/synthetic/codex', binding_sha256='a' * 64)
+    assert not disposition.classify_provider_availability(proof, binding_sha256='b' * 64,
+        enabled=True)['pause_candidate']
+    with monkeypatch.context() as patch:
+        patch.setattr(disposition.os, 'getpid', lambda: proof._pid + 1)
+        assert not disposition.classify_provider_availability(proof, binding_sha256='a' * 64,
+            enabled=True)['pause_candidate']
+    with monkeypatch.context() as patch:
+        patch.setattr(disposition.os, 'geteuid', lambda: proof._uid + 1)
+        assert not disposition.classify_provider_availability(proof, binding_sha256='a' * 64,
+            enabled=True)['pause_candidate']
