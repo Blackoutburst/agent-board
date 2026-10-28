@@ -12,15 +12,15 @@ import httpx
 from board import BoardError
 
 CONFIG = "discord-notifications.json"
-NAMES = {"blackoutburst": "Blackoutburst", "thescreamer": "TheScreamer"}
 KINDS = {"mention": "You were mentioned", "task_created": "New task",
          "needs_input": "A task needs input", "ready_for_verification": "Ready for verification",
          "complete": "Task completed"}
 
 
 class DiscordNotifications:
-    def __init__(self, board, transport=None):
+    def __init__(self, board, transport=None, admin_owner=None):
         self.board = board
+        self.admin_owner = admin_owner
         self.transport = transport
         self.lock = asyncio.Lock()
         with board._connection() as db:
@@ -71,14 +71,16 @@ class DiscordNotifications:
                 "channel_id": config["channel_id"] if config else None,
                 "channel_url": f"https://discord.com/channels/{config['guild_id']}/{config['channel_id']}" if config else None,
                 "pending": pending, "last_error": failed[0] if failed else "",
-                "can_test": actor["owner_id"] == "blackoutburst"}
+                "can_test": self.admin_owner in (None, actor["owner_id"])}
 
     def _payload(self, config, event):
         owners = json.loads(event["target_owners"])
         user_ids = config.get("user_ids", {})
         allowed = [str(user_ids[owner]) for owner in owners if str(user_ids.get(owner, "")).isdigit()]
+        with self.board._connection() as db:
+            names = dict(db.execute("SELECT id,display_name FROM owners").fetchall())
         audience = ", ".join(f"<@{user_ids[owner]}>" if str(user_ids.get(owner, "")).isdigit()
-                             else NAMES.get(owner, owner) for owner in owners)
+                             else names.get(owner, owner) for owner in owners)
         # Titles are bounded and mentions are explicitly allowlisted; message bodies,
         # instructions, attachments and credentials never leave the board.
         title = event["title"].replace("\n", " ").replace("\r", " ")[:200]
@@ -114,15 +116,15 @@ class DiscordNotifications:
     async def test(self, actor):
         with self.board._connection() as db:
             actor = self.board._human(db, actor)
-        if actor["owner_id"] != "blackoutburst":
-            raise BoardError("Only Blackoutburst can send a channel setup test", 403)
+        if self.admin_owner not in (None, actor["owner_id"]):
+            raise BoardError("Only the primary board owner can send a channel setup test", 403)
         config = self._config()
         if not config:
             raise BoardError("Discord alerts are not configured", 409)
         if self._cooldown():
             raise BoardError("Discord rate limit cooldown; try again shortly", 429)
         message_id, error, retry = await self._send(config, {
-            "content": "Blackoutburst board: Discord alerts are connected. New tasks, mentions and requests for input will link back to the board.",
+            "content": "Agent board: Discord alerts are connected. New tasks, mentions and requests for input will link back to the board.",
             "allowed_mentions": {"parse": []}}, "test" + str(time.time_ns()))
         if error:
             self._rate_limit(error, retry)
@@ -142,7 +144,8 @@ class DiscordNotifications:
             for event in events:
                 with self.board._connection() as db:
                     members = {row[0] for row in db.execute("SELECT owner_id FROM thread_members WHERE thread_id=?", (event["thread_id"],))}
-                if not set(NAMES).issubset(members):
+                    owners = self.board._alert_owners(db)
+                if not owners.issubset(members):
                     with self.board._tx() as db:
                         db.execute("UPDATE notification_events SET sent_at=?,last_error='Thread is no longer shared' WHERE id=?",
                                    (time.time(), event["id"]))

@@ -171,6 +171,8 @@ La [politique optionnelle du planificateur](PLANNER_POLICY.md) fournit un dossie
 
 La version 0.43 rapproche aussi le nettoyage d’une finalisation refusée avant son reçu d’inspection. Elle termine uniquement sa réservation Runtime en état bloqué, après vérification des identités, de l’absence d’opération de test ou de patch pour cette action et du nettoyage de tous les modèles. Le résultat reste à examiner ; aucun test, modèle ou patch n’est rejoué.
 
+La version 0.44 conserve l’option explicite `reasoning_effort` lors de la reconstruction de la preuve de livraison. La preuve compare la configuration exacte du planificateur ; une option absente reste absente et une valeur stockée invalide est refusée. Les reçus de test, le contrôle de source et la livraison Git restent obligatoires.
+
 Le raccord de continuation présent sur cette branche reste en développement.
 `ContinuationTask` conserve un journal de cycles bornés sans plafond global de
 cycles. `ContinuationRunner` relie explicitement ces cycles au `PersonalRunner`
@@ -178,6 +180,16 @@ textuel : pause fournisseur vérifiée, nouvelle observation de disponibilité,
 nouveau travail et nouvelle session, puis reprise après contrôles frais. Son
 stockage opt-in de schéma 3 exige un répertoire neuf et conserve les anciens
 résultats ; il ne migre pas un ancien travail. Les appels `run_cycle` et `wake`
-restent explicites. Le raccord au planificateur de développement, les checkpoints
-Git entre générations et le réveil du service serveur restent à implémenter.
-Ces composants ne sont pas encore déployés sur le serveur.
+restent explicites.
+
+Le hook opt-in du planificateur de développement fournit maintenant une
+`DevelopmentCheckpointProof` à une frontière prête, après les actions confirmées
+et avant le prochain prompt ou débit de budget. Le producteur Git privé capture
+les postimages déclarées et vérifie l’arbre complet, les droits frais et la chaîne
+des sources. Ses commits et reçus privés ne sont ni une livraison testée, ni une
+acceptation, ni une autorisation de lancer une nouvelle génération.
+
+La retraite normale de l’ancienne génération, l’admission de la suivante, la
+publication agrégée depuis la base publique originale et le daemon de réveil du
+service serveur restent à raccorder. Ces composants de continuation ne sont pas
+encore déployés sur le serveur.

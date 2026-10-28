@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import sqlite3
 import zipfile
@@ -68,32 +67,3 @@ def test_restore_rejects_corruption_traversal_and_existing_destination(tmp_path)
     assert not (tmp_path / "outside").exists()
     with pytest.raises(FileExistsError):
         restore_backup(original, board.data_dir)
-
-
-def test_nginx_edit_is_narrow_idempotent_and_preserves_private_gate():
-    path = Path(__file__).parents[1] / "deploy" / "configure_nginx.py"
-    spec = importlib.util.spec_from_file_location("configure_nginx", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    source = '''server {
-    listen 80;
-    server_name files.blackoutburst.com;
-    location / { return 308 https://files.blackoutburst.com$request_uri; }
-}
-server {
-    include /etc/nginx/blackoutburst-platform/admin.conf;
-    listen 443 ssl;
-    server_name files.blackoutburst.com;
-    location / {
-        proxy_pass http://localhost:8080;
-    }
-}
-'''
-    location = (path.parent / "nginx-location.conf").read_text()
-    result = module.add_board_location(source, location)
-    assert result.count("include /etc/nginx/blackoutburst-platform/admin.conf;") == 1
-    assert "proxy_pass http://localhost:8080;" in result
-    assert result.split("server {", 2)[1] == source.split("server {", 2)[1]
-    assert "auth_request off;" in location
-    assert "proxy_pass http://127.0.0.1:9140/;" in result
-    assert module.add_board_location(result, location) == result

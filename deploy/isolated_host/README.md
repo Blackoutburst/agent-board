@@ -54,7 +54,7 @@ python3 -m deploy.isolated_host.manage prepare \
   --bwrap /absolute/public-linux-tools/codex-resources/bwrap \
   --codex-version <VERSION_EXPLICITE> --architecture x86_64 \
   --python /usr/bin/python3.10 --python-sha256 <SHA256_DU_SERVEUR> \
-  --board-endpoint https://board.blackoutburst.com/mcp \
+  --board-endpoint https://board.example.com/mcp \
   --thescreamer-owner <OWNER_THE_SCREAMER> --blackout-owner <OWNER_BLACKOUT>
 ```
 

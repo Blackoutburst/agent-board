@@ -76,6 +76,28 @@ def request(url, payload, token=None):
         raise RuntimeError('Could not connect to the board or read its JSON response.') from None
 
 
+SERVER_NAME = 'agent_board'
+
+
+def local_pairing_code(url, label):
+    """Create a pairing code directly when the board runs without login; None if login is required."""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        with opener.open(urllib.request.Request(url+'/api/me', headers={'Accept':'application/json'}), timeout=15) as response:
+            me = json.loads(response.read())
+    except urllib.error.HTTPError:
+        return None
+    if me.get('login_required', True):
+        return None
+    req = urllib.request.Request(url+'/api/settings/pairings', data=json.dumps({'label':label}).encode(), headers={
+        'Content-Type':'application/json','X-CSRF-Token':me['csrf_token'],'Origin':url})
+    with opener.open(req, timeout=15) as response:
+        return json.loads(response.read())['code']
+
+
 def validate_url(url):
     parts = urllib.parse.urlsplit(url)
     if parts.username or parts.password or parts.query or parts.fragment or not parts.hostname:
@@ -92,7 +114,7 @@ def rpc(config, method, params, request_id=1):
     return result['result']
 
 
-def write_codex(path, installed, directory, client):
+def write_codex(path, installed, directory, client, server_name=SERVER_NAME):
     path = Path(path).expanduser()
     original_bytes = path.read_bytes() if path.exists() else b''
     original = original_bytes.decode('utf-8')
@@ -102,23 +124,24 @@ def write_codex(path, installed, directory, client):
     for line in lines:
         if line.lstrip().startswith('['):
             heading = line.strip()
-            skipping = bool(re.match(r'^\[mcp_servers\.(?:blackoutburst_board|"blackoutburst_board")(?:\.|\])', heading))
+            name = re.escape(server_name)
+            skipping = bool(re.match(r'^\[mcp_servers\.(?:'+name+'|"'+name+'")(?:\.|\])', heading))
         if not skipping:
             kept.append(line)
     args = [str(installed), '--stdio', '--client', client, '--config-dir', str(directory)]
-    block = '\n[mcp_servers.blackoutburst_board]\ncommand = '+json.dumps(sys.executable)+'\nargs = '+json.dumps(args)+'\n'
+    block = '\n[mcp_servers.'+server_name+']\ncommand = '+json.dumps(sys.executable)+'\nargs = '+json.dumps(args)+'\n'
     if original:
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         private_write(path.with_name(path.name+'.before-board-'+stamp), original_bytes)
     private_write(path, ''.join(kept).rstrip()+'\n'+block)
 
 
-def write_claude(path, installed, directory, client):
+def write_claude(path, installed, directory, client, server_name=SERVER_NAME):
     path = Path(path).expanduser()
     original_bytes = path.read_bytes() if path.exists() else b''
     original = original_bytes.decode('utf-8')
     data = json.loads(original) if original else {}
-    data.setdefault('mcpServers', {})['blackoutburst_board'] = {'type':'stdio','command':sys.executable,
+    data.setdefault('mcpServers', {})[server_name] = {'type':'stdio','command':sys.executable,
         'args':[str(installed),'--stdio','--client',client,'--config-dir',str(directory)]}
     if original:
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
@@ -250,15 +273,18 @@ def select_agent(connection_path, identity_key):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--url', default='https://board.blackoutburst.com')
+    parser.add_argument('--url', default=os.environ.get('BOARD_URL', 'http://127.0.0.1:9140'))
     parser.add_argument('--client', choices=['codex','claude-code','other'], default='codex')
     parser.add_argument('--name', help='Persistent display name, for example Codex · Work Mac')
     parser.add_argument('--select-agent-key', help='Select an existing human-bound agent using this connection; no new pairing.')
-    parser.add_argument('--config-dir', type=Path, default=Path.home()/'.config'/'blackoutburst-board')
+    parser.add_argument('--config-dir', type=Path, default=Path.home()/'.config'/'agent-board')
+    parser.add_argument('--server-name', default=SERVER_NAME, help='MCP server name written to the client configuration')
     parser.add_argument('--codex-config', type=Path, default=Path.home()/'.codex'/'config.toml')
     parser.add_argument('--claude-config', type=Path, default=Path.home()/'.claude.json')
     parser.add_argument('--stdio', action='store_true')
     args = parser.parse_args()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args.server_name):
+        raise ValueError('Use letters, digits, "_" or "-" for the MCP server name.')
     directory = args.config_dir.expanduser().resolve()
     connection_path = directory/(args.client+'.json')
     if args.select_agent_key is not None:
@@ -276,8 +302,10 @@ def main():
             raise SystemExit(1)
         return
     url = validate_url(args.url)
-    print('In the board, open Connect agent, name this computer, and generate a pairing code.')
-    code = getpass.getpass('One-time pairing code (hidden): ').strip().upper()
+    code = local_pairing_code(url, platform.node()[:100] or 'This computer')
+    if code is None:
+        print('In the board, open Connect agent, name this computer, and generate a pairing code.')
+        code = getpass.getpass('One-time pairing code (hidden): ').strip().upper()
     paired = request(url+'/mcp/connect/exchange', {'code':code})
     expected_mcp = url+'/mcp'
     if paired.get('mcp_url') != expected_mcp:
@@ -297,9 +325,9 @@ def main():
     if Path(__file__).resolve() != installed:
         private_write(installed, Path(__file__).read_text(encoding='utf-8'))
     if args.client == 'codex':
-        write_codex(args.codex_config, installed, directory, args.client)
+        write_codex(args.codex_config, installed, directory, args.client, args.server_name)
     elif args.client == 'claude-code':
-        write_claude(args.claude_config, installed, directory, args.client)
+        write_claude(args.claude_config, installed, directory, args.client, args.server_name)
     print(f"Connected {config['name']}. Verified {len(tools)} MCP tools.")
     print('Restart your agent client, then ask it to register this chat and read your project work.')
     print('The credential stays in a private local file; the client configuration contains no token or tool allowlist.')

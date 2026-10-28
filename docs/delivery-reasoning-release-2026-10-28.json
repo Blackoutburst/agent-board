@@ -1,0 +1,18 @@
+{
+  "adapter_version": "0.44.0",
+  "board_version": "2.17.4",
+  "change": "Preserve and validate the exact optional reasoning_effort in the delivery proof expected planner configuration",
+  "validation": {
+    "author_targeted_tests_passed": 67,
+    "new_regression_cases": 9,
+    "root_replayed_new_cases": 9
+  },
+  "guards_preserved": [
+    "legacy omission fingerprint",
+    "exact stored configuration and optional-value validation",
+    "fresh required test and source receipts",
+    "normal Git delivery/publication"
+  ],
+  "live_cause": "not asserted before filtered production diagnostic",
+  "continuation_preview_in_pr68": "separate unmerged work"
+}

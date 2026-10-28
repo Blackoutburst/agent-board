@@ -30,7 +30,7 @@ class EntryTests(unittest.TestCase):
         self.manifest = {'architecture': 'x86_64', 'python': {'path': sys.executable},
                          'owners': dict(zip(pkg.OWNER_NAMES, ('owner-a', 'owner-b'))),
                          'board_endpoint': 'https://board.example/mcp'}
-        self.connection = self.home / '.config/blackoutburst-board/agent/other.json'
+        self.connection = self.home / '.config/agent-board/agent/other.json'
         self.workspace = self.home / 'workspaces/response'
         self.config_path = self.home / '.config/blackoutburst-agent-host/host.json'
         self.journal = self.home / '.local/state/blackoutburst-agents/host'

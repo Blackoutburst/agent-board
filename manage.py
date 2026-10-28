@@ -1,4 +1,4 @@
-"""Local administration: development passwords, Discord setup, and games examples."""
+"""Local administration: owner passwords and Discord setup."""
 from __future__ import annotations
 
 import argparse
@@ -12,10 +12,7 @@ import warnings
 
 import httpx
 
-from board import Board
-
-OWNERS = {"blackoutburst": "Blackoutburst", "thescreamer": "TheScreamer"}
-
+from board import Board, configured_owners
 
 def configure_discord(data_dir, token, bot_id, guild_id, channel_id, transport=None):
     """Validate the chosen bot and destination before replacing its private credential."""
@@ -57,7 +54,7 @@ def configure_discord(data_dir, token, bot_id, guild_id, channel_id, transport=N
         if (isinstance(existing, dict) and existing.get("guild_id") == guild_id
                 and existing.get("channel_id") == channel_id and isinstance(existing.get("user_ids"), dict)):
             user_ids = {owner: str(identifier) for owner, identifier in existing["user_ids"].items()
-                        if owner in OWNERS and str(identifier).isascii() and str(identifier).isdigit()}
+                        if owner in configured_owners() and str(identifier).isascii() and str(identifier).isdigit()}
     except (OSError, ValueError):
         pass
     configuration = {"bot_token": token, "bot_id": bot_id, "guild_id": guild_id,
@@ -78,77 +75,14 @@ def configure_discord(data_dir, token, bot_id, guild_id, channel_id, transport=N
             "config_path": str(destination)}
 
 
-def seed_games(board: Board, creator: str) -> dict:
-    for owner_id, display_name in OWNERS.items():
-        board.ensure_owner(owner_id, display_name)
-    actor = {"kind": "human", "owner_id": creator}
-    thread = board.create_thread(actor, "Games rework — OAuth and email setup",
-                                 list(OWNERS), "seed-games-thread-v1")
-    thread_id = thread["id"]
-    board.post_message(
-        actor, thread_id,
-        "Example handoff: Google project ownership is unknown. Domain ownership does not "
-        "establish Google account ownership. Confirm the responsible human and derive "
-        "the exact OAuth origins/callback URLs from the application before requesting "
-        "client creation. For email, obtain the provider's exact records and domain; "
-        "do not invent SPF, DKIM, DMARC, TXT or CNAME values. Keep client secrets, "
-        "passwords and provider tokens in application secret storage. Agent policies "
-        "remain disabled until each owner explicitly opts in.",
-        idempotency_key="seed-games-message-v1")
-    tasks = []
-    tasks.append(board.create_task(
-        actor, thread_id, "Confirm the Google OAuth project owner and requirements",
-        "TheScreamer: identify the intended Google project/account owner. Derive "
-        "the exact authorized origins and callback URLs from the games application. "
-        "After that human confirms ownership, create a separate client-configuration "
-        "task addressed to that human. Do not assume Blackoutburst owns the Google project.",
-        "Named responsible human; confirmed Google project; exact origins and callback "
-        "URLs; required consent-screen settings. Credentials belong in secret storage.",
-        "human", "thescreamer", idempotency_key="seed-games-oauth-owner-v1"))
-    records = board.create_task(
-        actor, thread_id, "Supply the email provider's exact DNS requirements",
-        "TheScreamer: obtain the actual sending domain and provider verification records. "
-        "Post record type, hostname, value and any specified TTL. Identify existing "
-        "SPF policy before proposing a change. Never post an email API key.",
-        "Provider name; actual sending domain; exact records; verification procedure; "
-        "existing-record evidence. No fabricated DNS values.",
-        "human", "thescreamer", idempotency_key="seed-games-email-records-v1")
-    tasks.append(records)
-    dns = board.create_task(
-        actor, thread_id, "Add the agreed email DNS records",
-        "Blackoutburst: after the requirements task is verified, inspect existing records "
-        "and apply the agreed changes through the domain account you own. Record "
-        "what changed and when, then request verification. Provider acceptance and "
-        "a successful application email test are separate checks.",
-        "Exact records supplied by the provider; existing-record review; human "
-        "confirmation of the actual sending-domain ownership and changes.",
-        "human", "blackoutburst", prerequisites=[records["id"]],
-        idempotency_key="seed-games-email-dns-v1")
-    tasks.append(dns)
-    tasks.append(board.create_task(
-        actor, thread_id, "Verify the published email DNS records",
-        "After Blackoutburst reports the DNS change, compare public DNS responses to the "
-        "supplied provider records. Record resolver, query names, responses and time. "
-        "If the email provider has not accepted verification, state that explicitly; "
-        "do not report an application email test as passed without running it.",
-        "Verified DNS change prerequisite and owner authorization for read-only "
-        "public DNS checks. Distinguish DNS visibility, provider acceptance and "
-        "application email delivery.",
-        "group", "blackoutburst", action="verify_dns", resource="games-email-dns",
-        required_capabilities=["dns_public"], prerequisites=[dns["id"]],
-        idempotency_key="seed-games-email-verification-v1"))
-    return {"thread": thread, "tasks": tasks}
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path,
                         default=Path(os.environ.get("BOARD_DATA_DIR", "./data")))
     sub = parser.add_subparsers(dest="command", required=True)
-    password = sub.add_parser("owner-password", help="Set a development-only local password")
-    password.add_argument("owner", choices=OWNERS)
-    seed = sub.add_parser("seed-games", help="Create the optional example once (safe to retry)")
-    seed.add_argument("--creator", choices=OWNERS, default="thescreamer")
+    password = sub.add_parser("owner-password", help="Set a local password for BOARD_REQUIRE_LOGIN=1 boards")
+    password.add_argument("owner", help="owner id, for example local")
+    password.add_argument("--name", help="display name (defaults to the existing one, or the id)")
     discord = sub.add_parser("configure-discord", help="Validate and save a Discord bot token through a hidden prompt")
     discord.add_argument("--bot-id", required=True)
     discord.add_argument("--guild-id", required=True)
@@ -174,12 +108,10 @@ def main() -> None:
             parser.error("Use at least 12 characters")
         if first != second:
             parser.error("Passwords differ")
-        board.ensure_owner(args.owner, OWNERS[args.owner], password=first)
-        print("Development password set. Local login also requires BOARD_ALLOW_LOCAL_PASSWORDS=1.")
-    elif args.command == "seed-games":
-        result = seed_games(board, args.creator)
-        print(json.dumps({"thread_id": result["thread"]["id"],
-                          "task_ids": [task["id"] for task in result["tasks"]]}, indent=2))
+        with board._connection() as db:
+            row = db.execute("SELECT display_name FROM owners WHERE id=?", (args.owner,)).fetchone()
+        board.ensure_owner(args.owner, args.name or (row[0] if row else args.owner), password=first)
+        print("Password set. Password sign-in also requires BOARD_REQUIRE_LOGIN=1 and BOARD_ALLOW_LOCAL_PASSWORDS=1.")
 
 
 if __name__ == "__main__":
