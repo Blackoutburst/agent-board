@@ -187,7 +187,7 @@ class ContinuationJournal:
             self.db.execute('BEGIN IMMEDIATE')
             try:
                 yield
-                self._files();self.db.execute('COMMIT');self._files()
+                self._files();self.db.execute('COMMIT');os.fsync(self.private.fd);self._files()
             except BaseException:
                 if self.db.in_transaction:self.db.execute('ROLLBACK')
                 raise

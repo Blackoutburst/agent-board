@@ -433,3 +433,27 @@ def test_checkpoint_crash_or_lost_ack_reopens_without_promoting_an_unknown_bound
         value=task.checkpoint(expected_revision=1,request_id='cp',checkpoint=cp,cycle_used=usage(),reason='cycle')
         assert value['historical'] is True and value['snapshot']['state']['phase']=='paused_cycle'
         assert value['snapshot']['state']['used_total']==usage()
+
+
+def test_clock_cannot_move_backwards_between_clean_cycles(case):
+    start(case);seal(case);case['clock'][0]=99.
+    value=start(case,'backward-clock',2)
+    assert value.permit is None and value.receipt['snapshot']['state']['phase']=='needs_you'
+    assert value.receipt['snapshot']['state']['reason']=='continuation_clock_changed'
+    assert value.receipt['snapshot']['state']['cycle_seq']==1
+
+
+def test_directory_sync_precedes_ack_and_failure_only_replays_historical_metadata(case,monkeypatch):
+    task=case['task'];sync=os.fsync;observed=[]
+    def fail_directory_sync(fd):
+        if fd==task.journal.private.fd:
+            observed.append(task.journal.db.in_transaction)
+            raise OSError('synthetic directory sync failure')
+        return sync(fd)
+    with monkeypatch.context() as patch:
+        patch.setattr(os,'fsync',fail_directory_sync)
+        with pytest.raises(OSError):start(case)
+    assert observed==[False]
+    value=start(case)
+    assert value.permit is None and value.receipt['historical'] is True
+    assert task.snapshot()['state']['revision']==1

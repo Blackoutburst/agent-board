@@ -255,7 +255,7 @@ class ContinuationTask:
         require(state['revision']==expected_revision,'continuation_revision_conflict')
         require(not state['stop_requested'] and state['phase'] in {'ready','paused_cycle','paused_provider','paused_quota'},'continuation_start_refused')
         context=self._context(before,purpose='start');failure=None
-        try:self.checks.verify(context);now=self._time()
+        try:self.checks.verify(context);now=self._time(state['current_cycle'])
         except Exception as error:failure=self._failure(error);now=None
         def transition(head):
             require(head==before,'continuation_revision_conflict');value=head['state']
