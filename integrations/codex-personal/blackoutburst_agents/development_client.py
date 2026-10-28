@@ -31,6 +31,8 @@ FAILURE_NOTICE_CODES = frozenset({'development_run_requires_review',
     'planner_directory_changed', 'planner_clock_changed', 'planner_disabled',
     'final_test_proof_missing', 'final_test_receipt_changed', 'planner_model_receipt_unavailable',
     'planner_tool_receipt_unavailable', 'planner_effect_requires_review', 'planner_recovered_effect_requires_review',
+    'operations_budget_exhausted', 'read_bytes_budget_exhausted',
+    'patch_bytes_budget_exhausted', 'tests_budget_exhausted',
 })
 
 

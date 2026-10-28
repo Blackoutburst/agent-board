@@ -323,6 +323,8 @@ def test_real_planner_budget_refusal_codes_survive_the_closed_wire_projection(ca
     'planner_directory_changed', 'planner_clock_changed', 'planner_disabled',
     'final_test_proof_missing', 'final_test_receipt_changed', 'planner_model_receipt_unavailable',
     'planner_tool_receipt_unavailable', 'planner_effect_requires_review', 'planner_recovered_effect_requires_review',
+    'operations_budget_exhausted', 'read_bytes_budget_exhausted',
+    'patch_bytes_budget_exhausted', 'tests_budget_exhausted',
 ])
 def test_static_planner_failure_codes_are_visible_without_changing_claim_or_runtime(case,code):
     s=case;ticket=s.board.get_ticket(s.human,s.ticket['id']);runtime=s.board.get_runtime(s.human)
@@ -338,7 +340,7 @@ def test_static_planner_failure_codes_are_visible_without_changing_claim_or_runt
 
 
 @pytest.mark.parametrize('value',['planner_private_secret','invalid_planner_action: PRIVATE_TOKEN',
-    'planner_model_requires_review /private/user/file','invalid_document_private','PRIVATE_UNKNOWN_REASON',
+    'planner_model_requires_review /private/user/file','invalid_document_private','PRIVATE_UNKNOWN_REASON','operations_budget_exhausted_private',
     {'code':'invalid_document'},DevelopmentError('invalid_planner_action')])
 def test_unlisted_or_private_codes_stay_generic_without_exception_stringification(value):
     assert failure_notice(value,True)=={'schema':1,'phase':'worker_run',
