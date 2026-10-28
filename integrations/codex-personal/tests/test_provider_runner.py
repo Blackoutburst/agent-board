@@ -1,5 +1,6 @@
 """Opt-in runner handshakes: real temporary stores/Board, fake CLI only."""
 import copy
+from dataclasses import replace
 from functools import partial
 import json
 import pickle
@@ -256,3 +257,16 @@ def test_one_use_objects_cannot_cross_threads(context):
     thread.join()
     assert errors == ['provider_attempt_mismatch', 'provider_receipt_unavailable']
     disposition.consume_provider_receipt(receipt, **expected)
+
+
+def test_dataclass_replacement_cannot_clone_or_rebind_enrollment_or_receipt(context):
+    attempt = context['attempt']()
+    for changes in ({}, {'request_id': 'other'}, {'_issuer': attempt._issuer}):
+        with pytest.raises((TypeError, ValueError)):
+            replace(attempt, **changes)
+    response = run(context, attempt=attempt)
+    receipt = context['receipts'][0]
+    for changes in ({}, {'metadata_json': '{}'}, {'_issuer': receipt._issuer}):
+        with pytest.raises((TypeError, ValueError)):
+            replace(receipt, **changes)
+    disposition.consume_provider_receipt(receipt, **bindings(context, response, receipt))

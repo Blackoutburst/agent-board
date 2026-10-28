@@ -7,7 +7,7 @@ boundary. No provider error prose is used to establish a cause or reset time.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import math
@@ -219,7 +219,7 @@ class ProviderAttempt(_OneUse):
     _claimed: bool
     _turn_id: str | None
     _receipt_issued: bool
-    _issuer: object
+    _issuer: object = field(init=False, repr=False)
 
     def __init__(self, *, _issuer, **fields):
         if _issuer is not _ISSUER:
@@ -294,7 +294,7 @@ class ProviderDispositionReceipt(_OneUse):
     _pid: int
     _thread: object
     _consumed: bool
-    _issuer: object
+    _issuer: object = field(init=False, repr=False)
 
     def __init__(self, *, _issuer, metadata_json, monotonic_at):
         if _issuer is not _ISSUER:
