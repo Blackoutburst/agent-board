@@ -159,6 +159,27 @@ class DevelopmentBoardClient(WorkerBoardClient):
         return {'message_id':value['id'],'thread_id':thread_id,
             'body_sha256':hashlib.sha256(body.encode('utf-8')).hexdigest()}
 
+    def release_checkpoint_claim(self, *, ticket_id, expected_version, idempotency_key, reason):
+        """Controller-only claim maintenance after proved checkpoint cleanup.
+
+        The transport is not cleanup proof. The cycle controller must verify
+        the actual stopped operation and fresh Runtime receipts before calling
+        it. This entry is deliberately outside the planner's call channel.
+        """
+        if (self._closed is not False or self._registered is not True
+                or type(ticket_id) is not str or not _text(ticket_id,200)
+                or type(expected_version) is not int or not 1<=expected_version<2**63
+                or type(idempotency_key) is not str or re.fullmatch(
+                    r'development-checkpoint-release-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                    idempotency_key) is None
+                or type(reason) is not str or not reason.strip() or len(reason)>20000 or '\x00' in reason):
+            raise BoardReadError('invalid_arguments')
+        values=dict(ticket_id=ticket_id,expected_version=expected_version,idempotency_key=idempotency_key,
+                    reason=reason,status='todo',unassign_self=False,session_id=self.session_id)
+        if len(canonical(values))>MAX_CONNECTION_BYTES-1024:raise BoardReadError('invalid_arguments')
+        self._initialize()
+        return self._tool('release_ticket',values)
+
     def call(self, name, args):
         if not self._registered:
             raise BoardReadError('development_registration_required')

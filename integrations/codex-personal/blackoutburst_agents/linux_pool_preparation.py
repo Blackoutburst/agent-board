@@ -73,6 +73,9 @@ class LinuxPoolJobPreparer:
         self.connection = deepcopy(driver.selections.connection_pin)
 
     def _job(self, operation_id, project_id, ticket_id):
+        if getattr(self,'_checkpoint_preparation',None) is not None:
+            from .development_cycle_driver import check_preparer_cycle
+            check_preparer_cycle(self,operation_id)
         uuid_value(operation_id)
         with self.pool.mutex:
             self.pool._ready();state=self.pool.journal.read()
@@ -85,6 +88,10 @@ class LinuxPoolJobPreparer:
             return state['id'],job
 
     def _local(self, request):
+        if getattr(self,'_checkpoint_preparation',None) is not None:
+            from .development_cycle_driver import check_preparer_cycle
+            # Fresh callbacks stay outside the global Pool metadata mutex.
+            check_preparer_cycle(self,request['job']['id'],fresh=True)
         with PrivateDirectory(self.directory):pass
         if (_directory_pin(self.directory)!=self.pin or self.driver.selections.fixed!=self.fixed
                 or self.workspaces.grant!=self.grant or self.workspaces.pins!=self.git_pins
