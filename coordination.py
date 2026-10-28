@@ -82,6 +82,8 @@ def migrate_coordination(db):
         ON t.id=json_extract(a.detail,'$.ticket_id') ORDER BY a.id""")
 
 
+REVIEW_ACTION = 'ticket.review'
+
 class CoordinationMixin(ProjectsMixin):
     def _project_agent(self, db, project_id, agent_id):
         if agent_id is None:
@@ -466,6 +468,13 @@ class CoordinationMixin(ProjectsMixin):
             owner = _text(owner, 'unblock_owner', 1, 200).strip()
         return reason, seconds, owner
 
+    def _can_review(self, db, actor):
+        """Explicit, owner-granted review authority; a wildcard or legacy grant is not enough."""
+        profile = self._profile_for_actor(db, actor)
+        stored = json.loads(profile['policy'])
+        return (REVIEW_ACTION in stored['actions']
+                and REVIEW_ACTION in self._effective_profile_policy(db, actor, profile)['actions'])
+
     def _claim_checks(self, db, actor, row, recovery_evidence=''):
         self._delegation_claim_check(db,actor,row)
         project = self._project_member(db, actor, row['project_id'])
@@ -478,8 +487,10 @@ class CoordinationMixin(ProjectsMixin):
             _fail('Task is blocked by prerequisites or a human request', 409)
         if actor['kind'] == 'agent':
             session = db.execute('SELECT * FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()
+            # An owner-granted reviewer may take an assigned ticket in review to accept or return it.
+            reviewing = row['status'] == 'review' and self._can_review(db, actor)
             if (row['assignee_agent_id'] and session['agent_id'] != row['assignee_agent_id']
-                    and not ticket['assignment_stale']):
+                    and not ticket['assignment_stale'] and not reviewing):
                 _fail('Task is assigned to another agent identity', 403)
             skills = json.loads(session['skills'])
             if not set(ticket['required_skills']).issubset(skills):
