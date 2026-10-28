@@ -73,6 +73,9 @@ class PrivateDevelopmentCheckpointController:
 
     def _roots(self):
         self.workspaces._roots()
+        if (validate_configuration(self.configuration)!=self.configuration
+                or digest(canonical(self.configuration))!=self.configuration_sha256):
+            fail('private_checkpoint_configuration_changed')
         if _directory(self.root,private=True)!=self.pin:fail('private_checkpoint_root_changed')
         roots=(self.root,self.workspaces.repository,self.workspaces.state_root,self.workspaces.workspace_root)
         chains=[_ancestry(path) for path in roots]
@@ -257,6 +260,10 @@ class PrivateDevelopmentCheckpointController:
                 or seal.get('ref')!='refs/blackoutburst/private-checkpoints/'+digest(self.configuration['task_id'].encode())[:32]+'/'+private.path.name):
             fail('private_checkpoint_record_changed')
         for key in ('commit_sha','tree_sha','base_commit'):_commit(seal[key])
+        if (seal['parent_checkpoint_id'] is None)!=(seal['parent_checkpoint_sha256'] is None):
+            fail('private_checkpoint_parent_changed')
+        if seal['parent_checkpoint_id'] is not None:
+            _operation(seal['parent_checkpoint_id']);sha256(seal['parent_checkpoint_sha256'])
         if intent['message']!=_message(private.path.name,self.configuration_sha256,seal['proof_sha256'],seal['parent_checkpoint_sha256']):
             fail('private_checkpoint_record_changed')
         if self._anchors(root)!=intent['anchors']:fail('private_checkpoint_head_or_index_changed')

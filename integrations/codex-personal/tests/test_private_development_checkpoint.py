@@ -68,6 +68,13 @@ def test_historical_partial_read_never_creates_a_missing_lock(checkpoint_case):
     assert list(record.iterdir())==[]
 
 
+def test_exposed_configuration_cannot_be_mutated_after_freeze(checkpoint_case):
+    controller=checkpoint_case['checkpoints']
+    controller.configuration['resource']='repo:other'
+    with pytest.raises(DevelopmentError,match='private_checkpoint_configuration_changed'):
+        controller.verify(str(uuid.uuid4()))
+
+
 @pytest.fixture
 def live_case(monkeypatch,request):
     peer=pytest.importorskip('test_development_checkpoint_proof')
