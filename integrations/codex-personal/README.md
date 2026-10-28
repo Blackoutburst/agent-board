@@ -29,6 +29,16 @@ produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
 l’[état des travailleurs serveur](CLOUD-WORKERS.md).
 
+La version 0.41 place le préflight local du lancement Linux avant la collecte
+de la première fenêtre d'autorisation. Ce même contrôle ne consomme ainsi plus
+sa marge entre la collecte et le lancement du helper. La fenêtre de 1,5 seconde,
+les contrôles SOURCE et les conditions de nettoyage restent inchangés. Une
+qualification interrompue conserve aussi son observation fermée dans le résultat
+privé de préparation : cas, phase, refus du contrôleur et durée du contrôle de
+portée, lorsqu'ils sont disponibles. Cette observation ne confirme aucun
+nettoyage ni aucune autorisation. La reproduction locale valide le correctif de
+temporisation ; la qualification du nouvel essai serveur reste à effectuer.
+
 La version 0.40 ajoute un `reasoning_effort` optionnel au travail de
 développement sélectionné : `low`, `medium`, `high` ou `xhigh`. Ce choix est
 scellé avant l'inférence et transmis au CLI pour les tours initiaux et repris.
