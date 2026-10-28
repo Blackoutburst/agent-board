@@ -19,7 +19,19 @@ FAILURE_NOTICE_CODES = frozenset({'development_run_requires_review',
     'planner_control_requires_review', 'planner_runtime_stopped',
     'planner_turns_budget_exhausted', 'planner_actions_budget_exhausted',
     'planner_bytes_budget_exhausted',
-    'supervisor_authorization_expired', 'permission_revoked'})
+    'supervisor_authorization_expired', 'permission_revoked',
+    # Public worker/planner/action codes only; arbitrary text keeps the fallback.
+    'invalid_document', 'duplicate_document_key', 'invalid_planner_action',
+    'planner_response_too_large', 'action_not_allowed', 'path_not_allowed',
+    'invalid_patch', 'file_too_large', 'test_not_allowed',
+    'invalid_final_summary', 'planner_model_requires_review', 'planner_policy_changed',
+    'planner_reasoning_effort_changed', 'planner_authorization_changed', 'planner_controller_stopped',
+    'planner_stop_requested', 'planner_runtime_scope_changed', 'planner_prompt_too_large',
+    'planner_wall_budget_exhausted', 'planner_tool_finish_unconfirmed', 'planner_reconciliation_required',
+    'planner_directory_changed', 'planner_clock_changed', 'planner_disabled',
+    'final_test_proof_missing', 'final_test_receipt_changed', 'planner_model_receipt_unavailable',
+    'planner_tool_receipt_unavailable', 'planner_effect_requires_review', 'planner_recovered_effect_requires_review',
+})
 
 
 def failure_notice(code, cleanup_confirmed=False):

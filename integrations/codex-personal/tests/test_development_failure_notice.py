@@ -232,7 +232,8 @@ def test_pool_message_denied_retains_exact_failure_without_auth_retry(pool_case,
     assert not any(p['name']=='register_agent' for m,p in s.transport.calls[boundaries[0]:] if m=='tools/call')
 
 
-@pytest.mark.parametrize('reason',['development_context_changed','PRIVATE_UNKNOWN_REASON'])
+@pytest.mark.parametrize('reason',['development_context_changed','invalid_planner_action',
+    'planner_model_requires_review','PRIVATE_UNKNOWN_REASON'])
 def test_known_run_exception_notified_with_closed_projection_and_same_original(pool_case,monkeypatch,reason):
     s=pool_case;f=s.f;job,data=f.selected();error=DevelopmentError(reason)
     from blackoutburst_agents.development_worker import DevelopmentBoardWorker
@@ -249,7 +250,7 @@ def test_known_run_exception_notified_with_closed_projection_and_same_original(p
     assert jobs[0]['state']=='retained' and jobs[0]['cleanup_confirmed'] is None
     assert len(s.posts)==1 and all(before==after for before,after in s.snapshots)
     body=s.posts[0]['arguments']['body'];notice=json.loads(body.split('\n',1)[1])
-    assert notice['code']==(reason if reason=='development_context_changed' else 'development_run_requires_review')
+    assert notice['code']==(reason if reason!='PRIVATE_UNKNOWN_REASON' else 'development_run_requires_review')
     assert notice['cleanup_state']=='unknown' and 'PRIVATE' not in body
 
 
@@ -269,10 +270,11 @@ def test_conflicting_notice_intent_never_uses_a_new_key_or_mutates_old_evidence(
     assert (queue/'development-failure-notice-intent.json').read_bytes()==conflict
 
 
-def test_notice_uses_one_closed_snapshot_when_caller_mutates_before_serialization(case,monkeypatch):
+@pytest.mark.parametrize('code',['development_context_changed','invalid_planner_action','planner_model_requires_review'])
+def test_notice_uses_one_closed_snapshot_when_caller_mutates_before_serialization(case,monkeypatch,code):
     # Regression for the independent review's concurrent-mutation finding.
     from blackoutburst_agents import development_client as client_module
-    s=case;notice=failure_notice('development_context_changed');original=client_module.canonical
+    s=case;notice=failure_notice(code);original=client_module.canonical
     def mutate_before_encoding(value):
         notice['raw']='PRIVATE_CONCURRENT_CALLER_DATA'
         notice['code']='PRIVATE_CHANGED_REASON'
@@ -282,7 +284,7 @@ def test_notice_uses_one_closed_snapshot_when_caller_mutates_before_serializatio
     assert receipt['message_id']==messages(s)[0]['id']
     body=messages(s)[0]['body']
     assert 'PRIVATE' not in body
-    assert json.loads(body.split('\n',1)[1])==failure_notice('development_context_changed')
+    assert json.loads(body.split('\n',1)[1])==failure_notice(code)
     assert s.calls[-1][1]['arguments']['view']=='full'
 
 
@@ -308,3 +310,44 @@ def test_real_planner_budget_refusal_codes_survive_the_closed_wire_projection(ca
     assert data=={'schema':1,'phase':'worker_run','code':code,'cleanup_state':'unknown'}
     assert s.board.get_ticket(s.human,s.ticket['id'])==before
     assert s.board.get_runtime(s.human)==runtime
+
+
+@pytest.mark.parametrize('code',[
+    'invalid_document', 'duplicate_document_key', 'invalid_planner_action',
+    'planner_response_too_large', 'action_not_allowed', 'path_not_allowed',
+    'invalid_patch', 'file_too_large', 'test_not_allowed',
+    'invalid_final_summary', 'planner_model_requires_review', 'planner_policy_changed',
+    'planner_reasoning_effort_changed', 'planner_authorization_changed', 'planner_controller_stopped',
+    'planner_stop_requested', 'planner_runtime_scope_changed', 'planner_prompt_too_large',
+    'planner_wall_budget_exhausted', 'planner_tool_finish_unconfirmed', 'planner_reconciliation_required',
+    'planner_directory_changed', 'planner_clock_changed', 'planner_disabled',
+    'final_test_proof_missing', 'final_test_receipt_changed', 'planner_model_receipt_unavailable',
+    'planner_tool_receipt_unavailable', 'planner_effect_requires_review', 'planner_recovered_effect_requires_review',
+])
+def test_static_planner_failure_codes_are_visible_without_changing_claim_or_runtime(case,code):
+    s=case;ticket=s.board.get_ticket(s.human,s.ticket['id']);runtime=s.board.get_runtime(s.human)
+    notice=failure_notice(code)
+    result=s.client.post_failure_notice(thread_id=s.thread,idempotency_key=s.key,notice=notice)
+    stored=messages(s)[0]
+    assert result['message_id']==stored['id']
+    assert json.loads(stored['body'].split('\n',1)[1])=={
+        'schema':1,'phase':'worker_run','code':code,'cleanup_state':'unknown'}
+    assert s.board.get_ticket(s.human,s.ticket['id'])==ticket
+    assert s.board.get_runtime(s.human)==runtime
+    assert all(params['name']=='post_message' for method,params in s.calls[-1:] if method=='tools/call')
+
+
+@pytest.mark.parametrize('value',['planner_private_secret','invalid_planner_action: PRIVATE_TOKEN',
+    'planner_model_requires_review /private/user/file','invalid_document_private','PRIVATE_UNKNOWN_REASON',
+    {'code':'invalid_document'},DevelopmentError('invalid_planner_action')])
+def test_unlisted_or_private_codes_stay_generic_without_exception_stringification(value):
+    assert failure_notice(value,True)=={'schema':1,'phase':'worker_run',
+        'code':'development_run_requires_review','cleanup_state':'confirmed'}
+
+
+@pytest.mark.parametrize('cleanup',[None,False,0,1,'true',[],{},object()])
+def test_precise_code_never_turns_unknown_cleanup_into_confirmed(cleanup):
+    first=failure_notice('invalid_planner_action',cleanup)
+    assert first=={'schema':1,'phase':'worker_run','code':'invalid_planner_action','cleanup_state':'unknown'}
+    first['code']='PRIVATE_MUTATED_COPY'
+    assert failure_notice('invalid_planner_action',cleanup)['code']=='invalid_planner_action'
