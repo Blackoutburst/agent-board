@@ -1862,7 +1862,7 @@ const Workspace = (() => {
             if (updated.id !== saved.id || updated.owner_id !== owner || updated.version !== saved.version + 1
                 || !Array.isArray(actions) || !Array.isArray(resources)
                 || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
-                || !actions.includes("agent.profile.read") || !resources.includes(`agent-profiles:${owner}`)
+                || enabled && (!actions.includes("agent.profile.read") || !resources.includes(`agent-profiles:${owner}`))
                 || actions.includes("agent.profile.release_claim") !== enabled) {
               throw new Error("Réponse de délégation incomplète ou incohérente.");
             }

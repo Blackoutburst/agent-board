@@ -131,6 +131,26 @@ const profile = (claim = false) => ({
     assert.deepEqual(result.requests.map(r => [r.method, r.data.expected_version, r.data.enabled]), [['PATCH', 8, undefined], ['PUT', 9, false]]);
     assert.equal(result.current.policy.actions.includes(claimGrant), false);
 
+    for (const [field, value] of [
+      ['actions', [...baseGrants.filter(grant => grant !== 'agent.profile.read'), claimGrant].join('\n')],
+      ['resources', ''],
+    ]) {
+      await load(profile(true));
+      await dialog().getByText('Profile permissions', { exact: true }).click();
+      await dialog().getByText('Legacy action limits', { exact: true }).click();
+      await dialog().getByLabel(field === 'actions' ? 'Allowed actions (one per line)' : 'Allowed resources (one per line)', { exact: true }).fill(value);
+      await claims().uncheck();
+      result = await save();
+      assert.equal(result.completed, 1, `Claim revocation is confirmed after removing ${field} authority in the same save`);
+      assert.equal(await dialog().isVisible(), false, 'A committed revocation does not open recovery');
+      assert.deepEqual(result.requests.map(r => [r.method, r.data.expected_version, r.data.enabled]), [['PATCH', 8, undefined], ['PUT', 9, false]]);
+      assert.ok(result.requests[1].url.endsWith('/claim-management'));
+      assert.equal(result.current.version, 10);
+      assert.equal(result.current.policy.actions.includes(claimGrant), false);
+      if (field === 'actions') assert.equal(result.current.policy.actions.includes('agent.profile.read'), false);
+      else assert.deepEqual(result.current.policy.resources, []);
+    }
+
     const readOnlyManager = profile();
     readOnlyManager.policy.actions = ['agent.profile.read'];
     await load(readOnlyManager);
@@ -179,6 +199,6 @@ const profile = (claim = false) => ({
       assert.equal(await page.evaluate(() => window.requests.length), 2);
     }
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ status: 'passed', browser: 'Firefox', cases: ['default-denied', 'template-no-grant', 'separate-grants', 'chained-versions', 'claim-revoke', 'base-revoke', 'legacy-disabled', 'unchanged-no-retry', 'lost-response', 'incoherent-response-recovery'], network: 'none' }));
+    console.log(JSON.stringify({ status: 'passed', browser: 'Firefox', cases: ['default-denied', 'template-no-grant', 'separate-grants', 'chained-versions', 'claim-revoke', 'claim-revoke-without-read', 'claim-revoke-without-resource', 'base-revoke', 'legacy-disabled', 'unchanged-no-retry', 'lost-response', 'incoherent-response-recovery'], network: 'none' }));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
