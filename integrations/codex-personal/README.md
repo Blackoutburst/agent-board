@@ -168,3 +168,5 @@ La version 0.8 raccorde les questions au journal événements : la réponse repr
 
 La [mémoire explicite de décisions](MEMORY.md) permet d’épingler une ancienne source humaine du ticket, de la relire exactement avant les tours, puis de consulter/corriger/réinitialiser ses résumés localement. Elle reste optionnelle, bornée et séparée des profils, caches et sessions fournisseur.
 La [politique optionnelle du planificateur](PLANNER_POLICY.md) fournit un dossier vide distinct du checkout et une politique de commandes en lecture seule, après qualification locale explicite sur Mac. Le transport habituel reste inchangé ; cette bibliothèque n’active ni modèle, ni développement, ni listener automatiquement.
+
+La version 0.43 rapproche aussi le nettoyage d’une finalisation refusée avant son reçu d’inspection. Elle termine uniquement sa réservation Runtime en état bloqué, après vérification des identités, de l’absence d’opération de test ou de patch pour cette action et du nettoyage de tous les modèles. Le résultat reste à examiner ; aucun test, modèle ou patch n’est rejoué.

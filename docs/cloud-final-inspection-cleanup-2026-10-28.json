@@ -1,0 +1,19 @@
+{
+  "adapter_version": "0.43.0",
+  "board_version": "2.17.4",
+  "change": "Identity-only reconciliation of a non-dispatching final inspection that failed before producing its receipt",
+  "outcome": "blocked Runtime cleanup only; planner, tests, work status, ticket and claim unchanged",
+  "requirements": [
+    "validated exact planner and broker identity",
+    "no broker operation for final action key",
+    "all model cleanup confirmed",
+    "normal authenticated Runtime receipts"
+  ],
+  "validation": {
+    "passed": 135,
+    "skipped": 1,
+    "subtests_passed": 20
+  },
+  "cloud_pilot": "not yet successful",
+  "automatic_continuation": "under development in ticket 60"
+}
