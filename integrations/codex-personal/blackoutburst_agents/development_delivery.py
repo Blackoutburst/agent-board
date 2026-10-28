@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .dev_journal import DevelopmentJournal, PrivateDirectory, decode
 from .dev_manifest import DevelopmentError, canonical, digest, relative_path, sha256, validate_manifest
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerJournal
 from .dev_runtime import DevelopmentRuntimeGuard, development_work_id
 from .development_worker import DevelopmentBoardWorker
@@ -119,6 +119,10 @@ class DevelopmentDeliveryProof:
             pins={key:pins[key] for key in ('broker','runs','runtime')},model=config['model'],instruction=config['instruction'],
             budgets=op['payload']['planner_budgets'],context=op['payload']['context'],parent_operation=parent_scope)
         expected['pins']['planner'] = pins['planner_workspace']
+        if 'reasoning_effort' in config:
+            reasoning = _reasoning_configuration(config['reasoning_effort'])
+            if not reasoning: fail()  # None is represented by absence, never a stored optional value.
+            expected.update(reasoning)
         validator = object.__new__(PlannerJournal)
         validator.operation_id, validator.configuration, validator.fingerprint = self.operation_id, expected, digest(canonical(expected))
         validator.validate(planner)
