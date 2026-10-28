@@ -5,18 +5,21 @@ wildcard, device capability or management tool argument never grants authority.
 There is no credential, device binding, Runtime or server-management API here.
 """
 import json
+import math
 import secrets
 import time
 
 from profiles import DEFAULT_POLICY,_insert_profile
-from projects import _fail,_json,_version
+from projects import _fail,_json,_text,_version
 
 MANAGEMENT_ACTIONS=('agent.profile.read','agent.profile.create','agent.profile.update','agent.profile.archive')
+CLAIM_RELEASE_ACTION='agent.profile.release_claim'
 MANAGEMENT_PREFIX='agent.profile.'
 RESOURCE_PREFIX='agent-profiles:'
 AUTONOMY={'responses':0,'requested':1,'queue':2}
 PROFILE_MANAGEMENT_TOOLS=frozenset({'list_managed_agent_profiles','get_managed_agent_profile',
-    'create_managed_agent_profile','update_managed_agent_profile','archive_managed_agent_profile'})
+    'create_managed_agent_profile','update_managed_agent_profile','archive_managed_agent_profile',
+    'release_managed_agent_claim'})
 
 
 def _identity(value):
@@ -32,9 +35,12 @@ def validate_profile_management_arguments(name,args):
     elif name in ('update_managed_agent_profile','archive_managed_agent_profile'):
         allowed|={'profile_id','expected_version','idempotency_key'};required|={'profile_id','expected_version','idempotency_key'}
         if name=='update_managed_agent_profile':allowed.add('changes');required.add('changes')
+    elif name=='release_managed_agent_claim':
+        fields={'ticket_id','expected_version','idempotency_key','reason','recovery_evidence'}
+        allowed|=fields;required|=fields
     else:_fail('Unknown management tool')
     if type(args) is not dict or set(args)-allowed or not required<=set(args):_fail('Supply only management tool fields')
-    for key in ('session_id','profile_id','idempotency_key'):
+    for key in ('session_id','profile_id','ticket_id','idempotency_key'):
         if key in args:_identity(args[key])
     if 'view' in args and (type(args['view']) is not str or args['view'] not in ('full','compact')):_fail('Invalid management view')
     if 'expected_version' in args:_version(args['expected_version'])
@@ -43,6 +49,8 @@ def validate_profile_management_arguments(name,args):
     if 'include_archived' in args and type(args['include_archived']) is not bool:_fail('include_archived must be boolean')
     if 'limit' in args and (type(args['limit']) is not int or not 1<=args['limit']<=100):_fail('Invalid management page size')
     if args.get('cursor') is not None:_identity(args['cursor'])
+    for key in ('reason','recovery_evidence'):
+        if key in args:_text(args[key],key,1,20000)
 
 
 def management_resource(owner_id):return RESOURCE_PREFIX+owner_id
@@ -181,6 +189,121 @@ class ProfileManagementMixin:
             self._remember(db,actor,'managed_profile_archive',idempotency_key,payload,_json(result))
             self._audit(db,actor,'managed_agent_profile_archived',dict(profile_id=profile_id,manager_profile_id=manager['id'],version=expected_version+1))
             return result
+
+    def release_managed_agent_claim(self,actor,ticket_id,expected_version,idempotency_key,reason,recovery_evidence):
+        """Release an inspected, expired ordinary-agent claim within delegation.
+
+        This edits responsibility only. It never stops, resumes or completes an
+        execution, fabricates cleanup, clears Runtime capacity or reassigns work.
+        """
+        _version(expected_version);_identity(ticket_id);_identity(idempotency_key)
+        reason=_text(reason,'reason',1,20000)
+        recovery_evidence=_text(recovery_evidence,'recovery_evidence',1,20000)
+        payload=dict(ticket_id=ticket_id,expected_version=expected_version,
+            reason=reason,recovery_evidence=recovery_evidence)
+        with self._tx() as db:
+            actor,manager,ceiling=self._profile_manager(db,actor,CLAIM_RELEASE_ACTION)
+            if ceiling.get('allow_read') is not True:_fail('managed_claim_read_permission_required',403)
+            row=self._ticket_member(db,actor,ticket_id)
+            try:claimant=json.loads(row['claimant']) if row['claimant'] else None
+            except (ValueError,TypeError):_fail('managed_claim_source_mismatch',409)
+            previous=self._retry(db,actor,'managed_agent_claim_release',idempotency_key,payload)
+            if previous is not None:
+                # Revalidate the original managed target, never release a later
+                # claimant merely because the same retry key is presented.
+                saved=json.loads(previous)
+                target=self._managed_target(db,actor,manager,ceiling,saved['profile_id'])
+                self._managed_claim_ticket_scope(row,target,ceiling)
+                return self._ticket(row,db)
+            if row['version']!=expected_version:_fail('managed_claim_version_conflict',409)
+            if row['status']=='done':_fail('managed_claim_completed',409)
+            if (type(claimant) is not dict or claimant.get('kind')!='agent'
+                    or claimant.get('owner_id')!=actor['owner_id']
+                    or type(claimant.get('session_id')) is not str):
+                _fail('managed_claim_ordinary_agent_required',403)
+            source=db.execute('SELECT * FROM sessions WHERE id=? AND owner_id=?',
+                (claimant['session_id'],actor['owner_id'])).fetchone()
+            if (source is None or not source['agent_id']
+                    or claimant.get('device_id')!=source['device_id']
+                    or ('agent_id' in claimant and claimant['agent_id']!=source['agent_id'])
+                    or ('profile_version' in claimant and (type(claimant['profile_version']) is not int
+                        or claimant['profile_version']!=source['profile_version']))):
+                _fail('managed_claim_source_mismatch',403)
+            target=self._managed_target(db,actor,manager,ceiling,source['agent_id'])
+            self._managed_claim_ticket_scope(row,target,ceiling)
+            prior=db.execute('SELECT snapshot FROM agent_profile_versions WHERE profile_id=? AND version=?',
+                (target['id'],source['profile_version'])).fetchone()
+            try:
+                prior=json.loads(prior['snapshot']) if prior else None
+                if (type(prior) is not dict or prior.get('id')!=target['id']
+                        or prior.get('owner_id')!=actor['owner_id'] or prior.get('legacy') is not False
+                        or type(prior.get('version')) is not int or prior['version']!=source['profile_version']
+                        or type(prior.get('policy')) is not dict or type(prior.get('project_ids')) is not list):
+                    _fail('managed_claim_source_profile_outside_scope',403)
+                self._profile_values(db,actor,dict(policy=prior['policy'],project_ids=prior['project_ids']))
+                if _is_management({'policy':_json(prior['policy'])}):
+                    _fail('managed_claim_source_profile_outside_scope',403)
+                self._managed_bounds(db,actor,manager,ceiling,prior['policy'],prior['project_ids'])
+                if (row['project_id'] not in prior['project_ids'] or row['resource'] and
+                        row['resource'] not in prior['policy']['resources']):
+                    _fail('managed_claim_source_profile_outside_scope',403)
+            except (ValueError,TypeError,KeyError):_fail('managed_claim_source_profile_outside_scope',403)
+            if (row['assignee_owner_id'] not in (None,actor['owner_id'])
+                    or row['assignee_agent_id'] not in (None,target['id'])):
+                _fail('managed_claim_assigned_elsewhere',403)
+            expiry=row['lease_expires_at']
+            if type(expiry) not in (int,float) or not math.isfinite(expiry) or expiry>time.time():
+                _fail('managed_claim_lease_not_expired',409)
+            if db.execute('''SELECT 1 FROM runtime_executions WHERE ticket_id=?
+                AND (state IS NOT 'finished' OR cleanup_confirmed IS NOT 1) LIMIT 1''',
+                (ticket_id,)).fetchone():
+                _fail('managed_claim_runtime_unresolved',409)
+            now=time.time();next_status='todo' if row['status']=='in_progress' else row['status']
+            db.execute('''UPDATE tickets SET status=?,claimant=NULL,claim_started_version=NULL,
+                lease_expires_at=NULL,version=version+1,updated_at=? WHERE id=? AND version=?''',
+                (next_status,now,ticket_id,expected_version))
+            db.execute('UPDATE projects SET updated_at=? WHERE id=?',(now,row['project_id']))
+            self._remember(db,actor,'managed_agent_claim_release',idempotency_key,payload,
+                _json(dict(ticket_id=ticket_id,profile_id=target['id'])))
+            self._audit(db,actor,'managed_agent_claim_released',dict(payload,
+                manager_profile_id=manager['id'],target_profile_id=target['id'],
+                source_session_id=source['id'],source_profile_version=source['profile_version'],
+                version=expected_version+1))
+            return self._ticket(self._ticket_member(db,actor,ticket_id),db)
+
+    @staticmethod
+    def _managed_claim_ticket_scope(row,target,ceiling):
+        policy=json.loads(target['policy']);projects=json.loads(target['project_ids'])
+        if (row['project_id'] not in projects or row['resource'] and
+                (row['resource'] not in ceiling['resources'] or row['resource'] not in policy['resources'])):
+            _fail('managed_claim_ticket_outside_scope',403)
+
+    def set_agent_profile_claim_management(self,actor,profile_id,expected_version,enabled):
+        """Human-only, separate opt-in; existing profile managers gain nothing."""
+        _version(expected_version)
+        if type(enabled) is not bool:_fail('enabled must be a boolean')
+        with self._tx() as db:
+            actor=self._human(db,actor);row=self._profile_owned(db,actor,profile_id)
+            if row['version']!=expected_version:_fail('Agent profile changed; reload before granting claim management',409)
+            policy=json.loads(row['policy']);owner=json.loads(self._owner(db,actor['owner_id'])['policy'])
+            resource=management_resource(actor['owner_id'])
+            if enabled:
+                if (row['legacy'] or json.loads(row['project_ids']) is None
+                        or any(owner.get(key) is not True for key in ('enabled','allow_read','allow_requests'))
+                        or not policy['allow_read'] or not policy['allow_requests'] or policy['autonomy']=='responses'
+                        or any('agent.profile.read' not in value['actions'] or resource not in value['resources']
+                            for value in (policy,owner))):
+                    _fail('Claim management needs an explicit scoped profile-management grant',403)
+                policy['actions']=list(dict.fromkeys([*policy['actions'],CLAIM_RELEASE_ACTION]))
+                owner['actions']=list(dict.fromkeys([*owner['actions'],CLAIM_RELEASE_ACTION]))
+                if len(policy['actions'])>100 or len(owner['actions'])>100:_fail('Management grants exceed the action/resource limit')
+                owner.update(granted_by=actor['owner_id'],granted_at=time.time())
+                db.execute('UPDATE owners SET policy=? WHERE id=?',(_json(owner),actor['owner_id']))
+            else:policy['actions']=[value for value in policy['actions'] if value!=CLAIM_RELEASE_ACTION]
+            self._write_profile(db,profile_id,{'policy':policy})
+            self._audit(db,actor,'agent_claim_management_granted' if enabled else 'agent_claim_management_revoked',
+                dict(profile_id=profile_id,version=expected_version+1,action=CLAIM_RELEASE_ACTION,resource=resource))
+            return self._profile_view(db,self._profile_owned(db,actor,profile_id))
 
     def set_agent_profile_management(self,actor,profile_id,expected_version,enabled):
         """Human-only grant/revoke; never binds a device or changes identity."""

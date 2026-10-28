@@ -38,11 +38,21 @@ available for other explicitly authorized Leads; legacy `*` profiles never gain
 management by inheritance. Profile version changes require the normal explicit
 session refresh before future work.
 
+Claim recovery has a **separate, optional human grant**, disabled by default.
+In the same profile editor, select **Libérer les réservations expirées des
+agents gérés** after enabling profile management. The human-only endpoint
+`PUT /api/agent-profiles/{profile_id}/claim-management` accepts the same
+`expected_version`/`enabled` body. It adds only `agent.profile.release_claim`
+to this profile and the account ceiling; existing Leads receive nothing
+automatically. Clearing the base Management checkbox also removes this grant.
+An agent cannot use a profile create/update operation to delegate it onwards.
+
 ## MCP tools
 
 All calls require the registered `session_id`; the server derives the owner,
 device and profile from authentication. Optional `view` is `full` or `compact`.
-The mutation and individual read defaults preserve the exact full profile.
+Profile mutation and individual read defaults preserve the exact full profile.
+Claim release returns the normal compact ticket view unless `view=full` is chosen.
 
 | Tool | Arguments in addition to session_id |
 | --- | --- |
@@ -51,6 +61,7 @@ The mutation and individual read defaults preserve the exact full profile.
 | `create_managed_agent_profile` | `profile` JSON object including `name`, `idempotency_key` and editable profile fields |
 | `update_managed_agent_profile` | `profile_id`, integer `expected_version`, `idempotency_key`, `changes` JSON object |
 | `archive_managed_agent_profile` | `profile_id`, integer `expected_version`, `idempotency_key` |
+| `release_managed_agent_claim` | `ticket_id`, integer `expected_version`, `idempotency_key`, nonempty `reason` and `recovery_evidence` |
 
 Creation produces an **unbound ordinary profile**. Text, project scope, preferences,
 permission switches and literal actions/resources use the existing profile
@@ -73,6 +84,33 @@ target bounds. A retry does not overwrite a later human edit. Read the current
 profile before composing another change. A different payload with that key or a
 fresh mutation with an old version conflicts. Owner/profile revocation applies
 before idempotent retries as well.
+
+## Expired claim recovery
+
+`release_managed_agent_claim` requires current read/work permissions, its explicit
+stored and effective action, and the exact owner management resource. Both the
+current target profile and the immutable source-session profile version must
+be ordinary profiles within the Lead's current owner/project/grant ceiling.
+The ticket's project and nonempty resource must remain authorized by both
+profiles and the Lead. A historical Management claim cannot become manageable
+merely by removing that profile's management grant later. Missing or incomplete
+source identity/version records are refused.
+
+The tool refuses human claims, live or unknown leases, completed tickets, and
+**any unresolved Runtime execution on the ticket**, including another agent or
+owner. A Runtime must be finished with confirmed cleanup; null/unknown values
+do not qualify. If no Runtime history exists, the caller must still inspect
+prior effects and supply concrete evidence. Missing records or lease expiry
+alone are not proof that an OS process stopped.
+
+On success, only the claim/lease is cleared and the ticket version advances;
+`in_progress` becomes `todo`, while other statuses, assignments, progress,
+results, evidence, dependencies and human requests remain intact. The operation
+does not stop a process, reset Runtime capacity, resume work or complete a task.
+It records the manager, source session/profile version, reason and evidence in
+the audit. After a lost response, retry the exact key and payload: it returns the
+current permitted ticket without clearing any newer claim. Read again before
+requesting a different effect.
 
 ## Archive and cleanup
 
