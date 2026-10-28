@@ -287,3 +287,26 @@ def test_normal_explicit_second_generation_preserves_original_base_and_parent_ch
     assert case.producer.verify(second['checkpoint_id'])['checkpoint_sha256']==second['checkpoint_sha256']
     git(old_root,'update-ref',first['ref'],case.base_commit)
     with pytest.raises(DevelopmentError):case.producer.verify(second['checkpoint_id'])
+
+
+@pytest.mark.parametrize('when',['ref','projection'])
+def test_scope_revocation_after_ref_effect_retains_unknown_intent_without_seal(live_case,monkeypatch,when):
+    case=live_case;command=case.workspaces._git;original=case.on_checkpoint;revoked=[]
+    def revoke(args,**kwargs):
+        result=command(args,**kwargs)
+        if not revoked and ((when=='ref' and args[0]=='update-ref') or
+                (when=='projection' and args[:2]==['cat-file','commit'])):
+            revoked.append(True)
+            case.board.set_policy(case.human,True,False,True,True,[],[])
+        return result
+    monkeypatch.setattr(case.workspaces,'_git',revoke)
+    captured=[]
+    def capture(proof):
+        with pytest.raises(DevelopmentError):original(proof)
+        captured.append(True)
+    case.on_checkpoint=capture;case.worker.run(case.operation)
+    assert revoked==captured==[True] and not case.capture_results
+    assert git(case.root,'for-each-ref','--format=%(refname)','refs/blackoutburst/private-checkpoints/')
+    with pytest.raises(DevelopmentError,match='private_checkpoint_interrupted_requires_review'):
+        case.producer.verify(case.checkpoint_id)
+    assert git(case.root,'rev-parse','HEAD')==case.base_commit

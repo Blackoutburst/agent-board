@@ -330,7 +330,9 @@ class PrivateDevelopmentCheckpointController:
                     if (value['intent']['operation_id']!=operation_id or value['intent']['proof']!=observation
                             or value['intent']['parent_checkpoint_id']!=parent_checkpoint_id):fail('private_checkpoint_request_conflict')
                     proof.recheck(observation)
-                    return self._sealed(private,value)
+                    result=self._sealed(private,value)
+                    proof.recheck(observation)
+                    return result
                 files,entries,changes=self._snapshot(root,observation)
                 metadata=self.workspaces._copy_metadata(root)
                 epoch=int(time.time())
@@ -361,6 +363,11 @@ class PrivateDevelopmentCheckpointController:
                 ref='refs/blackoutburst/private-checkpoints/'+digest(self.configuration['task_id'].encode())[:32]+'/'+checkpoint_id
                 self.workspaces._git(['update-ref',ref,commit,'0'*len(commit)],cwd=root)
                 self.workspaces._fsync_tree(root/'.git')
+                # A lost/revoked live boundary after the ref effect is still
+                # uncertain. Retain committing intent/ref; never manufacture a
+                # fresh successful seal or roll that effect back.
+                proof.recheck(observation)
+                self._binding(observation,source,root,parent)
                 self.workspaces._ready(source)
                 if self._snapshot(root,observation)[1]!=entries:fail('private_checkpoint_source_changed')
                 value['seal']={'schema':SEAL_SCHEMA,'checkpoint_id':checkpoint_id,'configuration_sha256':self.configuration_sha256,
@@ -370,5 +377,8 @@ class PrivateDevelopmentCheckpointController:
                     'snapshot_sha256':digest(canonical(entries)),'source_snapshot_sha256':observation['source_snapshot_sha256'],
                     'proof_sha256':digest(canonical(observation)),'publishable':False}
                 value['checkpoint_sha256']=digest(canonical(value['seal']));value['phase']='sealed'
+                result=self._sealed(private,value)
+                proof.recheck(observation)
+                self._binding(observation,source,root,parent)
                 private.replace('checkpoint.json',canonical(value))
-                return {**self._sealed(private,value),'historical':False}
+                return {**result,'historical':False}
