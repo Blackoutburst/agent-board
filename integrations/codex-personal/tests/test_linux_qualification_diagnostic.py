@@ -187,7 +187,9 @@ def test_actual_preparer_callback_preserves_only_its_own_allowlisted_failure(tmp
         assert 0<=value['scope_check']['elapsed_ms']<=600000
         assert '/secret' not in str(value)
         failed=decode((Path(fixture.preparer.directory)/job['id']/'failed.json').read_bytes())
-        assert set(failed)=={'request_sha256','stage','reason'}
+        assert set(failed)=={'request_sha256','stage','reason','qualification_diagnostic'}
+        assert failed['qualification_diagnostic']==value
+        assert fixture.preparer.status(job['id'])['failure']==failed
     finally:fixture.pool.close()
 
 
@@ -240,3 +242,48 @@ def test_matrix_observer_failure_does_not_replace_qualification_error(monkeypatc
         with pytest.raises(DevelopmentError) as stopped:case.qualify()
         assert stopped.value is original
     finally:case.doCleanups()
+
+
+@pytest.mark.parametrize('projection',['valid','invalid','absent','observer_error'])
+def test_failure_projection_is_optional_closed_and_never_masks_original_error(tmp_path,monkeypatch,projection):
+    fixture=Fixture(tmp_path,monkeypatch)
+    try:
+        job,_,args=fixture.selected();original=DevelopmentError('linux_qualification_cleanup_unconfirmed')
+        if projection!='absent':
+            original._linux_backend_qualification_diagnostic=observation()
+            if projection=='invalid':original._linux_backend_qualification_diagnostic['private']='/PRIVATE/SECRET'
+        if projection=='observer_error':monkeypatch.setattr(q,'qualification_diagnostic',Mock(side_effect=RuntimeError('/PRIVATE/SECRET')))
+        def qualify(_backend):raise original
+        monkeypatch.setattr(preparation.SupervisedLinuxNamedPythonBackend,'qualify',qualify)
+        with pytest.raises(DevelopmentError) as stopped:fixture.prepare(job,args)
+        assert stopped.value is original
+        failed_path=Path(fixture.preparer.directory)/job['id']/'failed.json'
+        failed=decode(failed_path.read_bytes())
+        assert set(failed)==({'request_sha256','stage','reason','qualification_diagnostic'} if projection=='valid' else {'request_sha256','stage','reason'})
+        assert '/PRIVATE/SECRET' not in str(failed)
+        assert fixture.preparer.status(job['id'])['failure']==failed
+        if projection=='valid':
+            # The optional observation is historical only. An exact retry still
+            # refuses this failed preparation rather than adopting metadata.
+            before=failed_path.read_bytes()
+            with pytest.raises(DevelopmentError):fixture.prepare(job,args)
+            assert failed_path.read_bytes()==before
+    finally:fixture.pool.close()
+
+
+@pytest.mark.parametrize('change',['extra','unknown_code','wrong_stage'])
+def test_status_never_exports_an_invalid_optional_qualification_projection(tmp_path,monkeypatch,change):
+    fixture=Fixture(tmp_path,monkeypatch)
+    try:
+        job,_,args=fixture.selected();error=DevelopmentError('linux_qualification_cleanup_unconfirmed')
+        error._linux_backend_qualification_diagnostic=observation()
+        monkeypatch.setattr(preparation.SupervisedLinuxNamedPythonBackend,'qualify',Mock(side_effect=error))
+        with pytest.raises(DevelopmentError):fixture.prepare(job,args)
+        target=Path(fixture.preparer.directory)/job['id']/'failed.json';failed=decode(target.read_bytes())
+        if change=='extra':failed['qualification_diagnostic']['private']='/PRIVATE/SECRET'
+        elif change=='unknown_code':failed['qualification_diagnostic']['controller']['code']='/PRIVATE/SECRET'
+        else:failed['stage']='policy-qualification'
+        target.write_bytes(canonical(failed));before=target.read_bytes()
+        with pytest.raises(DevelopmentError):fixture.preparer.status(job['id'])
+        assert target.read_bytes()==before
+    finally:fixture.pool.close()
