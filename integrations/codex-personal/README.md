@@ -170,3 +170,5 @@ La [mémoire explicite de décisions](MEMORY.md) permet d’épingler une ancien
 La [politique optionnelle du planificateur](PLANNER_POLICY.md) fournit un dossier vide distinct du checkout et une politique de commandes en lecture seule, après qualification locale explicite sur Mac. Le transport habituel reste inchangé ; cette bibliothèque n’active ni modèle, ni développement, ni listener automatiquement.
 
 La version 0.43 rapproche aussi le nettoyage d’une finalisation refusée avant son reçu d’inspection. Elle termine uniquement sa réservation Runtime en état bloqué, après vérification des identités, de l’absence d’opération de test ou de patch pour cette action et du nettoyage de tous les modèles. Le résultat reste à examiner ; aucun test, modèle ou patch n’est rejoué.
+
+La version 0.44 conserve l’option explicite `reasoning_effort` lors de la reconstruction de la preuve de livraison. La preuve compare la configuration exacte du planificateur ; une option absente reste absente et une valeur stockée invalide est refusée. Les reçus de test, le contrôle de source et la livraison Git restent obligatoires.
