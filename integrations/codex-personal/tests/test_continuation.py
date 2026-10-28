@@ -457,3 +457,19 @@ def test_directory_sync_precedes_ack_and_failure_only_replays_historical_metadat
     value=start(case)
     assert value.permit is None and value.receipt['historical'] is True
     assert task.snapshot()['state']['revision']==1
+
+
+@pytest.mark.parametrize('when',['before_use','during_checks'])
+def test_delayed_or_slow_revalidation_cannot_enter_expired_cycle(case,when):
+    permit=start(case).permit;entered=[]
+    if when=='before_use':case['clock'][0]=160.
+    else:
+        def slow_check(context):case['clock'][0]=160.
+        case['checks'].callbacks=(*case['checks'].callbacks[:5],slow_check)
+    with pytest.raises(ContinuationError,match='continuation_cycle_limit'):
+        with permit.use():entered.append(True)
+    assert not entered
+    case['clock'][0]=100.
+    with pytest.raises(ContinuationError):
+        with permit.use():entered.append(True)
+    assert not entered

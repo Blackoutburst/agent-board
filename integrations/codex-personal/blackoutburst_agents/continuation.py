@@ -190,8 +190,11 @@ class LiveCyclePermit(_Ephemeral):
         context=self.task._context(snapshot,purpose='execute')
         self.take(self.task,context,self.payload_sha)
         require(state['phase']=='running' and state['stop_requested'] is False,'continuation_stopped')
+        cycle=state['current_cycle'];deadline=cycle['started_at']+self.task.configuration['cycle_limits']['max_wall_seconds']
+        require(self.task._time(cycle)<deadline,'continuation_cycle_limit')
         self.task.checks.verify(context)
         require(self.task.journal.snapshot()==snapshot,'continuation_permit_stale')
+        require(self.task._time(cycle)<deadline,'continuation_cycle_limit')
         yield context
 
 
