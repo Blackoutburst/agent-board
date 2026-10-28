@@ -717,7 +717,12 @@ class SupervisedLinuxNamedPythonBackend:
             private.create('script.py', script); private.create('input.packet', inputs)
             os.mkdir('root', 0o700, dir_fd=private.fd); os.fsync(private.fd)
             nonce = uuid.uuid4().hex
-            try:first = _fresh_control_window(authorize_current, nonce=nonce, sequence=1)
+            try:
+                # Finish local launch preflight before collecting the initial
+                # lease. authorize_current still checks pins inside that timed
+                # collection; no later pin walk consumes its startup margin.
+                self._pins()
+                first = _fresh_control_window(authorize_current, nonce=nonce, sequence=1)
             except (DevelopmentError,OSError) as error:
                 observe_refusal('initial_window',error);raise
             job = {'schema': KIND, 'nonce': nonce, 'request': request,
@@ -731,7 +736,6 @@ class SupervisedLinuxNamedPythonBackend:
                 'source_challenge': None, 'native_receipt_sha256': None}
             private.create('state.json', canonical(state))
             if observation is not None:observation['phase']=state['phase']
-            self._pins()
             # Durable ambiguity is already committed; never replay even on Popen error.
             child = subprocess.Popen(helper_command(self.plan, 'supervise', directory),
                 cwd=private.path, env={'LANG': 'C.UTF-8', 'PATH': '/usr/bin:/bin'},

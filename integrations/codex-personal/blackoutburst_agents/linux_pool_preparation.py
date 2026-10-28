@@ -356,7 +356,14 @@ class LinuxPoolJobPreparer:
                 return {**bound,'preparation_sha256':request_sha,'historical':False}
             except Exception as error:
                 reason=error.code if isinstance(error,DevelopmentError) else 'linux_pool_preparation_failed'
-                try:self._record(private,'failed.json',{'request_sha256':request_sha,'stage':stage,'reason':reason})
+                failure={'request_sha256':request_sha,'stage':stage,'reason':reason}
+                if stage=='backend-qualification':
+                    try:
+                        from .linux_execution_qualification import qualification_diagnostic
+                        observation=qualification_diagnostic(vars(error).get('_linux_backend_qualification_diagnostic'))
+                        if observation is not None:failure['qualification_diagnostic']=observation
+                    except Exception:pass
+                try:self._record(private,'failed.json',failure)
                 except Exception:pass
                 raise
 
@@ -372,5 +379,12 @@ class LinuxPoolJobPreparer:
                     'status':'prepared' if 'complete.json' in names else 'needs_review'}
             if 'complete.json' in names:
                 self._complete(self._read(private,'complete.json'),intent['request_sha256'],operation_id,intent['request']['job']['session_id'])
-            if 'failed.json' in names:result['failure']=self._read(private,'failed.json')
+            if 'failed.json' in names:
+                failure=self._read(private,'failed.json')
+                if type(failure) is dict and 'qualification_diagnostic' in failure:
+                    from .linux_execution_qualification import qualification_diagnostic
+                    observed=qualification_diagnostic(failure['qualification_diagnostic'])
+                    if observed is None or failure.get('stage')!='backend-qualification':fail()
+                    failure={**failure,'qualification_diagnostic':observed}
+                result['failure']=failure
             return result
