@@ -485,7 +485,7 @@ def execute_turn(
         result.update(status="cancelled" if failure == "cancelled" else "blocked", reason=failure)
     else:
         result.update(status="completed", reason="verified", text=final_message)
-    if (provider_disposition and on_provider_observation is not None
+    if (provider_disposition
             and terminal_failure is not None and failure == terminal_failure
             and natural_exit and stream_eof == {'stdout', 'stderr'}
             and type(process.returncode) is int and process.returncode >= 0
@@ -497,9 +497,14 @@ def execute_turn(
         if late_failure is not None:
             result.update(status='cancelled' if late_failure == 'cancelled' else 'blocked', reason=late_failure)
         else:
-            from .provider_disposition import _issue_terminal_observation
-            try:
-                on_provider_observation(_issue_terminal_observation(result, terminal_event_sha256))
-            except Exception:
-                result.update(status='blocked', reason='callback_failed')
+            # The prose is not a typed quota/authentication observation. Only
+            # this fully closed opt-in stream loses the legacy heuristic cause;
+            # Runtime must not globally pause an owner on that unproved label.
+            result['reason'] = 'execution_failed'
+            if on_provider_observation is not None:
+                from .provider_disposition import _issue_terminal_observation
+                try:
+                    on_provider_observation(_issue_terminal_observation(result, terminal_event_sha256))
+                except Exception:
+                    result.update(status='blocked', reason='callback_failed')
     return result
