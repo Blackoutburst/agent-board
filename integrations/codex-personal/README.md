@@ -29,6 +29,20 @@ produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
 l’[état des travailleurs serveur](CLOUD-WORKERS.md).
 
+La version 0.40 ajoute un `reasoning_effort` optionnel au travail de
+développement sélectionné : `low`, `medium`, `high` ou `xhigh`. Ce choix est
+scellé avant l'inférence et transmis au CLI pour les tours initiaux et repris.
+Son omission conserve le comportement et les empreintes historiques. Il ne
+change ni modèle, ni fournisseur, ni délais, et ne garantit pas la disponibilité
+de ce réglage pour un modèle donné. Le routage personnel décrit dans
+[MODELS.md](MODELS.md) conserve son contrat distinct.
+
+Un échec d'envoi de notification au board produit aussi une observation fermée
+dans le journal du service et la file privée : phase et catégorie d'erreur,
+sans texte de modèle, contenu d'exception ou donnée de connexion. Une réponse
+perdue conserve un état d'envoi inconnu ; elle ne prouve pas l'absence du
+message sur le board. Cette observation ne remplace pas le résultat du codeur.
+
 Depuis 0.31.0, le raccord propriétaire [B/Host5](MESSAGE_APPEND_HOST5.md) permet
 d’ajouter une cible de messages inactive depuis un slot personnel déjà
 appairé et préparé. Il exige la source compatible et le catalogue C0 explicitement

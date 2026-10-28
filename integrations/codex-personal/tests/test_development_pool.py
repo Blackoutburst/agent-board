@@ -417,7 +417,7 @@ class PoolDevelopmentTests(unittest.TestCase):
         application=create_app(self.base/'board',base_url='https://board.test',filebrowser_url='')
         with TestClient(application) as browser:
             def rpc(channel,method,params):
-                calls.append(deepcopy(params))
+                if method=='tools/call':calls.append(deepcopy(params))
                 response=browser.post('/mcp',headers={'Authorization':'Bearer '+channel._config['token'],
                     'Accept':'application/json, text/event-stream'},json={'jsonrpc':'2.0','id':1,
                         'method':method,'params':params})

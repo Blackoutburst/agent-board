@@ -43,6 +43,9 @@ directory. It has exactly these fields:
 - `instruction_file`: absolute owned regular 0600 text file in an owned 0700
   directory, at most 16384 bytes.
 - `model`: a required explicit bounded model identifier. No fallback is chosen.
+- Optional `reasoning_effort`: `low`, `medium`, `high`, or `xhigh`, selected by
+  the controller and included in the immutable selection. Omit it to retain
+  legacy behavior; the model cannot choose or modify this setting.
 - `budgets`: all seven fields returned by `PlannerBudgets(...).document()`;
   values must be explicit bounded integers, including wall and turn timeouts.
 

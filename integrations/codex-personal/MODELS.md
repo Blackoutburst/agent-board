@@ -44,7 +44,7 @@ Structure d’exemple, volontairement sans modèle vérifié :
 }
 ```
 
-Après un essai explicite avec `probe --model`, le propriétaire peut enregistrer son observation avec `status: "verified"`, l’horodatage Unix réel et une référence opaque à son reçu. `unknown`, `unavailable`, une observation future ou trop ancienne empêchent le départ. Les efforts de raisonnement restent `null` : ce transport ne les applique pas encore et refuse une politique qui les imposerait.
+Après un essai explicite avec `probe --model`, le propriétaire peut enregistrer son observation avec `status: "verified"`, l’horodatage Unix réel et une référence opaque à son reçu. `unknown`, `unavailable`, une observation future ou trop ancienne empêchent le départ. Dans ce parcours de routage personnel, les efforts de raisonnement restent `null` : l'adaptateur ne transmet pas ces préférences et refuse une politique qui les imposerait. L'option explicite du [planner de développement](DEVELOPMENT_PLANNER.md), disponible depuis 0.40, est un contrat séparé ; elle n'active pas les préférences de ce routeur.
 
 ## Utilisation et reprise
 

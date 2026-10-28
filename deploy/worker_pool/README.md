@@ -85,6 +85,10 @@ Git complet `repository`, `project_id`, `ticket_id`, `paths`, `resource`, `actio
 `verifier_path`, `verifier_sha256`, `test_name`, `test_timeout_seconds`,
 `test_max_output_bytes`, `instruction`, `model`, `planner_budgets` et
 `broker_budgets`. Les profils, tickets, connexions et ressources sont distincts.
+Depuis 0.40, un job peut aussi fixer `reasoning_effort` à `low`, `medium`, `high`
+ou `xhigh`. Le plan l'affiche et la sélection le conserve jusqu'au CLI, y
+compris lors d'une reprise de session. Omettre ce champ conserve le contrat
+historique ; une valeur non prise en charge est refusée sans repli automatique.
 Le `workspace_root` explicite est `checkouts/<batch_id>/<name>`. Rien n’est
 sélectionné à partir d’un message, du contenu d’un ticket ou d’un modèle.
 
