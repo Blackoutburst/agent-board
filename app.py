@@ -859,6 +859,16 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                                              idempotency_key, recovery_evidence),view)
 
     @mcp.tool()
+    async def release_managed_agent_claim(session_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
+                                          expected_version: Version, idempotency_key: RuntimeOpaque,
+                                          reason: Annotated[str, Field(strict=True, min_length=1, max_length=20000)],
+                                          recovery_evidence: Annotated[str, Field(strict=True, min_length=1, max_length=20000)],
+                                          view: Literal['compact','full'] = 'compact') -> dict:
+        """Release an expired ordinary-agent claim after inspecting prior effects. Requires the separate human-delegated agent.profile.release_claim grant and owner management resource in both stored and effective policy. The target profile and ticket must stay within your owner/project/grant ceiling. Refuses human/management/foreign claims, live leases and unresolved Runtime executions. Exact version, reason, recovery evidence and stable retry key are mandatory. Preserves assignments, results, requests, dependencies and Runtime capacity; does not stop, resume, execute or complete work. Retries never clear a later claim."""
+        return _view(board.release_managed_agent_claim(session_actor(session_id),ticket_id,expected_version,
+                                                      idempotency_key,reason,recovery_evidence),view)
+
+    @mcp.tool()
     async def register_agent(session_id: str, label: str, agent_kind: str, identity_key: str = "default",
                              name: str = "", skills: list[str] | None = None, autonomous: bool = False, view: Literal["compact", "full"] = "compact") -> dict:
         """Register this chat under a persistent installation identity. Keep agent_kind/identity_key stable across chats (codex and claude-code are different agents); use a unique session_id for each chat. name is used only when creating the identity. autonomous=true declares human-authorized worker participation; it grants no shell access."""
@@ -1228,7 +1238,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.17.3", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame"]}
+        return {"status": "ok", "version": "2.17.4", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1422,6 +1432,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.put('/api/agent-profiles/{profile_id}/management')
     async def grant_profile_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
         return board.set_agent_profile_management(actor,profile_id,**values.model_dump())
+
+    @app.put('/api/agent-profiles/{profile_id}/claim-management')
+    async def grant_profile_claim_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
+        return board.set_agent_profile_claim_management(actor,profile_id,**values.model_dump())
 
     @app.get('/api/agent-profiles/{profile_id}/versions/{version}')
     async def agent_profile_version(profile_id: str, version: int, actor=Depends(human)):

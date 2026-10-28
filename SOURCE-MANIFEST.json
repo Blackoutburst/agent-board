@@ -4,7 +4,7 @@
     "CONTRACT.md": "58ac2ce2a7b0db6f37695e51827facb1188b449ad4fcd4fd9ca320c1f812d61c",
     "PLAN.md": "97f04b50f82ce09db26eba2223709a8b2863fa2834af6a69ef6f6e3ff13007ec",
     "README.md": "e88220e1123cb7d410ea88b0be4f2b291046f8a9ffc9e2b755a8b0211b473bcd",
-    "app.py": "33c4b081f5bd313cf6a7a08b9e41e9cc0d064b6ae16cf7250f42b0476d8f2ca2",
+    "app.py": "6af6a363d0a2714fc0f3e293f2a4d9f48fbc4aa953fed28de45052af57c9732f",
     "backup.py": "0fad8d149086bfb3497fd799475fef063ffe7e686b67bd8838c59283b2368463",
     "board.py": "d54de3153057a98f94c3442cc6496147476b554ec8e09c92b4ac82d3d8768e5e",
     "communication.py": "474bef77c8eb5236b893021dc16e1ae86ba3d89b8b872e0e2b2d65bedf1545a6",
@@ -37,7 +37,7 @@
     "development_ticket_frames.py": "26957bf4e4fbe1c2c5ee1338010a5479c4ebf30c5204886397332bac10b004ae",
     "docs/AGENT-WORKFLOW.md": "86bfb008f1e69fabb14decf4c4c4350667727aec172937b9e5cb019958d8cef2",
     "docs/ARCHITECTURE.md": "ef195609aecd978dbecd78637a5fe31c8eb1150dc8a2a114fe7ff21965a50bb3",
-    "docs/DELEGATED-AGENT-MANAGEMENT.md": "434f968ac79ba505e9d5ca3f572eb81faba60f03adcfae1a42e0b944469589c3",
+    "docs/DELEGATED-AGENT-MANAGEMENT.md": "7835b6ca8700500db0535b933ab0113397a11b35f6815722999d514688fe9171",
     "docs/DEVELOPMENT-TICKET-FRAME.md": "fe2fc8c43ae5f57f1648cdf28473cb5b6c11b769e2b570079e2e3eef0a297ffc",
     "docs/MANAGED-CATALOG-SOURCE-TRANSITION.md": "e0866c812b1a25d0f05594fd79b83d711adf512dc96b0b2fece65855536fdbc2",
     "docs/MCP-READS.md": "62c978e5bed3953f017e1f00e25ddc3f6e540d5a0f293383af38c7b5be893612",
@@ -494,7 +494,7 @@
     "message_feed.py": "18c257a2236c5a8339986026a6931a7668d6fd855fc0deb3dc111f2ce4e6c650",
     "notifications.py": "830ed12191b3f27378d5270e1fb7ac2934d9ba4d32fc5c22cb3c52abd03c5073",
     "platform_auth.py": "c8a45b09eb9b584ef70275eee0177ee43da5f5de30e5634dc2351431df9a117d",
-    "profile_management.py": "b3e24cb4947e14acfb3afbf37edf6335d18d58ed3f297e279b2e4fceb0e05832",
+    "profile_management.py": "3cb6aa2f4989eb0630fccf8064c294ecca57ab4c35ebcfc07f57b6073d0cdca5",
     "profile_refresh.py": "6c93de3c6c2ab62f7b774069e22fb156f9dc967e8c9b4c84558883a9349b7838",
     "profiles.py": "0ec8b8b5fea32d119796c2dea2d2b28639adf69d16b445859ff05a913cbed8f7",
     "projects.py": "8fffc236b10ab04ecb55aa286ed4700db2b605636f4a3b2e30aaaa5ec9a88316",
@@ -511,6 +511,7 @@
     "tests/browser_markdown.cjs": "c67620788aeee3cd5d7d705ddd786029f73708ab6f04ee0c05338c01dad98c04",
     "tests/browser_messages_append.cjs": "9f6cdf88a60256bd4af142aad23e93cbf0f155103a01d54a8ea6adaa2ae7caca",
     "tests/browser_overhaul.cjs": "6313e1bbafa9dde9309ac83d0c20a937defc705219ff0c050e01abc8ae1e3f8f",
+    "tests/browser_profile_claim_management.cjs": "d8bf0f75bd95b5ee1feba15deef753467889449ed3555fc35ee7991c5bf8f46d",
     "tests/browser_profile_management.cjs": "f4b67455f5a217ce94a90000a60adc08443905db5c17c2510b763c8811fa595b",
     "tests/browser_profiles.cjs": "01ccb2f6d41bda8b9413432d136c6c9d79b16c6050048cc914f7533847b3f923",
     "tests/browser_provider_onboarding.cjs": "f7a280d95a5975e76f8ca481db5293423f1038ed4446a64a43da63ffd3282e1e",
@@ -568,6 +569,8 @@
     "tests/test_isolated_host_package.py": "0ef99b72ce0c5c7e40a301b6c5131b949746f40d79433452a58db3bc38e27671",
     "tests/test_isolated_host_update.py": "4e686245346ff20a0c513c59923478c96d884295ea3c7653f0966d2724f41b0e",
     "tests/test_legacy_schema_fixtures.py": "47ef56af28a48eddb16293ac6c0bdf3c9fedcd39c78a277f477e8279dae6aa6d",
+    "tests/test_managed_claim_release.py": "237f584a67de1d0266b455d01ba6e2492eb406629d44016b0af1047c0eb38da1",
+    "tests/test_managed_claim_release_api.py": "dbe345a2c2ad3c48a8effc29963c5cf12486a1c3e3cba962930f755367823804",
     "tests/test_mcp_review_regressions.py": "40f6b36168a0bb399b23af013c997fdb95f97a9c70009785eebc3b82f58baa43",
     "tests/test_mcp_views.py": "bc4c2ff7cef917beccf55bc9af2eb62d59ecb5f164db2d9d276aa6dd145b4e0b",
     "tests/test_message_admission_seal.py": "1b8342ba157d0b16c6c08a53af7df186fbacd9e0fe18ea2cd9a8ce9c564e184e",
@@ -727,7 +730,7 @@
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "c9d0ebd772ec658acaba4568837e63f11b02a331ef1184b87f8dddb3d5432877"
+    "web/workspace.js": "ce4c4fb1d269ce6599091e8fb23ccd571d980123ab910f43d2e2a336643c3b9c"
   },
-  "version": "2.17.3"
+  "version": "2.17.4"
 }

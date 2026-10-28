@@ -1800,13 +1800,21 @@ const Workspace = (() => {
       el("details", { class: "profile-legacy-scopes" }, el("summary", {}, "Legacy action limits"), profileField("Allowed actions (one per line)", "actions", 25700, { type: "textarea", value: policy.actions.join("\n") }), profileField("Allowed resources (one per line)", "resources", 25700, { type: "textarea", value: policy.resources.join("\n") })));
     const managementGranted = policy.actions.some(value => value.startsWith("agent.profile.")) || policy.resources.some(value => value.startsWith("agent-profiles:"));
     const management = check("Gérer les profils d’agents ordinaires", "manage_agent_profiles", managementGranted);
-    let managementTouched = false;
-    management.querySelector("input").disabled = Boolean(p?.legacy);
-    management.querySelector("input").addEventListener("change", () => { managementTouched = true; });
+    const managementInput = management.querySelector("input");
+    const claimManagement = check("Libérer les réservations expirées des agents gérés", "manage_agent_claims", policy.actions.includes("agent.profile.release_claim"));
+    const claimManagementInput = claimManagement.querySelector("input");
+    let managementTouched = false, claimManagementTouched = false;
+    const refreshClaimManagement = () => { claimManagementInput.disabled = Boolean(p?.legacy) || !managementInput.checked; };
+    managementInput.disabled = Boolean(p?.legacy);
+    managementInput.addEventListener("change", () => { managementTouched = true; refreshClaimManagement(); });
+    claimManagementInput.addEventListener("change", () => { claimManagementTouched = true; });
+    refreshClaimManagement();
     form.append(projectPicker, permissions,
       el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
         el("p", { class: "small muted" }, "Autorise la création, la modification et l’archivage réversible des profils ordinaires de votre compte. Chaque profil doit rester dans les projets suivis et sous les plafonds effectifs de permissions, d’actions, de ressources et d’autonomie de ce Lead."),
-        el("p", { class: "small muted" }, p?.legacy ? "Créez un nouveau profil à projets explicites pour cette délégation. Le nom du rôle seul ne donne aucun droit." : "Activez la lecture et les demandes de travail, choisissez des projets explicites et une sélection de travail autorisée. Les identités Management, les connexions et les limites d’exécution restent gérées par vous. Cette délégation ne démarre aucun agent.")),
+        el("p", { class: "small muted" }, p?.legacy ? "Créez un nouveau profil à projets explicites pour cette délégation. Le nom du rôle seul ne donne aucun droit." : "Activez la lecture et les demandes de travail, choisissez des projets explicites et une sélection de travail autorisée. Les identités Management, les connexions et les limites d’exécution restent gérées par vous. Cette délégation ne démarre aucun agent."),
+        claimManagement,
+        el("p", { class: "small muted" }, "Nécessite la gestion des profils. Réservé aux réservations expirées, après inspection et nettoyage ; un Runtime actif ou incertain bloque la libération. Cette permission n’arrête aucun processus.")),
       el("p", { class: "small muted" }, p ? `Editing configuration v${p.version}. Saved preferences apply to future work; existing work keeps its captured configuration.` : "A new profile has no connection. Choose its project scope and permissions, then connect an executor."),
       ...(p?.active_work?.length ? [profileWorkNotice(p)] : []),
       formButtons(p ? "Save profile" : "Create profile"));
@@ -1830,20 +1838,36 @@ const Workspace = (() => {
       if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
       let saved = await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
       if (state.actor?.owner_id !== owner) return;
-      if (managementTouched) {
+      const managementEnabled = values.has("manage_agent_profiles");
+      if (managementTouched || claimManagementTouched && managementEnabled) {
         try {
-          const enabled = values.has("manage_agent_profiles");
-          const updated = await api(`/agent-profiles/${workPath(saved.id)}/management`, { method: "PUT", data: { expected_version: saved.version, enabled } });
-          const actions = updated.policy?.actions, resources = updated.policy?.resources;
           const grants = ["agent.profile.read", "agent.profile.create", "agent.profile.update", "agent.profile.archive"];
-          if (updated.id !== saved.id || updated.owner_id !== owner || updated.version !== saved.version + 1
-              || !Array.isArray(actions) || !Array.isArray(resources)
-              || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
-              || (enabled ? !grants.every(value => actions.includes(value)) || !resources.includes(`agent-profiles:${owner}`)
-                : actions.some(value => value.startsWith("agent.profile.")) || resources.some(value => value.startsWith("agent-profiles:")))) {
-            throw new Error("Réponse de délégation incomplète ou incohérente.");
+          if (managementTouched) {
+            const updated = await api(`/agent-profiles/${workPath(saved.id)}/management`, { method: "PUT", data: { expected_version: saved.version, enabled: managementEnabled } });
+            const actions = updated.policy?.actions, resources = updated.policy?.resources;
+            if (updated.id !== saved.id || updated.owner_id !== owner || updated.version !== saved.version + 1
+                || !Array.isArray(actions) || !Array.isArray(resources)
+                || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
+                || (managementEnabled ? !grants.every(value => actions.includes(value)) || !resources.includes(`agent-profiles:${owner}`)
+                  : actions.some(value => value.startsWith("agent.profile.")) || resources.some(value => value.startsWith("agent-profiles:")))) {
+              throw new Error("Réponse de délégation incomplète ou incohérente.");
+            }
+            saved = updated;
           }
-          saved = updated;
+          if (state.actor?.owner_id !== owner) return;
+          if (claimManagementTouched && managementEnabled) {
+            const enabled = values.has("manage_agent_claims");
+            const updated = await api(`/agent-profiles/${workPath(saved.id)}/claim-management`, { method: "PUT", data: { expected_version: saved.version, enabled } });
+            const actions = updated.policy?.actions, resources = updated.policy?.resources;
+            if (updated.id !== saved.id || updated.owner_id !== owner || updated.version !== saved.version + 1
+                || !Array.isArray(actions) || !Array.isArray(resources)
+                || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
+                || enabled && (!actions.includes("agent.profile.read") || !resources.includes(`agent-profiles:${owner}`))
+                || actions.includes("agent.profile.release_claim") !== enabled) {
+              throw new Error("Réponse de délégation incomplète ou incohérente.");
+            }
+            saved = updated;
+          }
         }
         catch (error) {
           if (state.actor?.owner_id !== owner) return;
