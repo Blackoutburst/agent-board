@@ -398,3 +398,10 @@ def test_revocation_at_boundary_after_private_seal_does_not_leave_logical_runnin
     assert case.task.snapshot()['state']['checkpoint'] is None
     assert case.task.snapshot()['state']['used_total']['turns']==2
     assert len(case.inferences)==2 and case.release_calls==[]
+
+
+def test_mutated_checkpoint_controller_refuses_before_first_model(cycle_case):
+    case=cycle_case;case.producer.configuration['source_release_sha256']='c'*64
+    result=case.run_cycle()
+    assert result['status']=='needs_you'
+    assert case.read_ticket()['claimant'] is None and case.inferences==[]

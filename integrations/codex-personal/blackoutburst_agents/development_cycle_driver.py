@@ -240,6 +240,7 @@ def run_worker_checkpoint(worker,operation_id,*,request,checkpoint_controller,pa
         and request.worker is worker and type(checkpoint_controller) is PrivateDevelopmentCheckpointController,
         'development_cycle_concrete_handles_required')
     _operation(operation_id);controller=checkpoint_controller
+    controller._roots()  # Configuration/hash/root drift refuses before a model.
     op=worker.journal.get(operation_id);worker._pin_controller(op)
     require(op['stage'] not in ('needs_review','complete','abandoned','result_ready','publishing')
         and op['configuration'].get('controller_scope') is None,'development_cycle_stage_refused')
