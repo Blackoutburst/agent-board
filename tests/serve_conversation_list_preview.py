@@ -2,7 +2,8 @@
 import os
 import tempfile
 
-os.environ['BLACKOUT_SHARED_AUTH'] = '0'
+os.environ['BOARD_REQUIRE_LOGIN'] = '1'
+os.environ.setdefault('BOARD_OWNERS', '{"blackoutburst": "Blackoutburst", "thescreamer": "TheScreamer"}')
 os.environ['BOARD_ALLOW_LOCAL_PASSWORDS'] = '1'
 
 from app import create_app

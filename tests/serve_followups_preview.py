@@ -4,7 +4,8 @@ import tempfile
 
 os.environ['BOARD_DATA_DIR']=tempfile.mkdtemp(prefix='board-followups-ui-')
 os.environ['BOARD_ALLOW_LOCAL_PASSWORDS']='1'
-os.environ['BLACKOUT_SHARED_AUTH']='0'
+os.environ['BOARD_REQUIRE_LOGIN'] = '1'
+os.environ.setdefault('BOARD_OWNERS', '{"blackoutburst": "Blackoutburst", "thescreamer": "TheScreamer"}')
 os.environ['BOARD_BASE_URL']='http://127.0.0.1:18766'
 from app import create_app
 import uvicorn

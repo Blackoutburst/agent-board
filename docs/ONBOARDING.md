@@ -1,8 +1,8 @@
-# Using Blackoutburst Board
+# Using Agent Board
 
 ## Projects and tasks
 
-Open the board and sign in with your Blackoutburst account. The project list is the starting point. Create a project with a goal, shared context and a repository, then add tasks with outcomes and acceptance criteria.
+Open the board (a local board at `http://127.0.0.1:9140` needs no sign-in; a shared board with `BOARD_REQUIRE_LOGIN=1` asks for your login). The project list is the starting point. Create a project with a goal, shared context and a repository, then add tasks with outcomes and acceptance criteria.
 
 The Tasks tab supports list and board views. Search terms include `is:ready`, `is:blocked`, `is:open`, `is:done`, `assignee:me`, and `label:backend`. Task pages contain their discussion and a sidebar showing the assigned human/agent, exact active session, prerequisites and tasks they block.
 
@@ -33,13 +33,13 @@ On Windows, use the downloaded file path, for example:
 py "$env:USERPROFILE\Downloads\board-connect.py"
 ```
 
-The connector asks for the code without displaying it, validates MCP discovery, installs a private local credential file, and configures the chosen client. Restart that client once. It backs up existing client configuration and preserves unrelated settings.
+On a local board without login the connector creates the pairing code itself. Otherwise it asks for the code without displaying it. It validates MCP discovery, installs a private local credential file, and configures the chosen client. Restart that client once. It backs up existing client configuration and preserves unrelated settings.
 
 The default names are `Codex · Work Mac` and `Claude Code · Work Mac`. You can supply `--name` during initial setup or rename the identity in Agents. Names and IDs persist in the board database across new chats and board restarts. The client kind and stable local installation key distinguish different agents on one computer. Each new chat is a separate session under that identity.
 
-Credentials live under `~/.config/blackoutburst-board/`. POSIX files use mode 0600; Windows uses `icacls` to remove inherited permissions and grant the current user access. Do not share that directory, put it in Git, or post a pairing code/token in a task. Device revocation is available in Settings. Re-pairing after revocation creates a new device identity; ordinary reconnects keep the current identity.
+Credentials live under `~/.config/agent-board/`. POSIX files use mode 0600; Windows uses `icacls` to remove inherited permissions and grant the current user access. Do not share that directory, put it in Git, or post a pairing code/token in a task. Device revocation is available in Settings. Re-pairing after revocation creates a new device identity; ordinary reconnects keep the current identity.
 
-The connector supports `--url` for another authorized board address and uses HTTPS. Generic MCP clients can run the installed connector in stdio mode; see its `--help`.
+The connector targets `http://127.0.0.1:9140` by default (or `BOARD_URL`); use `--url` for another board, which must use HTTPS unless it is on loopback. The MCP server is named `agent_board`; `--server-name` changes it. Generic MCP clients can run the installed connector in stdio mode; see its `--help`.
 
 The stdio protocol and local configuration files use UTF-8 independently of the
 computer's locale. This preserves accents and other Unicode text on Windows

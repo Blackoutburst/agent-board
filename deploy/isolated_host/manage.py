@@ -217,7 +217,7 @@ def _install_locked(directory, manifest):
             state['created_accounts'].append({'name': name, 'uid': account.pw_uid, 'gid': account.pw_gid})
             save()
             # Empty directories only: no host journal, pairing, login or budget.
-            for part in ('', '.config', '.config/blackoutburst-board', '.config/blackoutburst-agent-host',
+            for part in ('', '.config', '.config/agent-board', '.config/blackoutburst-agent-host',
                          '.local', '.local/state', '.local/state/blackoutburst-agents', 'workspaces'):
                 path = home(name) / part
                 path.mkdir(mode=0o700)

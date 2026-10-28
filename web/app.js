@@ -2,14 +2,15 @@
 
 // All shared content is inserted as text. Agent credentials stay in memory only.
 const basePath = location.pathname.endsWith("/") ? location.pathname : location.pathname.replace(/[^/]*$/, "");
+const boardUrl = () => (location.origin + basePath).replace(/\/$/, "");
+const shellQuote = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 const state = { actor: null, csrf: "", owners: [], threads: [], conversationUnread: 0, view: "welcome", threadId: null, threadData: null,
   settings: null, inboxCursor: null, inboxMessages: [], inboxTasks: [], drafts: new Map(), request: 0,
   projects: [], project: null, ticket: null, projectQuery: "", includeArchived: false, ticketFilters: new Map(),
   workDrafts: new Map() };
 const $ = (id) => document.getElementById(id);
 const idempotencyKey = () => typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-const names = { blackoutburst: "Blackoutburst", thescreamer: "TheScreamer" };
-const ownerName = (id) => state.owners.find((owner) => owner.id === id || owner.owner_id === id)?.display_name || names[id] || id || "Unknown owner";
+const ownerName = (id) => state.owners.find((owner) => owner.id === id || owner.owner_id === id)?.display_name || id || "Unknown owner";
 const lines = (value) => [...new Set(value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
 const readable = (value) => Array.isArray(value) ? value.join("\n") : value && typeof value === "object" ? JSON.stringify(value, null, 2) : String(value || "");
 const date = (value) => value ? new Date(Number(value) * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
@@ -118,7 +119,8 @@ function showLogin() {
 async function authenticated(result) {
   state.actor = result.actor;
   state.csrf = result.csrf_token;
-  state.owners = result.owners || [{ id: "blackoutburst", display_name: "Blackoutburst" }, { id: "thescreamer", display_name: "TheScreamer" }];
+  state.owners = result.owners || [];
+  $("logout").hidden = result.login_required === false;
   $("account-name").textContent = ownerName(state.actor.owner_id);
   $("login-view").hidden = true;
   if ($("setup-view")) $("setup-view").hidden = true;
@@ -404,7 +406,7 @@ function notificationCard(result) {
   }
   const info = result.value;
   card.append(el("span", { class: `badge notification-state${info.enabled ? " enabled" : ""}` }, info.enabled ? "CONFIGURED" : "NOT CONFIGURED"),
-    el("p", {}, "Shared conversation alerts go to the private channel for Blackoutburst and TheScreamer, even when your computers are off."),
+    el("p", {}, "Alerts for conversations shared by every board owner go to one private channel, even when your computers are off."),
     el("p", { class: "notification-events" }, "Mentions · New tasks · Waiting for input · Ready for verification · Complete"),
     el("p", { class: "small muted" }, "Private conversations stay out of Discord. Unchanged status and routine progress do not send alerts."));
   const actions = el("div", { class: "button-row" });
@@ -632,7 +634,7 @@ $("login-form").addEventListener("submit", async (event) => {
   } catch (error) { $("login-error").textContent = error.message; $("login-error").hidden = false; }
   finally { button.disabled = false; }
 });
-$("logout").addEventListener("click", () => { location.assign("https://blackoutburst.com/account/?action=logout"); });
+$("logout").addEventListener("click", () => api("/logout", { method: "POST" }).then(showLogin).catch((error) => notify(error.message, true)));
 $("new-thread").addEventListener("click", newThread);
 $("inbox-nav").addEventListener("click", () => loadInbox().catch((error) => notify(error.message, true)));
 $("settings-nav").addEventListener("click", () => loadSettings().catch((error) => notify(error.message, true)));

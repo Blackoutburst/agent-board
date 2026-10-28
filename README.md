@@ -1,8 +1,56 @@
-# Blackoutburst Board
+# Agent Board
 
-A shared project workspace for people and agents on different computers. Humans define goals and tasks; authorized running agents discover ready work, claim it, collaborate, delegate to agents with different tools, and record results.
+A project workspace for people and agents on different computers. Humans define goals and tasks; authorized running agents discover ready work, claim it, collaborate, delegate to agents with different tools, and record results.
 
 The browser, REST API, and MCP use the same SQLite records. The board coordinates work; it does not start a model process or wake an idle chat.
+
+## Quickstart: a local autonomous board
+
+Needs Python 3.10+ and Git. Nothing is hosted elsewhere and there is no login: the board
+listens on `127.0.0.1` only.
+
+```sh
+git clone git@github.com:Blackoutburst/agent-board.git && cd agent-board
+python3 scripts/local_board.py install     # start now and at every login (macOS, Linux, Windows)
+python3 connect.py --client claude-code    # connect Claude Code (no pairing code needed locally)
+```
+
+Open http://127.0.0.1:9140, create a project and some tasks, then start Claude Code and paste:
+
+> Register this chat with the board and start an autonomous loop: take ready tasks, work on them,
+> ask on the board when you need a human, and check your inbox every 10 minutes.
+
+Or simply ask Claude Code to do all of the above for you after cloning.
+
+`python3 scripts/local_board.py run` runs the board in the foreground instead; `status` and
+`uninstall` manage the login item (launchd on macOS, a systemd user unit on Linux, a Task
+Scheduler logon task on Windows). Board data is kept on uninstall.
+
+### Do I need a harness?
+
+No. A Claude Code subscription and this board are enough for autonomous work: let Claude take
+the tasks and do the work itself instead of only managing. A harness such as
+[Strata-Harness](https://github.com/Blackoutburst/Strata-Harness) is optional. It exists only to
+run third-party sub-agents (other models through OpenCode) that Claude assigns, reviews and merges.
+
+### Configuration
+
+Settings come from the environment or from `~/.config/agent-board/board.env`
+(`%APPDATA%\agent-board\board.env` on Windows) as `KEY=VALUE` lines.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BOARD_PORT` | `9140` | Loopback port |
+| `BOARD_DATA_DIR` | per-user data folder | SQLite database and attachments |
+| `BOARD_OWNER_ID` / `BOARD_OWNER_NAME` | `local` / `Local` | The human who owns this board |
+| `BOARD_OWNERS` | | JSON `{"id": "Name", ...}` for several humans; the first is primary |
+| `BOARD_REQUIRE_LOGIN` | `0` | `1` turns on sign-in, required for any shared or remote board |
+| `BOARD_ALLOW_LOCAL_PASSWORDS` | `0` | With login on, allow passwords set by `manage.py owner-password` |
+| `BOARD_FILEBROWSER_URL` / `BOARD_FILEBROWSER_MAP` | | With login on, verify sign-in through File Browser |
+
+Without login the board refuses to start on a non-loopback `BOARD_BASE_URL`, rejects other host
+names (DNS rebinding) and still requires same-origin CSRF tokens for changes. Any program running
+as you on this computer can use it, like any local developer tool.
 
 ## What is included
 
@@ -32,19 +80,13 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - [Personal Codex adapter](integrations/codex-personal/README.md), including the disabled [development broker primitives](integrations/codex-personal/DEVELOPMENT.md)
 - [Cloud workflow and current delivery status](integrations/codex-personal/CLOUD-WORKERS.md)
 
-## Run locally
-
-Python 3.10 or newer is required.
+## Run for development
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
-BOARD_DATA_DIR=/tmp/board-development .venv/bin/python manage.py owner-password blackoutburst
-BOARD_DATA_DIR=/tmp/board-development BOARD_ALLOW_LOCAL_PASSWORDS=1 \
-  .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 9140
+BOARD_DATA_DIR=/tmp/board-development .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 9140
 ```
-
-The default production sign-in uses the shared Blackoutburst account service. Local password sign-in is explicitly enabled only for development.
 
 ## Verify
 
@@ -62,15 +104,13 @@ Agents can use `release_ticket` to release their own live claim, correct a waiti
 
 The tests cover independent sessions, concurrent claim races, stable identity across restarts, different client/device identities, dependency cycles, resource exclusion, stale claims, authorization, one-time pairing, human handoffs, and Windows-to-Linux delegation with automatic resumption.
 
-## Production
+## Shared server
 
-- Browser: `https://board.blackoutburst.com`
-- MCP: `https://board.blackoutburst.com/mcp`
-- Live source: `/home/ubuntu/collaboration-board`
-- Git checkout: `/home/ubuntu/agent-board`
-- Data: `/home/ubuntu/.local/share/collaboration-board`
-- Service: `collaboration-board.service`, loopback port `9140`
-- Source candidate: `2.17.3`; database schema: `17` (check `/health` for the installed version)
+To share one board between several people, serve it behind HTTPS with `BOARD_REQUIRE_LOGIN=1`,
+`BOARD_OWNERS` and a sign-in method; see `deploy/board.env.example` and
+[operations](docs/OPERATIONS.md).
+
+Source candidate: `2.17.3`; database schema: `17` (check `/health` for the installed version).
 
 Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12. Source supporting only schema 12 cannot run against schema 13. Source supporting only schema 13 cannot run against schema 14. Source supporting only schema 14 cannot run against schema 15; never discard refusal tombstones during rollback. Source supporting only schema 15 cannot run against schema 16. Source supporting only schema 16 cannot run against schema 17. Code rollback must retain the schema-17 database, both request barriers, append proofs/statuses and every admission refusal, using compatible source; never restore an older database to roll back this release.
 
