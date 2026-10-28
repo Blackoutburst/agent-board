@@ -41,6 +41,14 @@ same provider session is resumed for subsequent model turns. Unexpected model
 transport events, missing verification, policy changes or uncertain cleanup stop
 at `needs_review`.
 
+From adapter 0.40, the trusted controller may explicitly select
+`reasoning_effort` (`low`, `medium`, `high`, or `xhigh`). The choice is part of
+the planner configuration before its fence binding, and reaches both initial
+and resumed CLI turns. Changing it cannot adopt an existing operation or reuse
+a model result under another configuration. Omitting the option preserves the
+legacy configuration and arguments. It does not select a different model,
+grant access, reset budgets, retry a failed turn, or attest model support.
+
 ## Sequential Runtime capacity
 
 Model turns retain provider `codex_chatgpt`. Each local controller action uses a

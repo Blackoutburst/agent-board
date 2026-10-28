@@ -7,8 +7,9 @@ The caller must authenticate the owner/connection independently and durably pin
 the decision before inference. There is no fallback or model change on resume.
 
 Only the existing Codex/ChatGPT transport is supported. No model names are
-built in. Reasoning settings require explicit transport support; the existing
-transport supports none, so the default permits only a null setting.
+built in. This routing adapter does not forward reasoning preferences, so its
+default permits only a null setting. The development planner's explicit option
+is separate and does not enable reasoning preferences in this router.
 """
 from __future__ import annotations
 

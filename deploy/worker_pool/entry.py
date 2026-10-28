@@ -179,7 +179,8 @@ def main(argv=None):
             batch,pin=load_batch(batch_path,root=root,owner_id=manifest['board_owner'],board_endpoint=manifest['board_endpoint'],
                 max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
             result={'status':'plan','batch_id':batch['batch_id'],'configuration_sha256':pin['sha256'],
-                'jobs':[{key:job[key] for key in ('name','agent_id','project_id','ticket_id','resource','model')} for job in batch['jobs']],
+                'jobs':[{key:job[key] for key in ('name','agent_id','project_id','ticket_id','resource','model','reasoning_effort')
+                    if key in job} for job in batch['jobs']],
                 'activated':False,'execution_qualified':False}
             if args.action=='workflow-plan':
                 from blackoutburst_agents.cloud_workflow import load_workflow

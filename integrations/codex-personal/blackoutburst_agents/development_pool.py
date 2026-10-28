@@ -6,9 +6,11 @@ Settled Pool capacity is never release of a Board claim, ticket completion or
 Git delivery; notification never changes cleanup or execution authority.
 """
 from contextlib import ExitStack, closing
+import errno
 from pathlib import Path
 import threading
 
+from .board_reader import BoardReadError
 from .client_lifecycle import own_client
 from .development_client import DevelopmentBoardClient, failure_notice
 from .development_pool_selection import (DevelopmentSelections, REVISION, fail,
@@ -17,7 +19,7 @@ from .development_worker import DevelopmentBoardWorker, execution_factories
 from .dev_journal import PrivateDirectory, decode
 from .dev_fence import standalone_fence_wait
 from .dev_manifest import DevelopmentError, canonical, digest
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .dev_runtime import development_work_id
 from .run_store import RunStore
@@ -26,6 +28,57 @@ from .runtime_guard import RuntimeGuard
 from .runtime_journal import RuntimeJournal
 from .work_journal import WorkJournal
 from .worker_pool import PoolDriverBinding, PoolOutcome
+
+
+NOTICE_BOARD_ERRORS = frozenset({'invalid_failure_notice', 'failure_notice_unconfirmed',
+    'connection_closed', 'redirect_blocked', 'authentication_failed', 'permission_denied',
+    'http_error', 'response_too_large', 'invalid_response', 'timeout', 'connection_failed',
+    'rpc_rejected', 'tool_rejected', 'session_mismatch'})
+NOTICE_STORAGE_ERRORS = frozenset({'private_file_exists', 'private_read_failed',
+    'private_write_failed', 'private_directory_changed', 'private_directory_unavailable',
+    'insecure_private_directory', 'insecure_private_file', 'development_notice_receipt_conflict'})
+NOTICE_ERRNOS = frozenset({errno.EPERM, errno.ENOENT, errno.EIO, errno.EBADF,
+    errno.EACCES, errno.EEXIST, errno.ENOTDIR, errno.EINVAL, errno.EMFILE,
+    errno.ENOSPC, errno.EROFS, errno.ETIMEDOUT})
+NOTICE_OS_ERRORS = (OSError, PermissionError, FileNotFoundError, FileExistsError,
+    NotADirectoryError, IsADirectoryError, BlockingIOError, InterruptedError,
+    BrokenPipeError, ConnectionError, ConnectionAbortedError, ConnectionRefusedError,
+    ConnectionResetError)
+
+
+def failure_notice_diagnostic(phase, error, notice):
+    """Closed local error facts; never inspect an arbitrary exception's text.
+
+    Unknown subclasses cannot supply properties, coercions or serialization.
+    A post RPC error is uncertain even if the server may have committed it.
+    """
+    if type(phase) is not str or phase not in {'post_rpc', 'receipt_write'}:
+        return None
+    category, code, number = 'unknown_error', 'unknown', None
+    if type(error) is BoardReadError:
+        category = 'board_read_error'
+        value = vars(error).get('code')
+        if type(value) is str and value in NOTICE_BOARD_ERRORS: code = value
+    elif type(error) is DevelopmentError:
+        category = 'storage_error'
+        value = vars(error).get('code')
+        if type(value) is str and value in NOTICE_STORAGE_ERRORS: code = value
+    elif type(error) is TimeoutError:
+        category, code = 'timeout_error', 'timeout'
+    elif type(error) in NOTICE_OS_ERRORS:
+        category, code = 'os_error', 'os_error'
+        value = error.errno
+        if type(value) is int and value in NOTICE_ERRNOS: number = value
+    notice_code = failure_notice(None)['code']
+    if type(notice) is dict:
+        value = notice.get('code')
+        # Reuse the existing closed notice codec, not arbitrary run prose.
+        notice_code = failure_notice(value)['code']
+    return {'schema': 1, 'status': 'notification_diagnostic',
+        'kind': 'development_failure_notice', 'phase': phase,
+        'category': category, 'code': code, 'errno': number,
+        'delivery_state': 'confirmed' if phase == 'receipt_write' else 'unknown',
+        'notice_code': notice_code}
 
 
 class _ObservedRuntime:
@@ -151,6 +204,8 @@ class DevelopmentPoolDriver:
                 or config.get('model') != bound['selection']['model']
                 or config.get('instruction') != bound['instruction']
                 or config.get('budgets') != bound['selection']['budgets']
+                or _reasoning_configuration(config.get('reasoning_effort')) !=
+                    _reasoning_configuration(bound['selection'].get('reasoning_effort'))
                 or any(config['pins'].get(name) != _directory_pin(path) for name, path in expected.items())):
             fail('development_pool_work_scope_mismatch')
         return op
@@ -236,6 +291,7 @@ class _DevelopmentRun:
                 instruction=self.bound['instruction'], broker_directory=selection['broker_directory'],
                 backend_directory=selection['backend_directory'],
                 planner_policy_directory=selection['planner_policy_directory'], model=selection['model'],
+                **_reasoning_configuration(selection.get('reasoning_effort')),
                 budgets=PlannerBudgets(**selection['budgets']), operation_id=context.operation_id)
         self.driver._operation(self.worker, context, self.bound)
         self.companion = _StopCompanion(context)
@@ -271,6 +327,7 @@ class _DevelopmentRun:
         The intent precedes the one RPC. An explicit repeat can only reuse the
         same notice/key; Pool reconciliation never invokes this method.
         """
+        phase, notice = None, None
         try:
             if type(code) is DevelopmentError:code=code.code
             client=self.worker.client
@@ -291,17 +348,42 @@ class _DevelopmentRun:
                 except DevelopmentError as error:
                     if error.code!='private_file_exists':raise
                     if private.read('development-failure-notice-intent.json',4096)!=canonical(intent):return
+                phase='post_rpc'
                 receipt=client.post_failure_notice(thread_id=intent['thread_id'],
                     idempotency_key=intent['idempotency_key'],notice=notice)
+                phase='receipt_write'
                 record={'schema':1,'intent_sha256':digest(canonical(intent)),**receipt}
                 try:private.create('development-failure-notice-receipt.json',canonical(record))
                 except DevelopmentError as error:
                     if error.code!='private_file_exists':raise
-                    if private.read('development-failure-notice-receipt.json',4096)!=canonical(record):return
-        except BaseException:
+                    if private.read('development-failure-notice-receipt.json',4096)!=canonical(record):
+                        raise DevelopmentError('development_notice_receipt_conflict')
+        except BaseException as error:
+            try:self._notice_diagnostic(phase,error,notice)
+            except BaseException:pass
             # Notification is optional even during interrupted shutdown. Its
             # failure must not replace an existing run error or Pool outcome.
             return
+
+    def _notice_diagnostic(self, phase, error, notice):
+        """Retain the first closed failure and emit it for the service journal.
+
+        No receipt, intent, retry key or existing diagnostic is replaced. Even
+        storage/stdout failure is subordinate to the original worker outcome.
+        """
+        try:
+            value=failure_notice_diagnostic(phase,error,notice)
+            if value is None:return
+            raw=canonical(value)
+        except BaseException:return
+        try:
+            with PrivateDirectory(self.context.journals['queue']) as private:
+                try:private.create('development-failure-notice-diagnostic.json',raw)
+                except DevelopmentError as error:
+                    if error.code!='private_file_exists':raise
+        except BaseException:pass
+        try:print(raw.decode('utf-8'),flush=True)
+        except BaseException:pass
 
     def close(self):
         if self.closed: return

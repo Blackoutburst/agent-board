@@ -12,7 +12,7 @@ import time
 from types import MethodType
 import uuid
 
-from .codex_turn import execute_turn
+from .codex_turn import execute_turn, _reasoning_effort
 from .context_cache import validate_artifact, ContextCacheError
 from .dev_fence import DevelopmentFence, canonical_anchor, fence_wait_revision
 from .dev_journal import decode
@@ -94,12 +94,21 @@ def _agent_id(scope, operation_id=None):
     return development_agent_id(scope, operation_id)
 
 
+def _reasoning_configuration(value):
+    try:
+        value = _reasoning_effort(value)
+    except ValueError:
+        raise DevelopmentError('invalid_planner_reasoning_effort') from None
+    return {} if value is None else {'reasoning_effort': value}
+
+
 class DevelopmentPlanner:
     def __init__(self, *, broker, store, runtime_journal, control_client, board_scope,
                  planner_policy, authorization, claim_id, instruction, model,
                  budgets=None, enabled=False, _test_anchor=None, _transport=None,
                  _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None, fence_intent=None, fence_verify=None,
-                 local_guard=None):
+                 local_guard=None, reasoning_effort=None):
+        reasoning = _reasoning_configuration(reasoning_effort)
         self.broker, self.store, self.runtime_journal = broker, store, runtime_journal
         self.client, self.scope, self.policy = control_client, dict(board_scope), planner_policy
         self.authorization, self.claim_id, self.clock = authorization, opaque(claim_id), _clock
@@ -190,6 +199,7 @@ class DevelopmentPlanner:
             'scope': self.scope, 'claim_id': self.claim_id, 'work_id': self.work['id'],
             'policy_hash': sha256(self.policy.fingerprint), 'policy_cli_hash': sha256(self.policy.cli_sha256),
             'pins': pins, 'model': model, 'instruction': instruction, 'budgets': limits}
+        self.configuration.update(reasoning)
         if context is not None:
             try:
                 validate_artifact(context)
@@ -240,6 +250,8 @@ class DevelopmentPlanner:
                                                         validate_reservation=self._validate_model_reservation,
                                                         operation_id=self.parent_operation_id)
         self.transport = partial(execute_turn, planner_policy=self.policy) if _transport is None else _transport
+        if reasoning:
+            self.transport = partial(self.transport, **reasoning)
         self.runner = PersonalRunner(store, self.transport, runtime_guard=self.model_guard)
 
     def close(self):
@@ -292,6 +304,8 @@ class DevelopmentPlanner:
         """Local polling only; never compose shared context or grant snapshots."""
         if not self.enabled:
             raise DevelopmentError('planner_disabled')
+        if self.configuration.get('reasoning_effort') != state['configuration'].get('reasoning_effort'):
+            raise DevelopmentError('planner_reasoning_effort_changed')
         if self.fence_verify is None:self.fence.verify(self.binding, self.operation_id)
         else:self.fence_verify(self.binding)
         if not inspection:
