@@ -170,3 +170,14 @@ La [mémoire explicite de décisions](MEMORY.md) permet d’épingler une ancien
 La [politique optionnelle du planificateur](PLANNER_POLICY.md) fournit un dossier vide distinct du checkout et une politique de commandes en lecture seule, après qualification locale explicite sur Mac. Le transport habituel reste inchangé ; cette bibliothèque n’active ni modèle, ni développement, ni listener automatiquement.
 
 La version 0.43 rapproche aussi le nettoyage d’une finalisation refusée avant son reçu d’inspection. Elle termine uniquement sa réservation Runtime en état bloqué, après vérification des identités, de l’absence d’opération de test ou de patch pour cette action et du nettoyage de tous les modèles. Le résultat reste à examiner ; aucun test, modèle ou patch n’est rejoué.
+
+Le raccord de continuation présent sur cette branche reste en développement.
+`ContinuationTask` conserve un journal de cycles bornés sans plafond global de
+cycles. `ContinuationRunner` relie explicitement ces cycles au `PersonalRunner`
+textuel : pause fournisseur vérifiée, nouvelle observation de disponibilité,
+nouveau travail et nouvelle session, puis reprise après contrôles frais. Son
+stockage opt-in de schéma 3 exige un répertoire neuf et conserve les anciens
+résultats ; il ne migre pas un ancien travail. Les appels `run_cycle` et `wake`
+restent explicites. Le raccord au planificateur de développement, les checkpoints
+Git entre générations et le réveil du service serveur restent à implémenter.
+Ces composants ne sont pas encore déployés sur le serveur.
