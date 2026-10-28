@@ -87,6 +87,8 @@ def _worker(planner,request):
     worker._pin_configuration(op,planner.broker.journal,planner.policy,planner.broker.test_backend)
     planner.policy.validate_for(planner.policy.executable,planner.policy.workspace)
     config,payload=op['configuration'],op['payload'];pins=config['pins']
+    require(('reasoning_effort' in config)==('reasoning_effort' in planner.configuration)
+        and ('reasoning_effort' not in config or config['reasoning_effort'] is not None))
     require(op['stage']=='running' and op['id']==planner.operation_id and op['scope']==planner.scope
         and config.get('kind')=='development'
         and config['manifest_hash']==planner.broker.journal.manifest_hash
@@ -96,10 +98,14 @@ def _worker(planner,request):
         and _reasoning_configuration(config.get('reasoning_effort'))==_reasoning_configuration(planner.configuration.get('reasoning_effort'))
         and payload['planner_budgets']==planner.configuration['budgets'] and payload['context']==planner.configuration.get('context')
         and payload['claim_id']==planner.claim_id and all(_directory_pin(pin['path'])==pin for pin in pins.values()))
-    require(planner.configuration.get('parent_operation')==payload['parent_binding']['parent_scope']
-        and planner.binding.get('parent_scope')==payload['parent_binding']['parent_scope']
-        and payload['parent_binding']['scope']==planner.scope
-        and payload['parent_binding']['root_identity']==planner.broker.manifest['root_identity'])
+    from .dev_runtime import development_work_id
+    parent_scope={'operation_id':op['id'],'journal':pins['journal'],
+        'configuration_hash':digest(canonical({'configuration':config,'initial_context_hash':payload['initial_context']['fingerprint']}))}
+    parent={'scope':op['scope'],'root_identity':planner.broker.manifest['root_identity'],'journal':pins['broker'],
+        'configuration_hash':parent_scope['configuration_hash'],'parent_scope':parent_scope,
+        'child_scope':{'work_id':development_work_id(op['id']),'runs':pins['runs'],'runtime':pins['runtime']}}
+    require(payload['parent_binding']==parent and planner.configuration.get('parent_operation')==parent_scope
+        and planner.binding.get('parent_scope')==parent_scope)
     require(all(pins[name]==planner.configuration['pins'][name] for name in ('broker','runs','runtime'))
         and pins['planner_workspace']==planner.configuration['pins']['planner'])
     auth=DevelopmentAuthorization(worker.client,scope=op['scope'],manifest=planner.broker.manifest,

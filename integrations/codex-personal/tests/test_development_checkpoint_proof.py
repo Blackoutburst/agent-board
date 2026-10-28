@@ -184,3 +184,22 @@ def test_proof_cannot_be_copied_serialized_or_rechecked_outside_its_hold(checkpo
     case.on_checkpoint=capture;case.worker.run(case.operation)
     with pytest.raises(Exception):
         with case.frames[0].proof.hold():pass  # Normal worker already closed its resources.
+
+
+@pytest.mark.parametrize('mutation',['extra_field','present_none'])
+def test_stale_parent_cannot_hide_work_configuration_drift_before_proof_issue(checkpoint_case,mutation):
+    case=checkpoint_case;case.actions=actions(case)
+    def changed(callbacks):
+        if len(case.inferences)!=2:return
+        op=case.worker.journal.get(case.operation);config=deepcopy(op['configuration'])
+        if mutation=='extra_field':config['unexpected_config']='changed'
+        else:config['reasoning_effort']=None
+        # Synthetic private-state corruption only; ordinary APIs never rewrite
+        # immutable configuration. Keep the old parent to counter the old gap.
+        case.journal._db.execute('UPDATE operations SET configuration_json=? WHERE id=?',
+            (canonical(config).decode(),case.operation))
+    case.after_model=changed
+    result=case.worker.run(case.operation)
+    assert result['status']=='needs_review' and case.observations==[]
+    assert not isinstance(case.frames[0],DevelopmentCheckpointReady)
+    assert len(case.inferences)==2 and not case.backend.calls
