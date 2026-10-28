@@ -28,7 +28,7 @@ class PersonalRunner:
             work = self.store.get_work(work_id)
             if provider_attempt is not None:
                 from .provider_disposition import _claim_provider_attempt
-                _claim_provider_attempt(provider_attempt, work, request_id, self.transport, self.runtime_guard)
+                _claim_provider_attempt(provider_attempt, work, request_id, self.transport, self.runtime_guard, store=self.store)
             self.store.check_context_guard(work_id,context_guard)
             if context_guard is not None:work={**work,'decision_memory':context_guard}
             settings = ProbeSettings(executable=work['executable'], model=work['model'],

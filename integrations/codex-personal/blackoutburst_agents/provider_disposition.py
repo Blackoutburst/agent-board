@@ -259,7 +259,7 @@ def _runtime_type(guard):
         MessageRuntimeGuard)
 
 
-def _claim_provider_attempt(attempt, work, request_id, transport, runtime_guard):
+def _claim_provider_attempt(attempt, work, request_id, transport, runtime_guard, *, store=None):
     from functools import partial
     from .codex_turn import execute_turn
     if (type(attempt) is not ProviderAttempt or attempt._issuer is not _ISSUER
@@ -276,6 +276,11 @@ def _claim_provider_attempt(attempt, work, request_id, transport, runtime_guard)
         real_transport = real_transport.func
     if real_transport is not execute_turn:
         raise ValueError('provider_transport_not_supported')
+    if store is not None and store.continuation_v1:
+        binding=store.continuation_enrollment(work['id'])
+        if binding is None or any(binding[key]!=getattr(attempt,key) for key in
+                ('task_id','generation_id','cycle_id','attempt_id','work_id','scope_sha256')):
+            raise ValueError('provider_attempt_mismatch')
     object.__setattr__(attempt, '_claimed', True)
 
 
@@ -356,7 +361,8 @@ def _finish_provider_attempt(attempt, store, work, turn_id, observation, runtime
         'cycle_id': attempt.cycle_id, 'attempt_id': attempt.attempt_id,
         'work_id': work['id'], 'turn_id': turn_id, 'request_id': attempt.request_id,
         'scope_sha256': attempt.scope_sha256, 'result_sha256': _sha(result),
-        'work_state_sha256': _sha(store.status(work['id'])),
+        'work_state_sha256': (store.continuation_state_sha256(work['id']) if store.continuation_v1
+            else _sha(store.status(work['id']))),
         'classification': 'provider_unavailable', 'cause': 'unknown',
         'evidence_sha256': candidate['evidence_sha256'], 'runtime_receipt_sha256': _sha(receipt),
         'runtime_execution_id': receipt['id'], 'runtime_revision': receipt['revision'],
@@ -390,4 +396,15 @@ def consume_provider_receipt(receipt, *, task_id, generation_id, cycle_id, attem
                 for key, value in binding.items())):
         raise ValueError('provider_receipt_mismatch')
     object.__setattr__(receipt, '_consumed', True)
+    return metadata
+
+
+def _consumed_provider_receipt_metadata(receipt):
+    """Recheck a consumed in-memory fact for the exact storage seal, not replay."""
+    if (type(receipt) is not ProviderDispositionReceipt or receipt._issuer is not _ISSUER
+            or receipt._pid!=os.getpid() or receipt._thread is not threading.current_thread()
+            or receipt._consumed is not True):
+        raise ValueError('provider_receipt_unavailable')
+    metadata=json.loads(receipt.metadata_json)
+    if not _fresh(receipt.monotonic_at,metadata['observed_at']):raise ValueError('provider_receipt_mismatch')
     return metadata
