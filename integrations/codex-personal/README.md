@@ -29,6 +29,19 @@ produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
 l’[état des travailleurs serveur](CLOUD-WORKERS.md).
 
+La version 0.42 conserve dans les notifications du board les codes publics
+connus des refus de planification, d'action et de budget. Les valeurs inconnues
+restent génériques ; aucun texte d'exception ni contenu de modèle n'est ajouté
+aux notifications. Les conditions d'exécution et de nettoyage sont inchangées.
+
+Les budgets du planificateur et du broker sont distincts : un outil peut
+entraîner plusieurs lectures de contrôle comptées par le broker. La régression
+Linux exerce une lecture, un patch, un test échoué ou annulé, une relecture,
+un second test et l'inspection finale : dix opérations sont nécessaires. Le
+plafond de huit refuse ce parcours ; des configurations explicitement dotées
+d'un budget suffisant le terminent. La pause et la continuation automatiques
+après quota ou fin de cycle restent à raccorder au contrôleur.
+
 La version 0.41 place le préflight local du lancement Linux avant la collecte
 de la première fenêtre d'autorisation. Ce même contrôle ne consomme ainsi plus
 sa marge entre la collecte et le lancement du helper. La fenêtre de 1,5 seconde,
