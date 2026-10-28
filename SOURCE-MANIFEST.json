@@ -504,7 +504,7 @@
     "requirements-dev.txt": "54d6d9a8998c4f7806227a32671a6de85344f34a0728a155643683038e9281dd",
     "requirements.txt": "52368495e86a7cdf7e8093e08dd42f5d5f79370475556e9c55a266d3e5cc7d16",
     "runtime.py": "5390d229d56cc3c07c786962bc93b814faed3ecda6a1083ea549d77df814ea38",
-    "scripts/local_board.py": "8c9067bace09a196dcfc7af941ef165f002ae00d62b7adbea7f9d7026923c2af",
+    "scripts/local_board.py": "ebd5af785db7a5ebc9ef90311540c17b94d117b3b8227deb04b3c5b353db15a9",
     "server_instances.py": "480f1727f28b2f85c5362f740a185c64417d9b07d26856d9ce70a03d433df7bc",
     "server_messages_append.py": "9b5987e0f6f545c0b7b5031fa82fdf6b6e88b6d91e4bb623cf7a492b78ff2635",
     "server_provisioning.py": "5dff0ebc02d69a953f37f3506a1edd80bd730b225425974a802ece46bd49740d",
