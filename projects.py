@@ -10,6 +10,7 @@ import hashlib
 import json
 import secrets
 import time
+import re
 from urllib.parse import urlsplit
 
 
@@ -56,20 +57,27 @@ def _choice(value, name, choices):
 
 
 def _repository(value):
+    """An HTTPS URL, an SSH Git address, or an absolute local path; never credentials."""
     value = _text(value, "repository_url", 0, 2000)
     if not value:
         return value
-    try:
-        parsed = urlsplit(value)
-        valid = (parsed.scheme == "https" and bool(parsed.hostname) and
-                 parsed.username is None and parsed.password is None and
-                 not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) and
-                 "\\" not in value)
-        parsed.port  # Reject malformed/out-of-range ports as well.
-    except ValueError:
+    local = value.startswith("/") or re.fullmatch(r"[A-Za-z]:[\\/].*", value)
+    if any((c.isspace() and not (local and c == " ")) or ord(c) < 32 or ord(c) == 127 for c in value):
         valid = False
+    elif local:
+        valid = True
+    elif re.fullmatch(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+", value):
+        valid = True
+    else:
+        try:
+            parsed = urlsplit(value)
+            valid = (parsed.scheme in ("https", "ssh") and bool(parsed.hostname) and parsed.password is None
+                     and (parsed.username is None or parsed.scheme == "ssh") and "\\" not in value)
+            parsed.port  # Reject malformed/out-of-range ports as well.
+        except ValueError:
+            valid = False
     if not valid:
-        _fail("repository_url must be an HTTPS URL without credentials")
+        _fail("repository_url must be an HTTPS URL, an SSH Git address, or an absolute local path")
     return value
 
 

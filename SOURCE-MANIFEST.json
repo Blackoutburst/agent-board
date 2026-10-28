@@ -499,7 +499,7 @@
     "profile_management.py": "3cb6aa2f4989eb0630fccf8064c294ecca57ab4c35ebcfc07f57b6073d0cdca5",
     "profile_refresh.py": "6c93de3c6c2ab62f7b774069e22fb156f9dc967e8c9b4c84558883a9349b7838",
     "profiles.py": "0ec8b8b5fea32d119796c2dea2d2b28639adf69d16b445859ff05a913cbed8f7",
-    "projects.py": "8fffc236b10ab04ecb55aa286ed4700db2b605636f4a3b2e30aaaa5ec9a88316",
+    "projects.py": "35edc1e03d27be75203a58d93cea4b0d66c81195b15e4ee7381df36e583503b8",
     "provider_onboarding.py": "01857dbdb3c497429292b75f633941693e9e11a954c320faa88259cce7ef1ae8",
     "requirements-dev.txt": "54d6d9a8998c4f7806227a32671a6de85344f34a0728a155643683038e9281dd",
     "requirements.txt": "52368495e86a7cdf7e8093e08dd42f5d5f79370475556e9c55a266d3e5cc7d16",
@@ -573,7 +573,7 @@
     "tests/test_isolated_host_package.py": "0ef99b72ce0c5c7e40a301b6c5131b949746f40d79433452a58db3bc38e27671",
     "tests/test_isolated_host_update.py": "4e686245346ff20a0c513c59923478c96d884295ea3c7653f0966d2724f41b0e",
     "tests/test_legacy_schema_fixtures.py": "47ef56af28a48eddb16293ac6c0bdf3c9fedcd39c78a277f477e8279dae6aa6d",
-    "tests/test_local_mode.py": "8ddab8816d7669b0921038ca3ccc203e43503aacca8fa302ffd5d91b7c79ad99",
+    "tests/test_local_mode.py": "941ae11f4bbca57664375cbe485882d6c520d84ba7798f66ab14af01240fafa2",
     "tests/test_managed_claim_release.py": "237f584a67de1d0266b455d01ba6e2492eb406629d44016b0af1047c0eb38da1",
     "tests/test_managed_claim_release_api.py": "dbe345a2c2ad3c48a8effc29963c5cf12486a1c3e3cba962930f755367823804",
     "tests/test_mcp_review_regressions.py": "40f6b36168a0bb399b23af013c997fdb95f97a9c70009785eebc3b82f58baa43",
@@ -637,6 +637,6 @@
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "e621e3bf502c97547b4517e26b015d7273c3c7585ca5ab30caac45058925d0c3"
+    "web/workspace.js": "4c4a9853381daa578ce8d8a1b4b19302f6059054bc979e203fbd62852e71ffea"
   }
 }
