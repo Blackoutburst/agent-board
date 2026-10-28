@@ -405,3 +405,18 @@ def test_mutated_checkpoint_controller_refuses_before_first_model(cycle_case):
     result=case.run_cycle()
     assert result['status']=='needs_you'
     assert case.read_ticket()['claimant'] is None and case.inferences==[]
+
+
+def test_duplicate_consumed_permit_cannot_mark_a_healthy_active_invocation(cycle_case):
+    case=cycle_case;start=case.task.start_cycle(expected_revision=0,request_id='single-invocation')
+    observed=[]
+    def duplicate(callbacks):
+        if observed:return
+        before=case.task.snapshot()
+        with pytest.raises(DevelopmentError,match='development_cycle_live_permit_required'):
+            case.driver.run_checkpoint(case.operation,start=start,after_actions=2)
+        observed.append((before,case.task.snapshot()))
+    case.after_model=duplicate
+    result=case.driver.run_checkpoint(case.operation,start=start,after_actions=2)
+    assert observed[0][0]==observed[0][1]
+    assert result['status']=='paused_cycle' and len(case.inferences)==2

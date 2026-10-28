@@ -437,6 +437,10 @@ class DevelopmentCycleDriver:
     def run_checkpoint(self,operation_id,*,start,parent_checkpoint_id=None,after_actions=1):
         require(type(start) is CycleStart and type(start.permit) is LiveCyclePermit
             and start.permit.task is self.task,'development_cycle_live_permit_required')
+        # A duplicate/foreign caller did not own the active execution. Its
+        # refusal must never turn that other invocation into NeedsYou.
+        require(start.permit.active is True and start.permit.pid==os.getpid()
+            and start.permit.thread is threading.current_thread(),'development_cycle_live_permit_required')
         _operation(operation_id)
         try:
             return self._run_checkpoint(operation_id,start=start,parent_checkpoint_id=parent_checkpoint_id,
