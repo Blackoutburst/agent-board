@@ -81,6 +81,14 @@ def _effect_receipt(step,manifest,broker,*,configuration=None,workflow_id=None):
         if (receipt if kind=='patch' else receipt.get('receipt'))!=raw:
             raise DevelopmentError('development_cleanup_identity_changed')
         return 'completed'
+    if kind=='final' and receipt is None:
+        # Final only inspects local diff/test receipts; it never dispatches a
+        # model, test or patch. A refusal before its inspection receipt can
+        # therefore finish only as blocked. Do not confuse a named test whose
+        # Runtime label is also "read_file" with this non-dispatching action.
+        if digest(step['action_key'].encode('ascii')) in broker['operations']:
+            raise DevelopmentError('development_cleanup_identity_changed')
+        return 'blocked'
     if receipt is None:raise DevelopmentError('development_cleanup_receipt_missing')
     if kind=='read':
         if (set(receipt)!={'path','bytes','sha256','content'} or receipt['path']!=action['path']
