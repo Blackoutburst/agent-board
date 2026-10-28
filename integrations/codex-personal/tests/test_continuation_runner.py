@@ -348,3 +348,32 @@ def test_real_quota_prose_soft_pause_and_wake_do_not_toggle_owner_runtime_pause(
     assert case['runtime'].board.get_runtime(case['runtime'].human)['limits']['paused'] is False
     old=case['store']._db.execute("SELECT * FROM turns WHERE status='blocked'").fetchone()
     assert old['requires_review']==1 and old['resolution'] is None
+
+
+@pytest.mark.parametrize('code',['continuation_scope_changed','continuation_source_changed','continuation_claim_changed'])
+def test_execute_revalidation_failure_prevents_factory_claim_session_and_model(case,code):
+    controller=case['controller'];before=case['runtime'].board.get_ticket(case['runtime'].human,case['runtime'].ticket['id'])
+    old=controller.task.checks.callbacks
+    def changed(context):
+        if context.purpose=='execute':raise ContinuationError(code)
+        return old[0](context)
+    controller.task.checks.callbacks=(changed,*old[1:])
+    with pytest.raises(ContinuationError):controller.run_cycle(request_id='first')
+    assert case['guards']==[] and not calls(case)
+    assert case['runtime'].board.get_ticket(case['runtime'].human,case['runtime'].ticket['id'])==before
+    assert not list((case['runtime'].root/'controller').glob('attempt-*.json'))
+
+
+def test_stop_between_start_and_live_permit_prevents_factory_claim_and_model(case,monkeypatch):
+    controller=case['controller'];original=controller.task.start_cycle
+    before=case['runtime'].board.get_ticket(case['runtime'].human,case['runtime'].ticket['id'])
+    def stopped(**kwargs):
+        result=original(**kwargs)
+        if result.permit:
+            state=controller.task.snapshot()['state'];controller.task.stop(expected_revision=state['revision'],request_id='stop-before-use')
+        return result
+    monkeypatch.setattr(controller.task,'start_cycle',stopped)
+    with pytest.raises(ContinuationError):controller.run_cycle(request_id='first')
+    assert case['guards']==[] and not calls(case)
+    assert case['runtime'].board.get_ticket(case['runtime'].human,case['runtime'].ticket['id'])==before
+    assert controller.task.snapshot()['state']['phase']=='stopped'

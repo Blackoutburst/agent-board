@@ -256,19 +256,23 @@ class ContinuationRunner:
             if start.permit is None:return {'status':'historical' if start.receipt['historical'] else 'needs_you',**start.receipt}
             context=start.permit.context;work_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'continuation-work:'+context.attempt_id))
             owned_attempt=context.attempt_id
-            guard=self.runtime_factory(context)
-            require(type(guard) is RuntimeGuard and type(guard.journal) is RuntimeJournal
-                and guard.scope['board_session_id']==context.attempt_id
-                and all(guard.scope[key]==context.scope[key] for key in ('owner_id','agent_id','project_id','ticket_id','board_endpoint')),
-                'continuation_scope_changed')
-            scope_sha=digest(canonical(guard.scope));identity={key:guard.scope[key] for key in ('board_endpoint','board_session_id','agent_id')}
-            self._binding={'guard':guard,'work_id':work_id,'context':context}
-            self._record('attempt-'+context.attempt_id+'.json',{'schema':'continuation-runner-attempt-v1',
-                'task_id':context.logical_task_id,'generation_id':context.generation_id,'cycle_id':context.cycle_id,
-                'attempt_id':context.attempt_id,'work_id':work_id,'scope_sha256':scope_sha,
-                'board_session_id':guard.scope['board_session_id'],'core_state_sha256':context.state_sha256,
-                'configuration_sha256':self.configuration_sha256})
             with start.permit.use():
+                guard=self.runtime_factory(context)
+                require(type(guard) is RuntimeGuard and type(guard.journal) is RuntimeJournal
+                    and guard.scope['board_session_id']==context.attempt_id
+                    and all(guard.scope[key]==context.scope[key] for key in ('owner_id','agent_id','project_id','ticket_id','board_endpoint')),
+                    'continuation_scope_changed')
+                scope_sha=digest(canonical(guard.scope));identity={key:guard.scope[key] for key in ('board_endpoint','board_session_id','agent_id')}
+                self._binding={'guard':guard,'work_id':work_id,'context':context}
+                self._record('attempt-'+context.attempt_id+'.json',{'schema':'continuation-runner-attempt-v1',
+                    'task_id':context.logical_task_id,'generation_id':context.generation_id,'cycle_id':context.cycle_id,
+                    'attempt_id':context.attempt_id,'work_id':work_id,'scope_sha256':scope_sha,
+                    'board_session_id':guard.scope['board_session_id'],'core_state_sha256':context.state_sha256,
+                    'configuration_sha256':self.configuration_sha256})
+                cycle=start.receipt['snapshot']['state']['current_cycle']
+                deadline=cycle['started_at']+self.task.configuration['cycle_limits']['max_wall_seconds']
+                require(self.task._time(cycle)<deadline and not self._stop(),'continuation_cycle_limit')
+                self.task.checks.verify(context)
                 work=self.store.create_work(owner_id=guard.scope['owner_id'],agent_id='board-agent-'+digest(canonical(identity)),
                     project_id=guard.scope['project_id'],ticket_id=guard.scope['ticket_id'],workspace=self.workspace,
                     executable=self.executable,model=self.model,work_id=work_id)
@@ -277,8 +281,7 @@ class ContinuationRunner:
                     self.store.enroll_continuation_work_v1(work_id,task_id=context.logical_task_id,generation_id=context.generation_id,
                         cycle_id=context.cycle_id,attempt_id=context.attempt_id,scope_sha256=scope_sha)
                 runner=PersonalRunner(self.store,runtime_guard=guard)
-                sealed=[];cycle=start.receipt['snapshot']['state']['current_cycle']
-                deadline=cycle['started_at']+self.task.configuration['cycle_limits']['max_wall_seconds']
+                sealed=[]
                 for index in range(turns):
                     require(not self._stop(),'continuation_stopped')
                     self.task.checks.verify(context)
