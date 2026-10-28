@@ -803,10 +803,16 @@ class DevelopmentPlanner:
             finally:
                 self._inspecting = False
 
-    def run(self):
+    def run(self, *, checkpoint_request=None):
         """Run only this explicit finite operation. Reentry never changes keys."""
+        if checkpoint_request is not None:
+            from .development_checkpoint_proof import DevelopmentCheckpointRequest
+            if type(checkpoint_request) is not DevelopmentCheckpointRequest:
+                raise DevelopmentError('development_checkpoint_request_invalid')
+            checkpoint_request.validate(self)
         with self.journal.lock():
             state = self.journal.read()
+            checkpoint_start = len(state['history'])
             self._state = state
             if state['phase'] in ('needs_review', 'review_ready'):
                 return self.status(state)
@@ -829,6 +835,10 @@ class DevelopmentPlanner:
                         self._tool(state)
                     if state['phase'] == 'tool_receipt' and state['step']['tool_finished']:
                         self._advance(state)
+                        if (checkpoint_request is not None and state['phase']=='ready'
+                                and len(state['history'])-checkpoint_start>=checkpoint_request.after_actions):
+                            from .development_checkpoint_proof import _checkpoint_ready
+                            return _checkpoint_ready(self,checkpoint_request)
                     if state['phase'] == 'review_ready':
                         return self.status(state)
                     if state['phase'] not in ('ready',):
