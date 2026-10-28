@@ -9,6 +9,7 @@ final response is private conversation content, not a public verification receip
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import selectors
@@ -132,6 +133,17 @@ def _stop_group(process: subprocess.Popen[bytes]) -> bool:
     return cleaned
 
 
+def _group_absent(process):
+    """Only inspect the group this invocation created, never a persisted PID."""
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass
+    return False
+
+
 def execute_turn(
     settings: ProbeSettings,
     prompt: str,
@@ -144,6 +156,8 @@ def execute_turn(
     planner_policy=None,
     before_prompt: Callable[[], None] | None = None,
     reasoning_effort=None,
+    provider_disposition=False,
+    on_provider_observation=None,
 ) -> dict[str, object]:
     """Run one text turn, returning only its final message and safe checks.
 
@@ -153,6 +167,8 @@ def execute_turn(
     Callback failures stop the owned process group and block the turn.
     ``before_prompt`` is an opt-in forced authority check at the first stdin
     write, after metadata/policy checks. Polling callbacks cannot replace it.
+    ``provider_disposition`` optionally observes a failed terminal stream through
+    natural EOF/exit. Its callback receives local facts, never retry authority.
     """
     verification: dict[str, object] = {
         "exit_zero": False, "turn_completed": False, "session_verified": False,
@@ -168,6 +184,10 @@ def execute_turn(
         return result
     try:
         reasoning_effort = _reasoning_effort(reasoning_effort)
+        if (type(provider_disposition) is not bool
+                or (on_provider_observation is not None and
+                    (not provider_disposition or not callable(on_provider_observation)))):
+            return result
         if not isinstance(prompt, str):
             return result
         if before_prompt is not None and not callable(before_prompt):
@@ -271,9 +291,15 @@ def execute_turn(
     turn_completed = False
     final_message: str | None = None
     deadline = time.monotonic() + settings.timeout_seconds
+    terminal_failure = None
+    terminal_event_sha256 = None
+    terminal_deadline = None
+    stream_eof = set()
+    natural_exit = False
 
     def event_line(line: bytes) -> str | None:
         nonlocal session_id, turn_started, turn_completed, final_message
+        nonlocal terminal_failure, terminal_event_sha256, terminal_deadline
         if not line.strip():
             return None
         try:
@@ -283,8 +309,22 @@ def execute_turn(
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             return "protocol_error"
         kind = event["type"]
+        if provider_disposition and terminal_failure is not None:
+            # Nothing, including a second failure/notice, may follow terminality.
+            return 'protocol_error'
         # A late failure invalidates even an otherwise complete result.
         if kind in ("error", "turn.failed"):
+            if (provider_disposition and kind == 'turn.failed' and session_id is not None
+                    and turn_started and not turn_completed and final_message is None
+                    and set(event) == {'type', 'error'} and type(event['error']) is dict
+                    and set(event['error']) == {'message'}
+                    and type(event['error']['message']) is str):
+                # The message is not a typed quota/context code. Retain only a
+                # digest and keep draining so forced cleanup cannot fake EOF.
+                terminal_failure = _error_category(line.decode('utf-8', 'replace'))
+                terminal_event_sha256 = hashlib.sha256(line).hexdigest()
+                terminal_deadline = min(deadline, time.monotonic() + 1)
+                return None
             return _error_category(line.decode("utf-8", "replace"))
         if turn_completed:
             return "protocol_error"
@@ -354,6 +394,8 @@ def execute_turn(
             if failure:
                 break
             remaining = deadline - time.monotonic()
+            if terminal_deadline is not None:
+                remaining = min(remaining, terminal_deadline - time.monotonic())
             if remaining <= 0:
                 failure = "timeout"
                 break
@@ -389,6 +431,7 @@ def execute_turn(
                     continue
                 if not chunk:
                     selector.unregister(key.fileobj)
+                    stream_eof.add(key.data)
                     if key.data == "stdout" and stdout_pending:
                         failure = event_line(bytes(stdout_pending))
                         stdout_pending.clear()
@@ -413,6 +456,7 @@ def execute_turn(
                     break
         if failure is None:
             process.wait()
+            natural_exit = True
     except OSError:
         failure = "process_io_failed"
     finally:
@@ -426,6 +470,8 @@ def execute_turn(
                 stream.close()
 
     verification["exit_zero"] = process.returncode == 0
+    if failure is None and terminal_failure is not None:
+        failure = terminal_failure
     if failure is None:
         if process.returncode != 0:
             failure = _error_category(stderr.decode("utf-8", "replace"))
@@ -439,4 +485,21 @@ def execute_turn(
         result.update(status="cancelled" if failure == "cancelled" else "blocked", reason=failure)
     else:
         result.update(status="completed", reason="verified", text=final_message)
+    if (provider_disposition and on_provider_observation is not None
+            and terminal_failure is not None and failure == terminal_failure
+            and natural_exit and stream_eof == {'stdout', 'stderr'}
+            and type(process.returncode) is int and process.returncode >= 0
+            and written == len(prompt_bytes) and cleaned
+            and verification['session_verified'] is True and verification['tool_free'] is True
+            and _group_absent(process)):
+        # A stop arriving after EOF still prevents a pause candidate.
+        late_failure = cancellation()
+        if late_failure is not None:
+            result.update(status='cancelled' if late_failure == 'cancelled' else 'blocked', reason=late_failure)
+        else:
+            from .provider_disposition import _issue_terminal_observation
+            try:
+                on_provider_observation(_issue_terminal_observation(result, terminal_event_sha256))
+            except Exception:
+                result.update(status='blocked', reason='callback_failed')
     return result
