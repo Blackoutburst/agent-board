@@ -140,10 +140,15 @@ def _test_caps(planner,broker):
 
 
 def _finished(planner,record):
+    return _finished_outcome(planner,record,'completed')
+
+
+def _finished_outcome(planner,record,outcome):
     from .runtime_guard import RuntimeGuard
+    require(outcome in ('completed','blocked'))
     require(type(record) is dict and record['phase']=='finished' and record['start_confirmed']==1
         and type(record['receipt']) is dict and record['receipt'].get('cleanup_confirmed') is True
-        and record['receipt'].get('outcome')=='completed')
+        and record['receipt'].get('outcome')==outcome)
     validator=RuntimeGuard(planner.runtime_journal,planner.client,record['configuration']['scope']);validator.operation=record
     found=planner.client.call('lookup_execution',{'idempotency_key':record['key']})
     require(type(found) is dict and found.get('found') is True)
@@ -155,6 +160,16 @@ def _finished(planner,record):
 
 
 def _projection(planner,request,broker):
+    return _projection_common(planner,request,broker)
+
+
+def _provider_projection(planner,request,broker,failure):
+    from .development_provider_continuation import _ProviderFailure
+    require(type(failure) is _ProviderFailure)
+    return _projection_common(planner,request,broker,provider=failure)
+
+
+def _projection_common(planner,request,broker,*,provider=None):
     from .dev_planner import parse_action
     from .dev_runtime import ToolRuntimeGuard,development_agent_id,development_work_id
     request.validate(planner);planner.journal.checkpoint_lock()
@@ -163,16 +178,18 @@ def _projection(planner,request,broker):
     broker_raw=planner.broker.journal.private.read('state.json',2*1024*1024)
     require(planner_raw==canonical(state) and broker_raw==canonical(broker)
         and digest(planner.broker.journal.private.read('manifest.json',128*1024))==planner.broker.journal.manifest_hash)
-    require(state['phase']=='ready' and state['step'] is None and state['review'] is None and state['history']
-        and planner.active_guard is None and not planner.journal.stopped())
+    require(state['review'] is None and planner.active_guard is None and not planner.journal.stopped())
+    if provider is None:require(state['phase']=='ready' and state['step'] is None and state['history'])
+    else:require(state['phase']=='model_intent' and state['step'] is not None)
     # Inspection keeps absolute counters/deadline intact, including exhaustion.
     planner._fresh(state,inspection=True);before_op=_worker(planner,request)
     require(all(row['phase']=='complete' for row in broker['operations'].values()))
     count=planner.store._db.execute('SELECT COUNT(*) FROM turns WHERE work_id=?',(planner.work['id'],)).fetchone()[0]
     require(0<count<=64)
     stored=planner.store.status(planner.work['id']);work=stored['work'];turns={row['id']:row for row in stored['turns']}
-    history=state['history'];require(len(turns)==len(history)==state['used']['turns']==state['used']['actions']
-        and len(turns)<=64 and work['status']=='open'
+    history=state['history'];extra=0 if provider is None else 1
+    require(len(turns)==len(history)+extra==state['used']['turns'] and len(history)==state['used']['actions']
+        and len(turns)<=64 and work['status']==('open' if provider is None else 'needs_review')
         and work['id']==development_work_id(planner.parent_operation_id)
         and work['agent_id']==development_agent_id(planner.scope,planner.parent_operation_id)
         and all(work[key]==planner.scope[key] for key in ('owner_id','project_id','ticket_id'))
@@ -210,7 +227,12 @@ def _projection(planner,request,broker):
                 current[action['path']]=wanted['after_sha256']
             else:
                 require(entry['detail']['name']==action['name'] and entry['receipt'].get('cleanup_confirmed') is True)
-    require(operations==set(broker['operations']) and len(expected_runtime)==2*len(history))
+    if provider is not None:
+        turn,result,record=provider.verify(planner,request,state,stored)
+        require(turn['id'] not in model_hashes)
+        model_hashes[turn['id']]=digest(canonical(result))
+        runtime_hashes.append(_finished_outcome(planner,record,'blocked'));expected_runtime.add(record['id'])
+    require(operations==set(broker['operations']) and len(expected_runtime)==2*len(history)+extra)
     rows=planner.runtime_journal.db.execute("SELECT id FROM executions WHERE json_extract(configuration,'$.work_id')=? LIMIT 130",(work['id'],)).fetchall()
     require(len(rows)<=128 and {row['id'] for row in rows}==expected_runtime)
     def source():
@@ -228,7 +250,7 @@ def _projection(planner,request,broker):
         and decode(planner.broker.journal.private.read('state.json',2*1024*1024))==broker)
     caps={'paths':paths,'tests':tests,'actions':manifest['actions'],'resource':manifest['resource'],
         'broker_limits':manifest['budgets'],'planner_limits':planner.configuration['budgets']}
-    return {'schema':'development-checkpoint-observation-v1','operation_id':planner.operation_id,'work_id':work['id'],
+    metadata={'schema':'development-checkpoint-observation-v1','operation_id':planner.operation_id,'work_id':work['id'],
         **{key:getattr(request,key) for key in ('task_id','generation_id','cycle_id','attempt_id','original_public_base',
             'source_release_sha256','parent_checkpoint_sha256')},'scope':deepcopy(manifest['scope']),
         'resource':manifest['resource'],'root':manifest['root'],'root_identity':manifest['root_identity'],
@@ -240,6 +262,12 @@ def _projection(planner,request,broker):
         'source_snapshot_sha256':digest(canonical(current)),'test_caps_sha256':digest(canonical(tests)),
         'static_caps_sha256':digest(canonical(caps)),'used_planner':deepcopy(state['used']),'used_broker':deepcopy(broker['used']),
         'started_at':state['started_at'],'deadline':state['deadline'],'passed_tests_promoted':False}
+    if provider is not None:
+        metadata.update(schema='development-provider-checkpoint-observation-v1',failed_step_id=state['step']['id'],
+            provider_receipt={'work_id':work['id'],'turn_id':provider.metadata['turn_id'],
+                'receipt_sha256':provider.receipt_sha256},provider_result_sha256=provider.metadata['result_sha256'],
+            provider_cause='unknown')
+    return metadata
 
 
 class DevelopmentCheckpointProof:
@@ -249,6 +277,7 @@ class DevelopmentCheckpointProof:
     def __copy__(self):raise TypeError('Live checkpoint proofs cannot be copied')
     def __deepcopy__(self,_):raise TypeError('Live checkpoint proofs cannot be copied')
     def __reduce_ex__(self,_):raise TypeError('Live checkpoint proofs cannot be serialized')
+    def _observe(self,broker):return _projection(self.planner,self.request,broker)
     @contextmanager
     def hold(self):
         require(self.pid==os.getpid() and self.thread is threading.current_thread() and self._held is None)
@@ -259,7 +288,7 @@ class DevelopmentCheckpointProof:
                     lease=None
                     from .dev_journal import _linux_lock_supported
                     if _linux_lock_supported():lease=self.planner.broker.journal.held_lock_lease()
-                    observation=_projection(self.planner,self.request,broker);require(observation==self.metadata)
+                    observation=self._observe(broker);require(observation==self.metadata)
                     self._held=(token,broker,observation,lease)
                     try:yield deepcopy(observation)
                     finally:self._held=None
@@ -269,8 +298,16 @@ class DevelopmentCheckpointProof:
         require(self.pid==os.getpid() and self.thread is threading.current_thread() and self._held is not None)
         token,broker,expected,lease=self._held;self.planner.journal.checkpoint_lock(token)
         if lease is not None:self.planner.broker.journal.require_lock_lease(lease)
-        require(observation==expected and _projection(self.planner,self.request,broker)==expected)
+        require(observation==expected and self._observe(broker)==expected)
         return deepcopy(expected)
+
+
+class DevelopmentProviderCheckpointProof(DevelopmentCheckpointProof):
+    """Explicit source-only failed-turn boundary; never a ready/v1 proof."""
+    @classmethod
+    def _issue(cls,planner,request,metadata,failure):
+        value=cls(_ISSUER,planner,request,metadata);value.failure=failure;return value
+    def _observe(self,broker):return _provider_projection(self.planner,self.request,broker,self.failure)
 
 
 def _checkpoint_ready(planner,request):

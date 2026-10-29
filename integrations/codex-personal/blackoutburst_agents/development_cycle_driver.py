@@ -77,7 +77,7 @@ class _DevelopmentCyclePreparation:
         require(preparer is self.preparer and operation_id==self.operation_id and self.pid==os.getpid()
             and self.thread is threading.current_thread(),'development_cycle_preparation_changed')
         current=self.task.snapshot()
-        require(current==self.snapshot and current['state']['phase']=='paused_cycle'
+        require(current==self.snapshot and current['state']['phase'] in ('paused_cycle','paused_provider')
             and current['state']['stop_requested'] is False,'development_cycle_logical_stop')
         if fresh:self.task.checks.verify(self.task._context(current,purpose='start'))
         require(self.task.snapshot()==current,'development_cycle_logical_stop')
@@ -233,7 +233,7 @@ def _validate_next_inputs(op,parameters,observation,*,preparer=None,operation_id
                 'development_cycle_caps_changed')
 
 
-def run_worker_checkpoint(worker,operation_id,*,request,checkpoint_controller,parent_checkpoint_id=None):
+def run_worker_checkpoint(worker,operation_id,*,request,checkpoint_controller,parent_checkpoint_id=None,provider_session=None):
     """One immutable opt-in intent before the normal Worker admission path."""
     from .development_worker import DevelopmentBoardWorker
     require(type(worker) is DevelopmentBoardWorker and type(request) is DevelopmentCheckpointRequest
@@ -241,6 +241,10 @@ def run_worker_checkpoint(worker,operation_id,*,request,checkpoint_controller,pa
         'development_cycle_concrete_handles_required')
     _operation(operation_id);controller=checkpoint_controller
     controller._roots()  # Configuration/hash/root drift refuses before a model.
+    if provider_session is not None:
+        from .development_provider_continuation import DevelopmentProviderSession
+        require(type(provider_session) is DevelopmentProviderSession and provider_session.worker is worker,
+            'development_provider_session_required')
     op=worker.journal.get(operation_id);worker._pin_controller(op)
     require(op['stage'] not in ('needs_review','complete','abandoned','result_ready','publishing')
         and op['configuration'].get('controller_scope') is None,'development_cycle_stage_refused')
@@ -267,6 +271,8 @@ def run_worker_checkpoint(worker,operation_id,*,request,checkpoint_controller,pa
         'request':params,'controller_sha256':controller.configuration_sha256,
         'controller_root':str(controller.root),'controller_pin':controller.pin,
         'parent_checkpoint_id':parent_checkpoint_id,'checkpoint_id':checkpoint_id_for(operation_id)}
+    if provider_session is not None:
+        intent.update(schema='development-worker-provider-checkpoint-intent-v1',provider_mode='terminal-failure-v1')
     name='development-checkpoint-intent-'+operation_id+'.json'
     with PrivateDirectory(worker.journal.directory) as private:
         if _exists(private,name):
@@ -275,11 +281,13 @@ def run_worker_checkpoint(worker,operation_id,*,request,checkpoint_controller,pa
             require(type(capture) is dict,'development_cycle_capture_uncertain')
             sealed=controller.verify(intent['checkpoint_id'])
             require({**capture['checkpoint'],'historical':True}==sealed)
-            return {**worker._public(op),'status':'checkpoint_ready','checkpoint':sealed,
+            return {**worker._public(op),'status':capture['status'],'checkpoint':sealed,
                     'historical':True,'launchable':False}
         require('checkpoint_capture' not in op['payload'],'development_cycle_request_conflict')
         private.create(name,canonical(intent))
-    return worker._run(operation_id,checkpoint=(request,controller,parent_checkpoint_id))
+    checkpoint=(request,controller,parent_checkpoint_id)
+    if provider_session is not None:checkpoint=(*checkpoint,provider_session)
+    return worker._run(operation_id,checkpoint=checkpoint)
 
 
 class DevelopmentCycleDriver:
@@ -310,6 +318,11 @@ class DevelopmentCycleDriver:
             require(self.task.snapshot()==state,'development_cycle_logical_state_changed')
         return state
 
+    def _paused(self,*,fresh=False):
+        state=self._logical(fresh=fresh)
+        require(state['state']['phase'] in ('paused_cycle','paused_provider'),'development_cycle_logical_state_changed')
+        return state
+
     def _operation(self,operation_id):
         _operation(operation_id);op=self.worker.journal.get(operation_id);self.worker._pin_controller(op)
         config=op['configuration'];c=self.checkpoints.configuration;s=self.task.configuration['scope']
@@ -319,8 +332,10 @@ class DevelopmentCycleDriver:
         for pin in config['pins'].values():require(_directory_pin(pin['path'])==pin)
         capture=op['payload'].get('checkpoint_capture')
         require(type(capture) is dict and set(capture)=={'status','checkpoint','observation','previous_revision','previous_updated_at'}
-            and capture['status']=='checkpoint_ready')
+            and capture['status'] in ('checkpoint_ready','provider_checkpoint_ready'))
         observation=capture['observation'];self.checkpoints._proof_caps(observation)
+        require((capture['status']=='provider_checkpoint_ready')==
+            (observation['schema']=='development-provider-checkpoint-observation-v1'))
         before=deepcopy(op);before['payload'].pop('checkpoint_capture')
         before.update(revision=capture['previous_revision'],updated_at=capture['previous_updated_at'])
         require(type(capture['previous_revision']) is int and op['revision']==capture['previous_revision']+1
@@ -434,7 +449,7 @@ class DevelopmentCycleDriver:
             if current['state_sha256']!=snapshot['state_sha256']:return current['state']['phase']
             raise
 
-    def run_checkpoint(self,operation_id,*,start,parent_checkpoint_id=None,after_actions=1):
+    def run_checkpoint(self,operation_id,*,start,parent_checkpoint_id=None,after_actions=1,provider_session=None):
         require(type(start) is CycleStart and type(start.permit) is LiveCyclePermit
             and start.permit.task is self.task,'development_cycle_live_permit_required')
         # A duplicate/foreign caller did not own the active execution. Its
@@ -444,7 +459,7 @@ class DevelopmentCycleDriver:
         _operation(operation_id)
         try:
             return self._run_checkpoint(operation_id,start=start,parent_checkpoint_id=parent_checkpoint_id,
-                after_actions=after_actions)
+                after_actions=after_actions,provider_session=provider_session)
         except Exception:
             # Only the exact still-current attempt can be marked. Stop and a
             # concurrent state transition win; no exception text is retained.
@@ -452,7 +467,7 @@ class DevelopmentCycleDriver:
             return {'operation_id':operation_id,'status':phase,'reason':'development_cycle_requires_review',
                 'launchable':False}
 
-    def _run_checkpoint(self,operation_id,*,start,parent_checkpoint_id=None,after_actions=1):
+    def _run_checkpoint(self,operation_id,*,start,parent_checkpoint_id=None,after_actions=1,provider_session=None):
         self._logical(phase='running')
         with start.permit.use() as context:
             require(context.scope==self.task.configuration['scope'])
@@ -468,24 +483,25 @@ class DevelopmentCycleDriver:
                 parent['checkpoint_sha256'],after_actions)
             with _executing(self.task,self.worker,operation_id,context):
                 result=self.worker.run_checkpoint(operation_id,request=request,checkpoint_controller=self.checkpoints,
-                    parent_checkpoint_id=parent_checkpoint_id)
-            if result['status']!='checkpoint_ready':
+                    parent_checkpoint_id=parent_checkpoint_id,provider_session=provider_session)
+            if result['status'] not in ('checkpoint_ready','provider_checkpoint_ready'):
                 if result['status']=='needs_review':
                     return {**result,'status':self._mark_review(operation_id,context),'worker_status':'needs_review'}
                 return result
             op,cp,observation=self._operation(operation_id)
+            reason='provider' if result['status']=='provider_checkpoint_ready' else 'cycle'
             require(all(observation[key]==getattr(context,key) for key in ('generation_id','cycle_id','attempt_id')))
             self._authorization(op).snapshot(require_claim=True);self._cleanup(op)
             checkpoint={'schema':1,'source_sha256':observation['source_snapshot_sha256'],
                 'diff_sha256':cp['checkpoint_sha256'],'plan_sha256':observation['configuration_sha256'],
-                'test_receipts':[],'provider_receipt':None}
+                'test_receipts':[],'provider_receipt':observation.get('provider_receipt')}
             used={**{key:observation['used_planner'][key] for key in ('turns','actions')},
                 **{key:observation['used_broker'][key] for key in ('operations','tests','read_bytes','patch_bytes')}}
             snapshot=self._logical(phase='running');revision=snapshot['state']['revision']
-            boundary=self.task.clean_boundary(expected_revision=revision,checkpoint=checkpoint,cycle_used=used,reason='cycle')
+            boundary=self.task.clean_boundary(expected_revision=revision,checkpoint=checkpoint,cycle_used=used,reason=reason)
             self._operation(operation_id);self._cleanup(op)
             event=self.task.checkpoint(expected_revision=revision,request_id='development-cycle-'+operation_id,
-                checkpoint=checkpoint,cycle_used=used,reason='cycle',boundary=boundary)
+                checkpoint=checkpoint,cycle_used=used,reason=reason,boundary=boundary)
             phase=event['snapshot']['state']['phase']
             return {**result,'status':phase,'logical_checkpoint_sha256':event['snapshot']['state']['checkpoint_sha256']}
 
@@ -545,11 +561,11 @@ class DevelopmentCycleDriver:
         require(states[0]==states[1],'development_cycle_claim_changed')
         sources=deepcopy(context['sources']);sources['ticket']=request['context_sources']['ticket']
         require(sources==request['context_sources'],'development_cycle_context_changed')
-        auth._policy();auth._registration_identity();self._logical(phase='paused_cycle')
+        auth._policy();auth._registration_identity();self._paused()
         return states[0]
 
     def retire_checkpoint(self,operation_id):
-        self._logical(phase='paused_cycle');op,cp,observation=self._operation(operation_id)
+        self._paused();op,cp,observation=self._operation(operation_id)
         require(self.task.snapshot()['state']['checkpoint']['diff_sha256']==cp['checkpoint_sha256'])
         self.worker.client.adopt_registration()
         with PrivateDirectory(self.worker.journal.directory) as private,_driver_lock(private,operation_id):
@@ -591,7 +607,7 @@ class DevelopmentCycleDriver:
         from .linux_pool_preparation import LinuxPoolJobPreparer
         require(type(preparer) is LinuxPoolJobPreparer and type(parameters) is dict,
             'development_cycle_concrete_handles_required')
-        current=self._logical(phase='paused_cycle',fresh=True);op,cp,observation=self._operation(operation_id)
+        current=self._paused(fresh=True);op,cp,observation=self._operation(operation_id)
         require(current['state']['checkpoint']['diff_sha256']==cp['checkpoint_sha256'],
             'development_cycle_parent_changed')
         with PrivateDirectory(self.worker.journal.directory) as private:
@@ -625,7 +641,7 @@ class DevelopmentCycleDriver:
             require(op['configuration'].get('execution_profile')=='linux-python-execution-v1',
                 'development_cycle_linux_preparation_required')
         _validate_next_inputs(op,parameters,observation)
-        self._logical(phase='paused_cycle',fresh=True)
+        self._paused(fresh=True)
         metadata={key:(value.document() if key in ('planner_budgets','broker_budgets') else deepcopy(value))
                   for key,value in parameters.items()}
         request={'operation_id':operation_id,'checkpoint_sha256':cp['checkpoint_sha256'],
@@ -644,7 +660,7 @@ class DevelopmentCycleDriver:
                 'request':request,'result':None}))
         with _preparing(self.task,preparer,next_operation_id):
             result=preparer.prepare(next_operation_id,**parameters)
-        self._logical(phase='paused_cycle',fresh=True)
+        self._paused(fresh=True)
         self._operation(operation_id);self._cleanup(op)
         require(self._fresh_release(op,value['request'],allow_post=True),'development_cycle_release_uncertain')
         # The preparer's own immutable request and file pins are re-read.

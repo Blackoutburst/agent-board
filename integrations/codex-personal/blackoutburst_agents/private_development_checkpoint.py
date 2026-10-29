@@ -158,7 +158,8 @@ class PrivateDevelopmentCheckpointController:
     def _proof_caps(self,observation):
         c=self.configuration
         if (type(observation) is not dict or observation.get('task_id')!=c['task_id']
-                or observation.get('schema')!='development-checkpoint-observation-v1'
+                or observation.get('schema') not in ('development-checkpoint-observation-v1',
+                    'development-provider-checkpoint-observation-v1')
                 or observation.get('passed_tests_promoted') is not False
                 or observation.get('resource')!=c['resource']
                 or observation.get('original_public_base')!=c['original_public_base']
@@ -175,6 +176,16 @@ class PrivateDevelopmentCheckpointController:
                     'worker_operation_sha256','runtime_cleanup_sha256','source_snapshot_sha256','work_state_sha256','model_results_sha256'):
             sha256(observation[key])
         for value in observation['selected_postimages'].values():sha256(value)
+        provider_fields={'failed_step_id','provider_result_sha256','provider_receipt','provider_cause'}
+        if observation['schema']=='development-checkpoint-observation-v1' and provider_fields & set(observation):
+            fail('private_checkpoint_proof_changed')
+        if observation['schema']=='development-provider-checkpoint-observation-v1':
+            _operation(observation['failed_step_id']);sha256(observation['provider_result_sha256'])
+            receipt=observation.get('provider_receipt')
+            if (type(receipt) is not dict or set(receipt)!={'work_id','turn_id','receipt_sha256'}
+                    or receipt['work_id']!=observation['work_id'] or observation.get('provider_cause')!='unknown'):
+                fail('private_checkpoint_proof_changed')
+            _operation(receipt['work_id']);_operation(receipt['turn_id']);sha256(receipt['receipt_sha256'])
         if observation['source_snapshot_sha256']!=digest(canonical(observation['selected_postimages'])):
             fail('private_checkpoint_proof_changed')
         _commit(observation['current_base_commit'])
@@ -313,9 +324,9 @@ class PrivateDevelopmentCheckpointController:
         return result
 
     def capture(self,*,checkpoint_id,proof,parent_checkpoint_id=None):
-        try:from .development_checkpoint_proof import DevelopmentCheckpointProof
+        try:from .development_checkpoint_proof import DevelopmentCheckpointProof,DevelopmentProviderCheckpointProof
         except ImportError:fail('private_checkpoint_producer_unavailable')
-        if type(proof) is not DevelopmentCheckpointProof:fail('private_checkpoint_proof_required')
+        if type(proof) not in (DevelopmentCheckpointProof,DevelopmentProviderCheckpointProof):fail('private_checkpoint_proof_required')
         checkpoint_id=_operation(checkpoint_id)
         if parent_checkpoint_id==checkpoint_id:fail('private_checkpoint_parent_changed')
         parent=None if parent_checkpoint_id is None else self.verify(parent_checkpoint_id)

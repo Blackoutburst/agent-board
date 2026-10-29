@@ -478,6 +478,13 @@ class DevelopmentPlanner:
         except Exception:
             return True
 
+    def _provider_cancelled(self,state):
+        # Runner separately polls the real active Runtime guard. After its
+        # terminal finish, that guard correctly forbids restarting itself;
+        # it is not a human/local cancellation of a clean failure receipt.
+        try:self._local_fresh(state);return False
+        except Exception:return True
+
     def _broker_authorize(self, scope, action, resource):
         try:
             if scope != self.broker.manifest['scope'] or resource != self.broker.manifest['resource']:
@@ -510,7 +517,7 @@ class DevelopmentPlanner:
             raise DevelopmentError('planner_prompt_too_large')
         return text
 
-    def _model(self, state):
+    def _model(self, state, provider_session=None):
         step = state['step']
         self._fresh(state)
         self.policy.validate_for(self.work['executable'], self.work['workspace'])
@@ -519,13 +526,18 @@ class DevelopmentPlanner:
             raise DevelopmentError('planner_policy_changed')
         self.active_guard = self.model_guard
         try:
+            options={}
+            if provider_session is not None:options['provider_attempt']=provider_session.enroll(self,state)
             response = self.runner.run(self.work['id'], step['request_id'], step['prompt'],
                 timeout=min(self.configuration['budgets']['turn_timeout_seconds'],
                             max(0.01, state['deadline'] - self._time(state))),
-                should_cancel=lambda: self._cancelled(state),
-                before_prompt=lambda: self._fresh(state))
+                should_cancel=lambda: self._cancelled(state) if provider_session is None else self._provider_cancelled(state),
+                before_prompt=lambda: self._fresh(state),**options)
         finally:
             self.active_guard = None
+        if provider_session is not None:
+            failure=provider_session.take(self,state,response)
+            if failure is not None:return failure
         self._accept_model(state, response['result'], response['turn_id'])
 
     def _validate_model_reservation(self, guard):
@@ -803,13 +815,18 @@ class DevelopmentPlanner:
             finally:
                 self._inspecting = False
 
-    def run(self, *, checkpoint_request=None):
+    def run(self, *, checkpoint_request=None, provider_session=None):
         """Run only this explicit finite operation. Reentry never changes keys."""
         if checkpoint_request is not None:
             from .development_checkpoint_proof import DevelopmentCheckpointRequest
             if type(checkpoint_request) is not DevelopmentCheckpointRequest:
                 raise DevelopmentError('development_checkpoint_request_invalid')
             checkpoint_request.validate(self)
+        if provider_session is not None:
+            from .development_provider_continuation import DevelopmentProviderSession
+            if type(provider_session) is not DevelopmentProviderSession or checkpoint_request is None:
+                raise DevelopmentError('development_provider_session_required')
+            provider_session.verify(self)
         with self.journal.lock():
             state = self.journal.read()
             checkpoint_start = len(state['history'])
@@ -830,7 +847,10 @@ class DevelopmentPlanner:
                         state['phase'] = 'model_intent'
                         self.journal.save(state)
                     if state['phase'] == 'model_intent':
-                        self._model(state)
+                        failure=self._model(state) if provider_session is None else self._model(state,provider_session)
+                        if failure is not None:
+                            from .development_provider_continuation import _provider_checkpoint
+                            return _provider_checkpoint(self,checkpoint_request,failure)
                     if state['phase'] == 'action_ready':
                         self._tool(state)
                     if state['phase'] == 'tool_receipt' and state['step']['tool_finished']:

@@ -444,11 +444,11 @@ class DevelopmentBoardWorker:
     def run(self, operation_id, *, reconcile=False):
         return self._run(operation_id,reconcile=reconcile)
 
-    def run_checkpoint(self, operation_id, *, request, checkpoint_controller, parent_checkpoint_id=None):
+    def run_checkpoint(self, operation_id, *, request, checkpoint_controller, parent_checkpoint_id=None,provider_session=None):
         """Explicit ready-boundary capture, with no partial review promotion."""
         from .development_cycle_driver import run_worker_checkpoint
         return run_worker_checkpoint(self,operation_id,request=request,
-            checkpoint_controller=checkpoint_controller,parent_checkpoint_id=parent_checkpoint_id)
+            checkpoint_controller=checkpoint_controller,parent_checkpoint_id=parent_checkpoint_id,provider_session=provider_session)
 
     def _run(self, operation_id, *, reconcile=False, checkpoint=None):
         op=self.journal.get(operation_id)
@@ -555,19 +555,21 @@ class DevelopmentBoardWorker:
                                 receipt=planner.reconcile() if reconcile else planner.run()
                             else:
                                 from .development_checkpoint_proof import DevelopmentCheckpointReady
+                                from .development_provider_continuation import DevelopmentProviderCheckpointReady
                                 from .private_development_checkpoint import checkpoint_id_for
-                                request,controller,parent_id=checkpoint
-                                frame=planner.run(checkpoint_request=request)
-                                if type(frame) is DevelopmentCheckpointReady:
+                                request,controller,parent_id=checkpoint[:3]
+                                options={} if len(checkpoint)==3 else {'provider_session':checkpoint[3]}
+                                frame=planner.run(checkpoint_request=request,**options)
+                                if type(frame) in (DevelopmentCheckpointReady,DevelopmentProviderCheckpointReady):
                                     # run() has released its Planner lock. The
                                     # concrete proof is still live until these
                                     # normal resources close in the finally.
                                     sealed=controller.capture(checkpoint_id=checkpoint_id_for(op['id']),
                                         proof=frame.proof,parent_checkpoint_id=parent_id)
-                                    op=self._save(op,checkpoint_capture={'status':'checkpoint_ready','checkpoint':sealed,
+                                    op=self._save(op,checkpoint_capture={'status':frame.status,'checkpoint':sealed,
                                         'observation':deepcopy(frame.proof.metadata),
                                         'previous_revision':op['revision'],'previous_updated_at':op['updated_at']})
-                                    return {**self._public(op),'status':'checkpoint_ready',
+                                    return {**self._public(op),'status':frame.status,
                                         'checkpoint':sealed,'historical':False,'launchable':False}
                                 receipt=frame
                         finally:
