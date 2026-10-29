@@ -43,6 +43,22 @@ def failure_notice(code, cleanup_confirmed=False):
         'cleanup_state':'confirmed' if cleanup_confirmed is True else 'unknown'}
 
 
+CONTINUATION_HUMAN_QUESTIONS = {
+    'permissions': 'Le cycle de développement est arrêté. Peux-tu vérifier les autorisations et les ressources nécessaires sur ce ticket ?',
+    'effects': 'Le cycle de développement est arrêté. Peux-tu examiner son état enregistré sur ce ticket avant de poursuivre ?'}
+
+
+def _continuation_question(ticket_id, owner_id, question_code, idempotency_key):
+    if (type(ticket_id) is not str or not _text(ticket_id,200)
+            or type(owner_id) is not str or not _text(owner_id,200)
+            or type(question_code) is not str or question_code not in CONTINUATION_HUMAN_QUESTIONS
+            or type(idempotency_key) is not str or re.fullmatch(
+                r'continuation-human-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',idempotency_key) is None):
+        raise BoardReadError('invalid_arguments')
+    return dict(ticket_id=ticket_id,owner_id=owner_id,question=CONTINUATION_HUMAN_QUESTIONS[question_code],
+        idempotency_key=idempotency_key,kind='question')
+
+
 class DevelopmentBoardClient(WorkerBoardClient):
     """Only prepare may register once. Reopened sessions retain their pins."""
     development_ticket_frame = True
@@ -166,6 +182,22 @@ class DevelopmentBoardClient(WorkerBoardClient):
             raise BoardReadError('failure_notice_unconfirmed')
         return {'message_id':value['id'],'thread_id':thread_id,
             'body_sha256':hashlib.sha256(body.encode('utf-8')).hexdigest()}
+
+    def request_continuation_human_input(self, *, ticket_id, owner_id, question_code, idempotency_key, expected_version):
+        """Controller-only fixed question; never initialize/register/claim here."""
+        values=_continuation_question(ticket_id,owner_id,question_code,idempotency_key)
+        if (self._closed is not False or self._registered is not True or self._initialized is not True):
+            raise BoardReadError('continuation_human_channel_unavailable')
+        if type(expected_version) is not int or not 1<=expected_version<2**63:
+            raise BoardReadError('invalid_arguments')
+        return self._tool('request_human_input',dict(values,expected_version=expected_version,session_id=self.session_id))
+
+    def lookup_continuation_human_input(self, *, ticket_id, owner_id, question_code, idempotency_key):
+        """Reconcile the exact question, without claiming or creating anything."""
+        values=_continuation_question(ticket_id,owner_id,question_code,idempotency_key)
+        if (self._closed is not False or self._registered is not True or self._initialized is not True):
+            raise BoardReadError('continuation_human_channel_unavailable')
+        return self._tool('lookup_human_request',dict(values,session_id=self.session_id))
 
     def release_checkpoint_claim(self, *, ticket_id, expected_version, idempotency_key, reason):
         """Controller-only claim maintenance after proved checkpoint cleanup.
