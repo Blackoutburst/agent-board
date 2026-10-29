@@ -109,3 +109,5 @@ private plans and historical summaries. This finite workflow selects its
 coder/reviewer jobs from protected operator configuration; it does not consume
 manager plans or schedule a writer. The hierarchy and assignment controller
 remain ticket #52 work.
+
+Owner Runtime capacity is shared by coding and review jobs; uncertain executions continue to count.
