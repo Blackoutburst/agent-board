@@ -29,7 +29,7 @@
     "deploy/worker_pool/continuation.timer.in": "bf66f944cc5b7b03732adc0fb49be4b7cb61a4b972d89166f9ecc24a0b01d2ff",
     "deploy/worker_pool/entry.py": "7c188e145928acc7466d44282bea9d9dca1893bf1f22ebbf9feaac913adb3cab",
     "deploy/worker_pool/manage.py": "6a830e5c11b04e0c581bc32e1bbc2a504ab0643b0bc63b48614e978f2beb8871",
-    "deploy/worker_pool/package.py": "11098770fb232c1660ab0d5ef2ba6357e09db3e083fca008db8fdfff1e3f8392",
+    "deploy/worker_pool/package.py": "892feb180d2aa423e24294e0f422e74cf3e0f7bbc3e1927a3fbbd975cf0126ce",
     "deploy/worker_pool/unit.service.in": "4aca33647f0b6cb27542fc1a4d5f68e9ff5de8af2da59b618b87e417e0bd2ebe",
     "development_frames.py": "ebe1cc5933a59f70b85bdd7075c67a476bf47e72a2584d2e2d04a7788c072e41",
     "development_ticket_frames.py": "26957bf4e4fbe1c2c5ee1338010a5479c4ebf30c5204886397332bac10b004ae",

@@ -19,7 +19,9 @@ REQUIRED_SDK_MODULES=('__init__','finite_pool_batch','linux_pool_preparation','c
     'development_authorization')
 CONTINUATION_SDK_MODULES=('continuation','continuation_journal','continuation_runner',
     'continuation_pool_configuration','continuation_pool_service','development_provider_continuation',
-    'development_cycle_driver','development_checkpoint_proof','private_development_checkpoint')
+    'development_cycle_driver','development_checkpoint_proof','private_development_checkpoint',
+    'development_aggregate_delivery','development_aggregate_review_source',
+    'continuation_aggregate_review','continuation_human_handoff')
 
 
 def continuation_supported(version):
