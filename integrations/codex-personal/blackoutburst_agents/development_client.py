@@ -96,12 +96,20 @@ class DevelopmentBoardClient(WorkerBoardClient):
     def adopt_registration(self):
         # The operation has already pinned registration identity/version. A
         # changed profile must fail server authorization, never refresh here.
+        if self._closed is not False:
+            raise BoardReadError('connection_closed')
         self._registered = True
-        if self.development_ticket_frame:self.require_development_ticket_frame()
+        # Tool support is a per-client capability observation, not permission.
+        # Every actual frame remains fresh; reopening a client observes support
+        # again. Explicit require_* still refreshes and invalidates on failure.
+        if self.development_ticket_frame and not (
+                self._initialized is True and getattr(self,'_development_ticket_frame_ready',False) is True):
+            self.require_development_ticket_frame()
 
     def require_development_ticket_frame(self):
         """Explicit support check before preparation/model; never fallback."""
         self._development_ticket_frame_ready=False
+        if self._closed is not False:raise BoardReadError('connection_closed')
         if not self._registered:raise BoardReadError('development_registration_required')
         self._initialize()
         result=self._rpc('tools/list',{})

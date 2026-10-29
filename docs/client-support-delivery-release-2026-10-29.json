@@ -1,0 +1,26 @@
+{
+  "adapter_version": "0.44.1",
+  "board_version": "2.17.4",
+  "change": "Observe tool support once per open pinned MCP client while keeping all effect authorization fresh; emit closed delivery fault metadata",
+  "validation": {
+    "author_new_tests_passed": 30,
+    "author_legacy_tests_passed": 41,
+    "author_legacy_subtests_passed": 35,
+    "independent_new_tests_replayed": 30,
+    "independent_counter_tests_passed": 3
+  },
+  "guards_preserved": [
+    "fresh ticket frames and permission/claim reads",
+    "new-client protocol support verification",
+    "closed/invalid/revoked clients refuse",
+    "immutable model/source/test/delivery histories",
+    "no implicit registration or model retry"
+  ],
+  "live_facts": {
+    "pull_request": 70,
+    "approved_postimage_verified": true,
+    "complete_coder_to_reviewer_workflow": false,
+    "unique_failure_cause": "not asserted; live generic refusal does not distinguish the failed read"
+  },
+  "continuation_preview_pr68": "separate unmerged work"
+}
