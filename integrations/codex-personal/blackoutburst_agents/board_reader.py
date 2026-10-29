@@ -26,6 +26,14 @@ MAX_CONNECTION_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PROTOCOL_VERSION = "2025-06-18"
 READ_TOOLS = frozenset({"get_ticket", "get_thread", "get_message"})
+_INTERRUPTED_READ_TOOLS = frozenset({"get_ticket", "get_thread", "get_message",
+    "get_work", "get_development_ticket_frame", "lookup_execution"})
+_INTERRUPTED_EXCHANGES = (http.client.RemoteDisconnected, ConnectionResetError,
+    BrokenPipeError, ConnectionAbortedError, http.client.IncompleteRead)
+_INTERRUPTION_ISSUER = object()
+_CONNECTION_FAILURE_ISSUER = object()
+CONNECTION_FAILURE_KINDS = frozenset({'remote_disconnected', 'reset', 'broken_pipe', 'aborted',
+    'incomplete_read', 'ssl_error', 'other_os', 'http_state', 'value_error'})
 
 
 class BoardReadError(Exception):
@@ -34,6 +42,58 @@ class BoardReadError(Exception):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class _InterruptedExchange(Exception):
+    """Local transport fact only; never exposed as a public Board error."""
+    def __init__(self, issuer, kind):
+        self.issuer, self.kind = issuer, kind
+
+
+def _transport_failure_kind(error):
+    known = {http.client.RemoteDisconnected: 'remote_disconnected', ConnectionResetError: 'reset',
+        BrokenPipeError: 'broken_pipe', ConnectionAbortedError: 'aborted', http.client.IncompleteRead: 'incomplete_read'}
+    if type(error) in known:return known[type(error)]
+    if isinstance(error, ssl.SSLError):return 'ssl_error'
+    if isinstance(error, http.client.HTTPException):return 'http_state'
+    if isinstance(error, ValueError):return 'value_error'
+    return 'other_os'
+
+
+def _connection_failure(kind):
+    error = BoardReadError('connection_failed')
+    if type(kind) is str and kind in CONNECTION_FAILURE_KINDS:
+        error._connection_failure_kind = (_CONNECTION_FAILURE_ISSUER, kind)
+    return error
+
+
+def connection_failure_diagnostic(error):
+    """Closed local telemetry, never retry authority or exception prose."""
+    if type(error) is not BoardReadError:return None
+    fields = vars(error)
+    if type(fields.get('code')) is not str or fields['code'] != 'connection_failed':return None
+    value = fields.get('_connection_failure_kind')
+    if (type(value) is not tuple or len(value) != 2 or value[0] is not _CONNECTION_FAILURE_ISSUER
+            or type(value[1]) is not str or value[1] not in CONNECTION_FAILURE_KINDS):return None
+    return value[1]
+
+
+def _interruption_kind(error):
+    if type(error) is _InterruptedExchange and error.issuer is _INTERRUPTION_ISSUER:
+        return error.kind
+    return None
+
+
+def _may_repeat_read(method, params_json):
+    if type(method) is not str:
+        return False
+    if method == 'tools/list':
+        return True
+    if method != 'tools/call':
+        return False
+    params = _json(params_json, 'invalid_arguments')
+    return (type(params) is dict and type(params.get('name')) is str
+        and params['name'] in _INTERRUPTED_READ_TOOLS)
 
 
 def _pairs(values):
@@ -220,25 +280,52 @@ class BoardReader:
 
     def _rpc(self, method, params):
         if self._closed:raise BoardReadError('connection_closed')
-        self._next_id += 1
-        request_id = self._next_id
+        deadline = time.monotonic() + self.timeout
+        # Freeze the semantic request/actor once. Only the JSON-RPC ID changes
+        # on the single application-level read retry; the transport never retries.
         try:
-            body = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method,
-                               "params": params}, allow_nan=False).encode("utf-8")
+            method_json = json.dumps(method, allow_nan=False)
+            params_json = json.dumps(params, allow_nan=False)
+            serialized_size = len(method_json.encode('utf-8')) + len(params_json.encode('utf-8'))
         except (TypeError, ValueError, UnicodeError, RecursionError):
-            raise BoardReadError("invalid_arguments") from None
-        if len(body) > MAX_CONNECTION_BYTES:
-            raise BoardReadError("invalid_arguments")
+            raise BoardReadError('invalid_arguments') from None
+        if serialized_size > MAX_CONNECTION_BYTES:raise BoardReadError('invalid_arguments')
+        repeatable = _may_repeat_read(method, params_json)
+        endpoint, opener = self._config['mcp_url'], self._opener
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
                    "Authorization": "Bearer " + self._config["token"],
                    "MCP-Protocol-Version": PROTOCOL_VERSION}
         if self._transport_session is not None:
             headers["Mcp-Session-Id"] = self._transport_session
-        request = urllib.request.Request(self._config["mcp_url"], body, headers)
-        deadline = time.monotonic() + self.timeout
+        for attempt in range(2):
+            if self._closed:raise BoardReadError('connection_closed')
+            try:
+                return self._rpc_once(method_json, params_json, headers, endpoint, opener, deadline)
+            except _InterruptedExchange as error:
+                # This marker comes only from exact local network exceptions.
+                # An arbitrary BoardReadError/remote response cannot request it.
+                if (type(error) is not _InterruptedExchange or error.issuer is not _INTERRUPTION_ISSUER
+                        or not repeatable or attempt != 0):
+                    raise _connection_failure(_interruption_kind(error)) from None
+                if self._closed:raise BoardReadError('connection_closed') from None
+                if time.monotonic() >= deadline:raise BoardReadError('timeout') from None
+                # Drop the failed HTTP connection, retaining the same verified
+                # TLS context, MCP session, owner and remaining wall budget.
+                self._discard_connection()
+
+    def _rpc_once(self, method_json, params_json, headers, endpoint, opener, deadline):
+        self._next_id += 1
+        request_id = self._next_id
+        body = ('{"jsonrpc": "2.0", "id": '+str(request_id)+', "method": '+method_json
+            +', "params": '+params_json+'}').encode('utf-8')
+        if len(body) > MAX_CONNECTION_BYTES:
+            raise BoardReadError("invalid_arguments")
+        request = urllib.request.Request(endpoint, body, headers)
         try:
-            with self._opener.open(request, timeout=self.timeout) as response:
-                if response.geturl() != self._config["mcp_url"]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:raise BoardReadError('timeout')
+            with opener.open(request, timeout=remaining) as response:
+                if response.geturl() != endpoint:
                     raise BoardReadError("redirect_blocked")
                 if response.status != 200:
                     raise BoardReadError('redirect_blocked' if 300<=response.status<400 else
@@ -290,9 +377,13 @@ class BoardReader:
         except (TimeoutError,):
             raise BoardReadError("timeout") from None
         except urllib.error.URLError as error:
-            raise BoardReadError("timeout" if isinstance(error.reason, TimeoutError) else "connection_failed") from None
-        except (OSError, ValueError, http.client.HTTPException):
-            raise BoardReadError("connection_failed") from None
+            if isinstance(error.reason, TimeoutError):raise BoardReadError('timeout') from None
+            raise _connection_failure(_transport_failure_kind(error.reason)) from None
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            self._discard_connection()
+            if type(error) in _INTERRUPTED_EXCHANGES:
+                raise _InterruptedExchange(_INTERRUPTION_ISSUER, _transport_failure_kind(error)) from None
+            raise _connection_failure(_transport_failure_kind(error)) from None
         try:
             result = _sse(raw) if content_type == "text/event-stream" else _json(raw, "invalid_response")
             if (not isinstance(result, dict) or result.get("jsonrpc") != "2.0"
