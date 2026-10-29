@@ -37,7 +37,7 @@ from .worker_pool import WorkerPool
 
 MAX_RECORD=512*1024
 JOIN_SECONDS=30
-STATES=frozenset(PHASES)|{'awaiting_independent_review','backoff','not_started'}
+STATES=frozenset(PHASES)|{'awaiting_independent_review','independent_review_published','backoff','not_started'}
 REASONS=frozenset({'','continuation_pool_configuration_changed','continuation_pool_source_changed',
     'continuation_pool_tools_changed','continuation_pool_owner_busy','continuation_pool_pending',
     'continuation_pool_stopped','continuation_pool_cleanup_unknown','continuation_pool_target_failed',
@@ -87,11 +87,11 @@ def _existing_work_database(directory,expected=None):
 
 
 class _Pass:
-    """Thread-safe cancellation; contains no SQLite handle or live permit."""
+    """Cancellation controls never invoke author SQLite across threads."""
     def __init__(self,service,should_stop):
         self.service,self.should_stop=service,should_stop
         self.deadline=time.monotonic()+min(service.max_seconds,service.loaded['batch']['timeout_seconds'])
-        self.cancel=threading.Event();self.mutex=threading.Lock();self.pools=[];self.workers=[];self.stop_failed=False
+        self.cancel=threading.Event();self.mutex=threading.Lock();self.pools=[];self.workers=[];self.reviewers=[];self.stop_failed=False
     def stopping(self):
         if self.cancel.is_set():return True
         try:
@@ -115,6 +115,14 @@ class _Pass:
     def remove_pool(self,pool):
         with self.mutex:
             if pool in self.pools:self.pools.remove(pool)
+    def add_reviewer(self,reviewer):
+        from .continuation_aggregate_review import ContinuationAggregateReviewer
+        require(type(reviewer) is ContinuationAggregateReviewer)
+        with self.mutex:self.reviewers.append(reviewer);cancelled=self.cancel.is_set()
+        if cancelled:reviewer.stop()
+    def remove_reviewer(self,reviewer):
+        with self.mutex:
+            if reviewer in self.reviewers:self.reviewers.remove(reviewer)
     def add_worker(self,directory,operation_id,scope):
         with _existing_work_database(directory) as db_pin:
             record=(str(directory),_directory_pin(directory),db_pin,operation_id,deepcopy(scope))
@@ -126,7 +134,10 @@ class _Pass:
             if record in self.workers:self.workers.remove(record)
     def stop(self):
         self.cancel.set()
-        with self.mutex:pools,workers=tuple(self.pools),tuple(self.workers)
+        with self.mutex:pools,workers,reviewers=tuple(self.pools),tuple(self.workers),tuple(self.reviewers)
+        for reviewer in reviewers:
+            try:reviewer.stop()
+            except Exception:self.stop_failed=True
         for pool in pools:
             try:pool.stop()
             except Exception:self.stop_failed=True
@@ -204,6 +215,7 @@ class ContinuationPoolService:
         self.root_pin=_directory_pin(self.root)
         self.thread=threading.current_thread();self.pid=os.getpid();self._mutex=threading.Lock()
         self._retained_lease=None  # Kept until process exit if cooperative joins fail.
+        self._retained_resources=[]  # Author/reader handles outlive an uncertain review join.
         self._sealed_settings=canonical(self._settings())
 
     def _settings(self):
@@ -268,6 +280,39 @@ class ContinuationPoolService:
         return {'name':target['name'],'logical_task_id':target['logical_task_id'],'phase':phase,
             'reason':reason,'operation_id':operation_id,'state_sha256':state_sha256,
             'next_observation_at':not_before,'launchable':False}
+
+    def _review_history(self,directory,target,job,cursor):
+        """Pinned past opinion only; no source builder, registration or RPC."""
+        receipt=cursor['review_receipt'];projection=cursor['result']
+        require(type(receipt) is dict and set(receipt)=={'schema','status','logical_task_id','source_operation_id',
+            'review_operation_id','binding_sha256','ledger_pin','review','accepted','launchable'}
+            and receipt['schema']=='continuation-independent-review-receipt-v1' and receipt['status']=='published'
+            and receipt['logical_task_id']==target['logical_task_id']
+            and receipt['source_operation_id']==projection['operation_id']
+            and receipt['accepted'] is False and receipt['launchable'] is False,
+            'continuation_pool_binding_changed')
+        uuid_value(receipt['source_operation_id']);uuid_value(receipt['review_operation_id'])
+        path=directory/'aggregate/delivery/review-source/continuation-review.json'
+        raw,pin=file_document(path,MAX_RECORD)
+        require(pin==receipt['ledger_pin'],'continuation_pool_binding_changed')
+        value=decode(raw)
+        require(canonical(value)==raw and type(value) is dict and set(value)=={'request','phase','job','result','pins'}
+            and value['phase']=='complete' and value['result']==receipt['review']
+            and value['result'].get('status')=='complete' and value['result'].get('operation_id')==receipt['review_operation_id']
+            and value['job'].get('id')==receipt['review_operation_id']
+            and digest(canonical(value['request']))==receipt['binding_sha256'],'continuation_pool_binding_changed')
+        request=value['request'];specification=next(row for row in self.loaded['workflow']['jobs'] if row['name']==job['name'])
+        require(request.get('schema')=='continuation-aggregate-review-v1'
+            and request.get('logical_task_id')==target['logical_task_id']
+            and request.get('source_operation_id')==receipt['source_operation_id']
+            and request.get('directory')==str(directory/'independent-review')
+            and request.get('configuration_pins')==self.configuration_pins and request.get('name')==job['name']
+            and request.get('reviewer')==specification['reviewer'],'continuation_pool_binding_changed')
+        result=self._projection(target,phase='independent_review_published',operation_id=receipt['source_operation_id'],
+            state_sha256=projection['state_sha256'])
+        result.update(review_operation_id=receipt['review_operation_id'],review_receipt_sha256=digest(canonical(receipt)),
+            accepted=False,historical=True)
+        return result
 
     def run_once(self,*,should_stop=None):
         require(self.pid==os.getpid() and self.thread is threading.current_thread())
@@ -349,7 +394,8 @@ class ContinuationPoolService:
                 require(_read(private,'binding.json')==binding,'continuation_pool_binding_changed')
                 cursor=_read(private,'cursor.json')
             require(type(cursor) is dict and set(cursor) in ({'schema','phase','generation','result','not_before'},
-                {'schema','phase','generation','result','not_before','wake_generation'})
+                {'schema','phase','generation','result','not_before','wake_generation'},
+                {'schema','phase','generation','result','not_before','review_receipt'})
                 and cursor['schema']=='continuation-pool-cursor-v1' and cursor['phase'] in ('idle','pending'))
             waiting_generation=cursor.get('wake_generation')
             if waiting_generation is not None:
@@ -358,6 +404,21 @@ class ContinuationPoolService:
                     and waiting_generation!=cursor['generation'] and type(cursor['result']) is dict
                     and cursor['result'].get('phase')=='paused_provider','continuation_pool_binding_changed')
             if cursor['phase']=='pending':return self._projection(target,reason='continuation_pool_pending')
+            if 'review_receipt' in cursor:
+                require(cursor['generation'] is not None and type(cursor['result']) is dict
+                    and cursor['result'].get('phase')=='independent_review_published','continuation_pool_binding_changed')
+                with ContinuationJournal.open(directory/'logical') as journal:
+                    observed=journal.snapshot()
+                    if observed['state']['stop_requested'] or observed['state']['phase']=='stopped':
+                        return self._projection(target,phase='stopped',state_sha256=observed['state_sha256'])
+                    require(observed['state']['phase']=='complete'
+                        and observed['state_sha256']==cursor['result'].get('state_sha256'),'continuation_pool_binding_changed')
+                    historical=self._review_history(directory,target,job,cursor)
+                    current=journal.snapshot();control.guard()
+                    if current['state']['stop_requested'] or current['state']['phase']=='stopped':
+                        return self._projection(target,phase='stopped',state_sha256=current['state_sha256'])
+                    require(current==observed,'continuation_pool_binding_changed')
+                    return historical
             now=time.time();require(type(now) in (int,float) and now>0,'continuation_pool_clock_changed')
             if cursor['not_before'] is not None:
                 require(type(cursor['not_before']) in (int,float) and cursor['not_before']>0)
@@ -450,13 +511,19 @@ class ContinuationPoolService:
                         result=new.publish()
                     snapshot=new.task.snapshot();phase=result['status']
                     require(phase in STATES,'continuation_pool_target_failed')
-                    require(snapshot['state']['phase']==phase or phase=='awaiting_independent_review' and snapshot['state']['phase']=='complete')
+                    require(snapshot['state']['phase']==phase or phase in ('awaiting_independent_review','independent_review_published')
+                        and snapshot['state']['phase']=='complete')
                     finished=time.time();require(type(finished) in (int,float) and finished>=now,'continuation_pool_clock_changed')
                     not_before=finished+self.loaded['configuration']['provider_backoff_seconds'] if phase=='paused_provider' else None
                     projection=self._projection(target,phase=phase,operation_id=new.operation,
                         state_sha256=snapshot['state_sha256'],not_before=not_before)
-                    _write(private,'cursor.json',{'schema':'continuation-pool-cursor-v1','phase':'idle',
-                        'generation':generation_id,'result':projection,'not_before':not_before},replace=True)
+                    completed={'schema':'continuation-pool-cursor-v1','phase':'idle',
+                        'generation':generation_id,'result':projection,'not_before':not_before}
+                    if phase=='independent_review_published':
+                        completed['review_receipt']=result['review_receipt']
+                        projection.update(review_operation_id=result['review_receipt']['review_operation_id'],
+                            review_receipt_sha256=digest(canonical(result['review_receipt'])),accepted=False,historical=False)
+                    _write(private,'cursor.json',completed,replace=True)
                     return projection
                 except Exception:
                     # The own running generation becomes NeedsYou with actual
@@ -780,6 +847,8 @@ class _Generation:
         try:
             from .development_aggregate_delivery import AggregateDevelopmentDeliveryController
             from .development_delivery import DevelopmentDeliveryProof
+            from .development_aggregate_review_source import PublishedAggregateReviewSource
+            from .continuation_aggregate_review import ContinuationAggregateReviewer
             from .git_publication import GitHubPublicationGrant,GitHubDraftPublisher,REPOSITORY
         except ImportError:fail('continuation_pool_api_unavailable')
         self.control.guard()
@@ -808,7 +877,33 @@ class _Generation:
         publisher=GitHubDraftPublisher(aggregate.deliveries,path/'publications',grant=publication_grant,
             gh_executable=self.service.tools['gh']['path'],python_executable=self.service.tools['interpreter']['path'],
             authority=aggregate.publication_authority(publication_grant))
-        return aggregate.publish_and_handoff(publisher,title=specification['pr_title'],body=specification['pr_body'])
+        published=aggregate.publish_and_handoff(publisher,title=specification['pr_title'],body=specification['pr_body'])
+        require(published['status']=='awaiting_independent_review')
+        self.control.guard()
+        source=PublishedAggregateReviewSource(aggregate,publisher)
+        reviewer=ContinuationAggregateReviewer(self.target_directory/'independent-review',source=source,
+            configuration_path=self.service.path,root=self.service.root,owner_id=self.service.owner_id,
+            board_endpoint=self.service.endpoint,name=self.job['name'],executable=self.service.tools['executable']['path'],
+            cli_version=self.service.cli_version,interpreter=self.service.tools['interpreter']['path'],
+            deadline=self.control.deadline,max_seconds=self.service.max_seconds)
+        self.control.add_reviewer(reviewer);review_confirmed=False
+        try:
+            opinion=reviewer.run(should_stop=self.control.stopping)
+            require(opinion.get('status')=='complete')
+            receipt=reviewer.historical_receipt_pin()
+            require(receipt['review']==opinion and receipt['source_operation_id']==self.operation
+                and receipt['logical_task_id']==self.target['logical_task_id']
+                and opinion['delivery_sha']==source.receipt['delivery_sha'],'continuation_pool_binding_changed')
+            review_confirmed=True
+        finally:
+            if reviewer.pending or not review_confirmed:
+                self.control.stop_failed=True
+                self.control.service._retained_resources.append((reviewer,self.resources.pop_all()))
+                self.control.stop()
+            else:self.control.remove_reviewer(reviewer)
+        require(not reviewer.pending,'continuation_pool_cleanup_unknown')
+        self.control.guard()
+        return {'status':'independent_review_published','review_receipt':receipt}
     def _parent_checkpoint(self,parent):
         # Current generation has no private checkpoint when it returned final.
         # The parent is pinned before its construction, not found by scanning.

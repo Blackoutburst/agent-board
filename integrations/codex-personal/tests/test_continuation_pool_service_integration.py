@@ -25,13 +25,19 @@ from test_runtime_integration import ControlClient
 from test_development_worker import FixtureClient
 from blackoutburst_agents.development_client import DevelopmentBoardClient
 from blackoutburst_agents.development_pool_selection import file_document
+from blackoutburst_agents.review_client import DeliveryReviewBoardClient
+from blackoutburst_agents.review_lifecycle_client import DeliveryReviewLifecycleClient
 
 
 @pytest.fixture
 def actual_service(tmp_path,monkeypatch,linux_lock_observation):
     f=Fixture(tmp_path,monkeypatch);synthetic_linux_boundaries(f,monkeypatch)
-    monkeypatch.setattr('blackoutburst_agents.worker_pool.WorkerPool.dispatch_pending',
-        lambda *_:pytest.fail('Continuation never dispatches a preparation registry'))
+    from blackoutburst_agents.worker_pool import WorkerPool
+    dispatch=WorkerPool.dispatch_pending
+    def selected_review_only(pool):
+        assert set(pool.drivers)=={'review'},'Continuation never dispatches a preparation registry'
+        return dispatch(pool)
+    monkeypatch.setattr(WorkerPool,'dispatch_pending',selected_review_only)
     monkeypatch.setattr('blackoutburst_agents.development_pool._DevelopmentRun.run',
         lambda *_:pytest.fail('Continuation never invokes the legacy development runner'))
     root=f.base/'owner-root';root.mkdir(mode=0o700)
@@ -99,6 +105,47 @@ event({{'type':'item.completed','item':{{'type':'agent_message','text':json.dump
         client.release_checkpoint_claim=lambda **values:client.call('release_ticket',{**values,'status':'todo','unassign_self':False})
         return client
     monkeypatch.setattr(DevelopmentBoardClient,'from_connection_file',connected)
+    # The workflow reviewer is a distinct, explicitly selected profile/device.
+    reviewer_device=f.board.create_device(f.human,'Selected service reviewer',[])
+    reviewer_profile=f.board.create_agent_profile(f.human,'Selected service reviewer',project_ids=[f.project['id']],policy={
+        'allow_read':True,'allow_messages':False,'allow_requests':True,'actions':[],'resources':[],'autonomy':'requested'})
+    f.board.bind_agent_profile(f.human,reviewer_profile['id'],reviewer_profile['version'],reviewer_device['id'],'reviewer','codex')
+    reviewer_raw=f.board.authenticate(reviewer_device['token'])
+    reviewer_connection=root/'connections/reviewer.json'
+    reviewer_connection.write_bytes(canonical({'mcp_url':f.seed.endpoint,'token':reviewer_device['token'],
+        'client':'codex','identity_key':'reviewer','name':'Selected service reviewer'}));reviewer_connection.chmod(0o600)
+    workflow['jobs'][0]['reviewer']['agent_id']=reviewer_profile['id']
+    workflow['jobs'][0]['reviewer']['timeout']=300
+    (root/'config/workflow.json').write_bytes(canonical(workflow))
+    f.review_turns=[];f.review_calls=[];f.reviewer_profile=reviewer_profile
+    def reviewer_client(cls):
+        def create(path,*,session_id,timeout):
+            assert Path(path)==reviewer_connection
+            client=cls(json.loads(file_document(path)[0]),session_id,timeout)
+            client.connection_identity=tuple(file_document(path)[1]['identity']);client._initialize=lambda:None
+            def tool(name,args):
+                f.review_calls.append((name,deepcopy(args)))
+                if name=='register_agent':return f.board.register_agent(reviewer_raw,**args)
+                actor=f.board.actor_session(reviewer_raw,session_id);values={k:v for k,v in args.items() if k!='session_id'}
+                if name=='update_ticket':values.update(values.pop('changes'))
+                value=getattr(f.board,name)(actor,**values)
+                return {'items':value} if name=='list_activity' else value
+            client._tool=tool;client._service_reviewer=True
+            return client
+        return create
+    for cls in (DeliveryReviewBoardClient,DeliveryReviewLifecycleClient):
+        monkeypatch.setattr(cls,'from_connection_file',reviewer_client(cls))
+    def selected_runtime(client):
+        if not getattr(client,'_service_reviewer',False):return runtime(client)
+        control=ControlClient(f.board,reviewer_raw,client.session_id);control.close=lambda:None;return control
+    monkeypatch.setattr(RuntimeBoardClient,'from_worker',selected_runtime)
+    def review_transport(settings,prompt,workspace,**callbacks):
+        callbacks['before_prompt']();callbacks['on_started'](999999999)
+        sid=callbacks['resume_session_id'] or str(uuid.uuid4());callbacks['on_session'](sid);f.review_turns.append(prompt)
+        return {'status':'completed','session_id':sid,
+            'text':json.dumps({'verdict':'corrections','text':'Add a boundary test for the exact service aggregate.'}),
+            'verification':{'cleanup_confirmed':True,'tool_free':True}}
+    monkeypatch.setattr('blackoutburst_agents.linux_review_binding.execute_turn',review_transport)
     monkeypatch.setattr(module,'linux_source_pins',lambda:{'synthetic_test_only':'fixed source pins'})
     def construct():
         return module.ContinuationPoolService(root,configuration_path=path,owner_id='owner',board_endpoint=batch['board_endpoint'],
@@ -293,20 +340,24 @@ def test_actual_final_delivery_uses_original_base_and_releases_for_independent_r
     sequence.write_text(json.dumps([dict(schema=1,kind='patch',path='one.py',expected_sha256=digest(expected),content='value = 3\n'),
         dict(schema=1,kind='test',name='unit'),dict(schema=1,kind='final',summary='Verified final aggregate')]))
     result=construct().run_once()
-    assert result['status']=='pass_complete' and result['tasks'][0]['phase']=='awaiting_independent_review',result
+    assert result['status']=='pass_complete' and result['tasks'][0]['phase']=='independent_review_published',result
+    assert result['tasks'][0]['accepted'] is False and result['tasks'][0]['historical'] is False
     assert (state['pushes'],state['posts'])==(1,1)
     assert git(remote,'show',state['prs'][0]['head']['sha']+':one.py')=='value = 3'
     assert git(remote,'rev-parse',state['prs'][0]['head']['sha']+'^')==f.commit
     assert all(Path(path).read_bytes()==raw for path,raw in before.items())
     current=f.board.get_ticket(f.human,ticket['id'])['ticket']
     assert current['status']=='review' and current['claimant'] is None and current['assignee_agent_id'] is None
+    assert len(f.review_turns)==1 and 'Add a boundary test' in current['outcome']
+    assert state['prs'][0]['head']['sha'] in current['evidence']
     key=digest(canonical({'owner_id':'owner','logical_task_id':task_id}))
     with ContinuationJournal.open(root/'continuations'/key/'logical') as journal:
         logical=journal.snapshot()['state']
         assert logical['phase']=='complete' and logical['used_total']['turns']==3*generations
     assert f.board.get_runtime(f.human)['active_count']==0
     replay=construct().run_once()
-    assert replay['tasks'][0]['phase']=='awaiting_independent_review' and (state['pushes'],state['posts'])==(1,1)
+    assert replay['tasks'][0]['phase']=='independent_review_published' and replay['tasks'][0]['historical'] is True
+    assert (state['pushes'],state['posts'])==(1,1) and len(f.review_turns)==1
 
 
 def test_unassigned_ticket_refuses_before_any_model_without_auto_assignment(actual_service):
