@@ -34,6 +34,9 @@ def installed45(bundle,monkeypatch,tmp_path):
         fields={'LoadState':'loaded' if present else 'not-found','ActiveState':'inactive','SubState':'dead',
             'UnitFileState':'disabled' if present else '', 'MainPID':'0','ControlPID':'0',
             'DropInPaths':'','FragmentPath':str(p.UNIT_DIR/unit) if present else ''}
+        if unit.endswith('.timer'):
+            fields.pop('MainPID');fields.pop('ControlPID')
+            assert 'MainPID' not in argv[-2] and 'ControlPID' not in argv[-2]
         return ''.join(k+'='+v+'\n' for k,v in fields.items()).encode()
     monkeypatch.setattr(manage,'command',system)
     first=manage.install_addon(directory,apply=True,expected_bundle_id=p.manifest_id(value))

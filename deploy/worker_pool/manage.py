@@ -92,8 +92,9 @@ def _mkdir(path,mode=0o755):
     p.no_symlinks(path)
     if not path.exists():path.mkdir(mode=mode);_fsync(path.parent)
     p.protected(path)
-def _unit_state(unit):
+def _unit_state(unit,*,timer=False):
     fields=('LoadState','ActiveState','SubState','UnitFileState','MainPID','ControlPID','DropInPaths','FragmentPath')
+    if timer:fields=tuple(key for key in fields if key not in ('MainPID','ControlPID'))
     raw=command(['/usr/bin/systemctl','show','--no-pager','--property='+','.join(fields),unit])
     if len(raw)>8192:p.fail('pool_unit_state_invalid')
     values={}
@@ -103,10 +104,10 @@ def _unit_state(unit):
         values[key]=value
     if set(values)!=set(fields):p.fail('pool_unit_state_invalid')
     return values
-def _inactive(unit):
-    state=_unit_state(unit)
+def _inactive(unit,*,timer=False):
+    state=_unit_state(unit,timer=True) if timer else _unit_state(unit)
     if (state['LoadState']!='loaded' or state['ActiveState']!='inactive' or state['SubState']!='dead'
-            or state['UnitFileState']!='disabled' or state['MainPID']!='0' or state['ControlPID']!='0'
+            or state['UnitFileState']!='disabled' or (not timer and (state['MainPID']!='0' or state['ControlPID']!='0'))
             or state['DropInPaths'] or state['FragmentPath']!=str(p.UNIT_DIR/unit)):p.fail('pool_unit_not_inactive_disabled')
 def _root_context(manifest):
     if os.geteuid()!=0:p.fail('pool_administrator_required')
@@ -124,16 +125,19 @@ def stat_mode(info):return info.st_mode&0o7777
 def _root_lock(fd):
     info=os.fstat(fd)
     if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_uid!=0 or stat_mode(info)!=0o600:p.fail('pool_install_lock_untrusted')
-def _absent_unit(unit):
+def _absent_unit(unit,*,timer=False):
     for root in (p.UNIT_DIR,Path('/run/systemd/system'),Path('/usr/lib/systemd/system')):
         if not root.exists():continue
         for index,path in enumerate(root.rglob('*')):
             if index>=25000:p.fail('pool_unit_metadata_limit')
             if (path.name in (unit,unit+'.d') or path.is_symlink() and Path(os.readlink(path)).name==unit):
                 p.fail('pool_unit_already_exists')
-    state=_unit_state(unit)
-    if state!={'LoadState':'not-found','ActiveState':'inactive','SubState':'dead','UnitFileState':'',
-            'MainPID':'0','ControlPID':'0','DropInPaths':'','FragmentPath':''}:p.fail('pool_unit_already_exists')
+    state=_unit_state(unit,timer=True) if timer else _unit_state(unit)
+    expected={'LoadState':'not-found','ActiveState':'inactive','SubState':'dead','UnitFileState':'',
+            'MainPID':'0','ControlPID':'0','DropInPaths':'','FragmentPath':''}
+    if timer:
+        expected.pop('MainPID');expected.pop('ControlPID')
+    if state!=expected:p.fail('pool_unit_already_exists')
 
 
 def _publish_release(directory,manifest,bundle_id):
@@ -369,7 +373,7 @@ def install_continuation(release,*,apply=False,expected_bundle_id=None):
         before=_stopped_for_upgrade(old_unit)
         rendered={name:p.render_continuation_unit(p.read_regular(release/template).decode(),manifest,release,account.pw_dir).encode()
             for name,template in ((plan['service'],'continuation.service.in'),(plan['timer'],'continuation.timer.in'))}
-        for name in rendered:_absent_unit(name)
+        for name in rendered:_absent_unit(name,timer=name==plan['timer'])
         intent=p.BASE/'installations'/(plan['bundle_id']+'.continuation.json')
         complete=intent.with_suffix('.complete.json')
         if any(x.exists() or x.is_symlink() for x in (intent,complete)):p.fail('pool_continuation_install_exists')
@@ -380,11 +384,11 @@ def install_continuation(release,*,apply=False,expected_bundle_id=None):
         _new_file(intent,p.encoded(request),0o600)
         # Recheck immediately before new writes; incomplete intentions are never adopted.
         if _stopped_for_upgrade(old_unit)!=before or p.read_regular(old_path)!=old_raw:p.fail('pool_unit_state_changed')
-        for name in rendered:_absent_unit(name)
+        for name in rendered:_absent_unit(name,timer=name==plan['timer'])
         for name,raw in rendered.items():_new_file(p.UNIT_DIR/name,raw,0o644)
         command(['/usr/bin/systemctl','daemon-reload'])
         for name,raw in rendered.items():
-            _inactive(name);p.protected(p.UNIT_DIR/name)
+            _inactive(name,timer=name==plan['timer']);p.protected(p.UNIT_DIR/name)
             if p.read_regular(p.UNIT_DIR/name)!=raw:p.fail('pool_unit_changed')
         if _stopped_for_upgrade(old_unit)!=before or p.read_regular(old_path)!=old_raw:p.fail('pool_unit_state_changed')
         request['status']='continuation_installed_disabled'
