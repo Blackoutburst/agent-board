@@ -173,6 +173,8 @@ La version 0.43 rapproche aussi le nettoyage d’une finalisation refusée avant
 
 La version 0.44 conserve l’option explicite `reasoning_effort` lors de la reconstruction de la preuve de livraison. La preuve compare la configuration exacte du planificateur ; une option absente reste absente et une valeur stockée invalide est refusée. Les reçus de test, le contrôle de source et la livraison Git restent obligatoires.
 
+La version 0.44.1 vérifie la disponibilité du protocole une seule fois par client MCP ouvert. Les cadres de ticket, droits et claims restent relus avant les effets ; une nouvelle instance revérifie le protocole et une connexion fermée refuse les appels. Les refus de livraison inattendus exposent désormais une phase, une catégorie et un code fermés dans le journal du service, sans texte d’exception ni contenu privé. Le pilote réel a créé la PR #70 ; son passage au reviewer reste à valider.
+
 Le raccord de continuation présent sur cette branche reste en développement.
 `ContinuationTask` conserve un journal de cycles bornés sans plafond global de
 cycles. `ContinuationRunner` relie explicitement ces cycles au `PersonalRunner`
@@ -198,7 +200,13 @@ Son admission passe par `run_checkpoint` et le Worker normal avec une claim fra�
 Les anciens journaux, budgets, résultats et arrêts restent conservés ; un reçu
 privé ou un accusé incertain ne permet pas de reprendre l’ancienne génération.
 
-La pause fournisseur du parcours de développement, la publication agrégée depuis
-la base publique originale et le daemon de réveil du service serveur restent à
-raccorder. Ces composants de continuation ne sont pas encore déployés sur le
-serveur.
+`DevelopmentProviderContinuation` relie aussi une panne fournisseur terminale
+vérifiée à un checkpoint privé des seules actions confirmées. La cause reste
+inconnue ; aucun quota ni délai de reset n’est déduit du texte d’erreur. L’ancien
+travail bloqué conserve ses résultats, compteurs et session. Le réveil vérifie
+la disponibilité puis prépare et admet un nouveau Worker, une nouvelle session
+et de nouveaux dossiers, après les contrôles frais.
+
+La publication agrégée depuis la base publique originale et le service de réveil
+restent à raccorder. Ces composants de continuation ne sont pas encore déployés
+sur le serveur.

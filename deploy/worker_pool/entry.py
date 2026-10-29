@@ -82,6 +82,16 @@ def _backend_qualification_diagnostic(error):
     except Exception:return None
 
 
+
+def _delivery_diagnostic(error):
+    """Only SDK-produced closed categories; no arbitrary attributes/strings."""
+    try:
+        from blackoutburst_agents.dev_manifest import DevelopmentError
+        from blackoutburst_agents.development_pool_delivery import delivery_boundary_diagnostic
+        if type(error) is not DevelopmentError or vars(error).get('code')!='development_pool_delivery_unavailable':return None
+        return delivery_boundary_diagnostic(vars(error).get('_development_delivery_diagnostic'))
+    except Exception:return None
+
 def owner_context(manifest,owner):
     if owner!=manifest['unix_owner'] or os.geteuid()==0:p.fail('pool_owner_login_required')
     account=pwd.getpwnam(owner)
@@ -226,6 +236,9 @@ def main(argv=None):
             diagnostic = _backend_qualification_diagnostic(error)
             if diagnostic is not None:
                 print(json.dumps(diagnostic,sort_keys=True,separators=(',',':')))
+        diagnostic=_delivery_diagnostic(error)
+        if diagnostic is not None:
+            print(json.dumps(diagnostic,sort_keys=True,separators=(',',':')))
         return 3
 
 if __name__=='__main__':raise SystemExit(main())

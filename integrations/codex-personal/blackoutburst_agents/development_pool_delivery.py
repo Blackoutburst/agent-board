@@ -5,6 +5,7 @@ selection occurs here. Existing concrete components own all mutation protocols.
 """
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
+from contextvars import ContextVar
 import fcntl
 import os
 from pathlib import Path
@@ -32,6 +33,50 @@ from .worker_pool import WorkerPool
 MAX_DOCUMENT = 512*1024
 STEPS = ('intent','capture-intent','captured','evidence','seal-intent','sealed',
          'publication-intent','published','board-intent','board','handoff-intent','handoff','complete')
+
+
+_DELIVERY_PHASE=ContextVar('development_delivery_phase',default='delivery')
+DELIVERY_PHASES=frozenset({'delivery','board_handoff'})
+DELIVERY_CODES={
+    'board_read_error':frozenset({'connection_closed','timeout','connection_failed','redirect_blocked',
+        'authentication_failed','permission_denied','http_error','invalid_response','rpc_rejected',
+        'tool_rejected','session_mismatch','protocol_mismatch','response_too_large',
+        'development_ticket_frame_unavailable','development_registration_required','unknown'}),
+    'journal_error':frozenset({'scope_busy','scope_lock_unavailable','scope_lock_required',
+        'journal_unavailable','journal_corrupt','operation_not_found','insecure_journal_file','unknown'}),
+    'os_error':frozenset({'os_error'}),'key_error':frozenset({'missing_key'}),
+    'type_error':frozenset({'invalid_type'}),'value_error':frozenset({'invalid_value'}),
+    'runtime_error':frozenset({'runtime_error'}),'unknown_error':frozenset({'unknown'})}
+
+
+def delivery_boundary_diagnostic(value):
+    """Validate a copied closed tuple, never arbitrary exception content."""
+    if (type(value) is not tuple or len(value)!=3 or any(type(item) is not str for item in value)
+            or value[0] not in DELIVERY_PHASES or value[1] not in DELIVERY_CODES
+            or value[2] not in DELIVERY_CODES[value[1]]):return None
+    return {'status':'delivery_diagnostic','kind':'development_result_delivery',
+        'phase':value[0],'category':value[1],'code':value[2]}
+
+
+def _delivery_failure(error,phase):
+    from .board_reader import BoardReadError
+    from .work_journal import JournalError
+    category,code='unknown_error','unknown'
+    if type(error) in (BoardReadError,JournalError):
+        category='board_read_error' if type(error) is BoardReadError else 'journal_error'
+        candidate=vars(error).get('code')
+        code=candidate if type(candidate) is str and candidate in DELIVERY_CODES[category] else 'unknown'
+    elif type(error) in (OSError,PermissionError,FileNotFoundError,FileExistsError,NotADirectoryError,
+            IsADirectoryError,BlockingIOError,InterruptedError,BrokenPipeError,TimeoutError,
+            ConnectionError,ConnectionAbortedError,ConnectionRefusedError,ConnectionResetError):
+        category,code='os_error','os_error'
+    elif type(error) in (KeyError,TypeError,ValueError,RuntimeError):
+        category,code={KeyError:('key_error','missing_key'),TypeError:('type_error','invalid_type'),
+            ValueError:('value_error','invalid_value'),RuntimeError:('runtime_error','runtime_error')}[type(error)]
+    result=DevelopmentError('development_pool_delivery_unavailable')
+    value=(phase,category,code)
+    if delivery_boundary_diagnostic(value) is not None:result._development_delivery_diagnostic=value
+    return result
 
 
 def fail(code='development_pool_delivery_changed'):
@@ -347,10 +392,12 @@ class DevelopmentPoolResultDelivery:
 
     def deliver(self, operation_id, *, changes, commit_message, pr_title, pr_body):
         """Explicitly deliver only this selected archived result; never dispatch."""
+        token=_DELIVERY_PHASE.set('delivery')
         try:
             return self._deliver(operation_id,changes=changes,commit_message=commit_message,pr_title=pr_title,pr_body=pr_body)
         except DevelopmentError: raise
-        except Exception: fail('development_pool_delivery_unavailable')
+        except Exception as error:raise _delivery_failure(error,_DELIVERY_PHASE.get()) from None
+        finally:_DELIVERY_PHASE.reset(token)
 
     def _deliver(self, operation_id, *, changes, commit_message, pr_title, pr_body):
         self._job(operation_id,historical=True)
@@ -407,6 +454,7 @@ class DevelopmentPoolResultDelivery:
             self._remember(private,'published',result)
             link = DevelopmentPublishedDelivery(proof,deliveries,publisher)
             self._remember(private,'board-intent',dict(publication_sha256=digest(canonical(result))))
+            _DELIVERY_PHASE.set('board_handoff')
             self._fresh(worker,context,bound,request,private,held)
             with standalone_fence_wait(): result = worker.publish(operation_id,delivery_publication=link)
             op = worker.journal.get(operation_id)
