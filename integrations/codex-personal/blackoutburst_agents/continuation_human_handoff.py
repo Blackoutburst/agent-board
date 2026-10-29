@@ -238,6 +238,9 @@ class ContinuationHumanHandoff:
 
     def _notice(self,private,op,thread,question_code,cleaned):
         self._budget()
+        current=self.task.snapshot()['state']
+        require(current['phase']=='needs_you' and current['stop_requested'] is False
+            and self.worker.journal.get(op['id'])==op and not self.worker._stopped(op['id']))
         notice=failure_notice('development_grants_unavailable' if question_code=='permissions'
             else 'development_control_requires_review',cleaned)
         intent={'schema':1,'operation_id':op['id'],'session_id':op['scope']['board_session_id'],
@@ -251,6 +254,12 @@ class ContinuationHumanHandoff:
             # key. Its absence of an ACK is not evidence of absence on Board.
             require(private.read(name,16384)==canonical(intent));return self._result('pending')
         try:
+            # A failed cleanup lookup can coincide with an entry/Worker Stop.
+            # The fallback is visibility only and must respect that Stop too.
+            current=self.task.snapshot()['state']
+            require(current['phase']=='needs_you' and current['stop_requested'] is False
+                and self.worker.journal.get(op['id'])==op and not self.worker._stopped(op['id']))
+            self._budget()
             receipt=self.worker.client.post_failure_notice(thread_id=thread,
                 idempotency_key=intent['idempotency_key'],notice=notice)
             self._receipt(private,'continuation-failure-notice-receipt-'+op['id']+'.json',receipt)

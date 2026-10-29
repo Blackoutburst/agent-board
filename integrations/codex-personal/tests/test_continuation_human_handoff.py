@@ -20,7 +20,7 @@ from test_continuation_pool_service_integration import actual_service
 from test_development_cycle_linux_preparation import linux_lock_observation
 
 
-@pytest.mark.parametrize('mode', ['question', 'lost_ack', 'cleanup_unknown', 'request_revoked', 'all_revoked', 'stopped', 'provider_pause', 'fence_drift', 'source_drift', 'late_stop'])
+@pytest.mark.parametrize('mode', ['question', 'lost_ack', 'cleanup_unknown', 'runtime_worker_stop', 'runtime_core_stop', 'request_revoked', 'all_revoked', 'stopped', 'provider_pause', 'fence_drift', 'source_drift', 'late_stop'])
 def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(actual_service, monkeypatch, mode):
     f, root, task_id, ticket, construct, calls, sequence = actual_service
     # Completed tool-free model output, rejected before any accepted action.
@@ -61,11 +61,15 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
             client.adopt_registration = lambda: pytest.fail('Visibility never adopts registration')
             worker.client = client
             monkeypatch.setattr(worker.control, 'close', lambda: None, raising=False)
-            if mode == 'cleanup_unknown':
+            if mode in ('cleanup_unknown', 'runtime_worker_stop', 'runtime_core_stop'):
                 call = worker.control.call
                 def unknown(name, arguments):
                     value = call(name, arguments)
                     if name == 'lookup_execution':
+                        if mode == 'runtime_worker_stop':worker.stop(generation.operation)
+                        if mode == 'runtime_core_stop':
+                            current=generation.task.snapshot()['state']
+                            generation.task.stop(expected_revision=current['revision'], request_id='stop-during-runtime-lookup')
                         value = deepcopy(value);value['execution'].update(cleanup_confirmed=False, state='needs_review')
                     return value
                 worker.control.call = unknown
@@ -109,7 +113,8 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
             before = generation.task.snapshot()
             report = visibility.publish(question_code='permissions')
             observed.append(report)
-            assert generation.task.snapshot() == before
+            if mode == 'runtime_core_stop':assert generation.task.snapshot()['state']['stop_requested'] is True
+            else:assert generation.task.snapshot() == before
             if mode in ('question', 'lost_ack'):
                 assert visibility.publish(question_code='permissions') == report
             client.close()
@@ -140,8 +145,8 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
         assert not questions and not report['human_question_confirmed']
         assert names.count('request_human_input') == 0
         assert actual['status'] == 'in_progress' and actual['claimant'] is not None
-        assert report['status'] == ('pending' if mode in ('all_revoked', 'fence_drift', 'late_stop') else 'notice_confirmed'), report
-        assert names.count('post_message') == (0 if mode in ('fence_drift', 'late_stop') else 1)
+        assert report['status'] == ('pending' if mode in ('all_revoked', 'fence_drift', 'late_stop', 'runtime_worker_stop') else 'not_applicable' if mode=='runtime_core_stop' else 'notice_confirmed'), report
+        assert names.count('post_message') == (0 if mode in ('fence_drift', 'late_stop', 'runtime_worker_stop', 'runtime_core_stop') else 1)
     assert f.board.get_runtime(f.human)['active_count'] == 0
     assert 'PRIVATE_' not in json.dumps(report)
 
