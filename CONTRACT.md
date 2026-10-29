@@ -1,6 +1,6 @@
-# Board interface contract — 2.17.3
+# Board interface contract — 2.17.4
 
-The browser REST API and MCP act on one database. Application version is `2.17.3`; schema version is `17`; the MCP catalogue has 76 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+The browser REST API and MCP act on one database. Application version is `2.17.4`; schema version is `17`; the MCP catalogue has 77 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
 
 `get_development_ticket_frame(session_id, ticket_id)` adds one bounded read for
 standalone Development authorization. Its before/after observations preserve

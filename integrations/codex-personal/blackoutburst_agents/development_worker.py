@@ -68,12 +68,20 @@ class DevelopmentBoardWorker:
 
     def _local_control(self, operation_id, *, inspection=False):
         """Local operation/family stop checks, without the remote controller guard."""
+        if getattr(self,'_checkpoint_execution',None) is not None:
+            from .development_cycle_driver import check_worker_cycle
+            check_worker_cycle(self,operation_id)
         if not inspection and self._stopped(operation_id):raise DevelopmentError('development_stop_requested')
         if self.controller_scope is not None and self.controller_local_guard(inspection=inspection) is not True:
             raise DevelopmentError('development_controller_stopped')
         return True
 
     def _controller_cancelled(self, operation_id=None, *, inspection=False):
+        if getattr(self,'_checkpoint_execution',None) is not None:
+            try:
+                from .development_cycle_driver import check_worker_cycle
+                check_worker_cycle(self,operation_id)
+            except Exception:return True
         if not inspection and operation_id is not None and self._stopped(operation_id):
             return True
         if self.controller_scope is not None:
@@ -434,6 +442,15 @@ class DevelopmentBoardWorker:
         return state.get('step') is not None or state.get('phase')=='review_ready'
 
     def run(self, operation_id, *, reconcile=False):
+        return self._run(operation_id,reconcile=reconcile)
+
+    def run_checkpoint(self, operation_id, *, request, checkpoint_controller, parent_checkpoint_id=None,provider_session=None):
+        """Explicit ready-boundary capture, with no partial review promotion."""
+        from .development_cycle_driver import run_worker_checkpoint
+        return run_worker_checkpoint(self,operation_id,request=request,
+            checkpoint_controller=checkpoint_controller,parent_checkpoint_id=parent_checkpoint_id,provider_session=provider_session)
+
+    def _run(self, operation_id, *, reconcile=False, checkpoint=None):
         op=self.journal.get(operation_id)
         with self.journal.lock(op['scope']):
             op=self.journal.get(operation_id)
@@ -513,6 +530,9 @@ class DevelopmentBoardWorker:
                         op=self._save(op,'running')
                     if op['stage'] not in ('running','needs_review'):
                         raise DevelopmentError('development_stage_requires_review')
+                    if checkpoint is not None:
+                        from .development_cycle_driver import validate_worker_checkpoint_caps
+                        validate_worker_checkpoint_caps(op,manifest,backend,checkpoint[1])
                     broker=DevelopmentBroker(pins['broker']['path'],authorize_scope=allowed,enabled=True,test_backend=backend)
                     try:
                         planner=self.planner_factory(broker=broker,store=self.store,runtime_journal=self.runtime,
@@ -531,7 +551,27 @@ class DevelopmentBoardWorker:
                             _transport=self.transport,_test_anchor=self.test_anchor,
                             _allow_fixture_backend=self.allow_fixture,_clock=self.clock)
                         try:
-                            receipt=planner.reconcile() if reconcile else planner.run()
+                            if checkpoint is None:
+                                receipt=planner.reconcile() if reconcile else planner.run()
+                            else:
+                                from .development_checkpoint_proof import DevelopmentCheckpointReady
+                                from .development_provider_continuation import DevelopmentProviderCheckpointReady
+                                from .private_development_checkpoint import checkpoint_id_for
+                                request,controller,parent_id=checkpoint[:3]
+                                options={} if len(checkpoint)==3 else {'provider_session':checkpoint[3]}
+                                frame=planner.run(checkpoint_request=request,**options)
+                                if type(frame) in (DevelopmentCheckpointReady,DevelopmentProviderCheckpointReady):
+                                    # run() has released its Planner lock. The
+                                    # concrete proof is still live until these
+                                    # normal resources close in the finally.
+                                    sealed=controller.capture(checkpoint_id=checkpoint_id_for(op['id']),
+                                        proof=frame.proof,parent_checkpoint_id=parent_id)
+                                    op=self._save(op,checkpoint_capture={'status':frame.status,'checkpoint':sealed,
+                                        'observation':deepcopy(frame.proof.metadata),
+                                        'previous_revision':op['revision'],'previous_updated_at':op['updated_at']})
+                                    return {**self._public(op),'status':frame.status,
+                                        'checkpoint':sealed,'historical':False,'launchable':False}
+                                receipt=frame
                         finally:
                             planner.close()
                     finally:

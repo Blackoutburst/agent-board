@@ -17,7 +17,31 @@ from pathlib import Path
 import sqlite3
 import stat
 import time
+import threading
 import uuid
+
+CONTINUATION_APPLICATION_ID = 0x42425243
+CONTINUATION_MAX_TURNS = 64
+CONTINUATION_MAX_BYTES = 16 * 1024 * 1024
+CONTINUATION_SQL = {
+    'continuation_enrollments': 'CREATE TABLE continuation_enrollments (work_id TEXT PRIMARY KEY REFERENCES works(id), binding_json TEXT NOT NULL, binding_sha256 TEXT NOT NULL)',
+    'continuation_closures': 'CREATE TABLE continuation_closures (intent_id TEXT PRIMARY KEY, work_id TEXT NOT NULL UNIQUE REFERENCES works(id), request_sha256 TEXT NOT NULL, metadata_json TEXT NOT NULL, post_state_sha256 TEXT NOT NULL)',
+    'continuation_enrollments_no_update': "CREATE TRIGGER continuation_enrollments_no_update BEFORE UPDATE ON continuation_enrollments BEGIN SELECT RAISE(ABORT,'append_only'); END",
+    'continuation_enrollments_no_delete': "CREATE TRIGGER continuation_enrollments_no_delete BEFORE DELETE ON continuation_enrollments BEGIN SELECT RAISE(ABORT,'append_only'); END",
+    'continuation_closures_no_update': "CREATE TRIGGER continuation_closures_no_update BEFORE UPDATE ON continuation_closures BEGIN SELECT RAISE(ABORT,'append_only'); END",
+    'continuation_closures_no_delete': "CREATE TRIGGER continuation_closures_no_delete BEFORE DELETE ON continuation_closures BEGIN SELECT RAISE(ABORT,'append_only'); END",
+}
+
+
+def _continuation_encoded(value):
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    except (TypeError, ValueError, UnicodeError):
+        raise StoreError('continuation_state_invalid') from None
+
+
+def _continuation_sha(value):
+    return hashlib.sha256(_continuation_encoded(value)).hexdigest()
 
 
 class StoreError(Exception):
@@ -196,8 +220,11 @@ def _executed_disposition_proof(proof, work, turn, expected, intent_id):
 
 
 class RunStore:
-    def __init__(self, state_dir: Path, *, existing_only=False):
+    def __init__(self, state_dir: Path, *, existing_only=False, continuation_v1=False):
         if type(existing_only) is not bool:raise StoreError('invalid_existing_only')
+        if type(continuation_v1) is not bool:raise StoreError('invalid_continuation_configuration')
+        self.continuation_v1 = continuation_v1
+        self._initializing_continuation = False
         self.state_dir = Path(state_dir).expanduser().absolute()
         self._locks = {}
         self._db = None
@@ -211,6 +238,7 @@ class RunStore:
                     or stat.S_IMODE(info.st_mode) != 0o700):
                 raise StoreError("insecure_state_directory")
             database = self.state_dir / "runs.sqlite3"
+            database_existed = database.exists()
             if existing_only:
                 fd=os.open(database,os.O_RDWR|os.O_NOFOLLOW)
                 try:
@@ -232,12 +260,30 @@ class RunStore:
             self._db = sqlite3.connect(database.as_uri()+'?mode=rw' if existing_only else database,
                 uri=existing_only,timeout=5,isolation_level=None)
             self._db.row_factory = sqlite3.Row
+            if continuation_v1:
+                self._db.execute('PRAGMA recursive_triggers=ON')
+                self._db.execute('PRAGMA foreign_keys=ON')
+                self._db.execute('PRAGMA trusted_schema=OFF')
             version=self._db.execute("PRAGMA user_version").fetchone()[0]
             if existing_only:
-                if version!=2 or self._db.execute('PRAGMA application_id').fetchone()[0]!=0:
+                if (version != (3 if continuation_v1 else 2)
+                        or self._db.execute('PRAGMA application_id').fetchone()[0] !=
+                            (CONTINUATION_APPLICATION_ID if continuation_v1 else 0)):
                     raise StoreError('unsupported_state_version')
                 self._check_existing_schema()
+                if continuation_v1:
+                    self._db.execute('PRAGMA foreign_keys=ON')
+                    self._db.execute('PRAGMA synchronous=FULL')
                 return
+            if continuation_v1:
+                if version == 3:
+                    self._check_existing_schema()
+                    self._db.execute('PRAGMA foreign_keys=ON')
+                    self._db.execute('PRAGMA synchronous=FULL')
+                    return
+                if version != 0 or database_existed:
+                    raise StoreError('continuation_fresh_state_required')
+                self._initializing_continuation = True
             if version not in (0,1,2):raise StoreError("unsupported_state_version")
             if version==2 and tuple(row['name'] for row in self._db.execute('PRAGMA table_info(context_guards)'))!=('work_id','guard_json'):
                 raise StoreError('context_guard_invalid')
@@ -272,6 +318,12 @@ class RunStore:
             with self._transaction() as db:
                 for statement in schema.split(';'):
                     if statement.strip():db.execute(statement)
+                if continuation_v1:
+                    for statement in CONTINUATION_SQL.values():db.execute(statement)
+                    db.execute('PRAGMA user_version=3')
+                    db.execute('PRAGMA application_id='+str(CONTINUATION_APPLICATION_ID))
+            self._initializing_continuation = False
+            if continuation_v1:self._check_existing_schema()
         except StoreError:
             if self._db is not None:
                 self._db.close()
@@ -305,7 +357,16 @@ class RunStore:
             'one_running_turn':('turns',('work_id',),"CREATE UNIQUE INDEX one_running_turn ON turns(work_id) WHERE status = 'running'")}
         names=set(columns)|set(indexes)|{'sqlite_autoindex_works_1','sqlite_autoindex_works_2',
             'sqlite_autoindex_turns_1','sqlite_autoindex_turns_2','sqlite_autoindex_context_guards_1'}
-        rows=db.execute("SELECT type,name,tbl_name,sql FROM main.sqlite_master LIMIT 20").fetchall()
+        if self.continuation_v1:
+            if (db.execute('PRAGMA user_version').fetchone()[0] != 3
+                    or db.execute('PRAGMA application_id').fetchone()[0] != CONTINUATION_APPLICATION_ID
+                    or db.execute('PRAGMA recursive_triggers').fetchone()[0] != 1
+                    or db.execute('PRAGMA foreign_keys').fetchone()[0] != 1
+                    or db.execute('PRAGMA trusted_schema').fetchone()[0] != 0):
+                raise StoreError('state_schema_invalid')
+            names |= set(CONTINUATION_SQL) | {'sqlite_autoindex_continuation_enrollments_1',
+                'sqlite_autoindex_continuation_closures_1','sqlite_autoindex_continuation_closures_2'}
+        rows=db.execute("SELECT type,name,tbl_name,sql FROM main.sqlite_master LIMIT "+('40' if self.continuation_v1 else '20')).fetchall()
         if {r['name'] for r in rows}!=names:raise StoreError('state_schema_invalid')
         if any(tuple(r['name'] for r in db.execute('PRAGMA main.table_info('+table+')'))!=wanted for table,wanted in columns.items()):
             raise StoreError('state_schema_invalid')
@@ -329,7 +390,12 @@ class RunStore:
             if (row['type']!='index' or row['tbl_name']!=table or normalize(row['sql'] or '')!=normalize(sql)
                     or tuple(r['name'] for r in db.execute('PRAGMA main.index_info('+name+')'))!=cols):
                 raise StoreError('state_schema_invalid')
-        if (any(r['type'] not in ('table','index') for r in rows)
+        if self.continuation_v1:
+            for name, sql in CONTINUATION_SQL.items():
+                row=next(r for r in rows if r['name']==name)
+                if row['sql'] != sql:raise StoreError('state_schema_invalid')
+        if (any(r['type'] not in ('table','index') and not
+                    (self.continuation_v1 and r['name'] in CONTINUATION_SQL and r['type']=='trigger') for r in rows)
                 or db.execute('SELECT 1 FROM temp.sqlite_master LIMIT 1').fetchone()):
             raise StoreError('state_schema_invalid')
 
@@ -345,8 +411,10 @@ class RunStore:
         if self._db is None:
             raise StoreError("store_closed")
         try:
+            if self.continuation_v1 and not self._initializing_continuation:self._check_existing_schema()
             self._db.execute("BEGIN IMMEDIATE")
             yield self._db
+            if self.continuation_v1 and not self._initializing_continuation:self._check_existing_schema()
             self._db.execute("COMMIT")
         except BaseException as exc:
             if self._db.in_transaction:
@@ -490,6 +558,8 @@ class RunStore:
 
     def begin_turn(self, work_id, request_id, prompt):
         self._require_lock(work_id)
+        if self.continuation_v1 and self.continuation_enrollment(work_id) is None:
+            raise StoreError('continuation_enrollment_required')
         _identifier(request_id, "invalid_request_id")
         if not isinstance(prompt, str) or not prompt or len(prompt.encode("utf-8")) > 1024 * 1024:
             raise StoreError("invalid_prompt")
@@ -589,6 +659,192 @@ class RunStore:
         if turn["result_json"] is None:
             raise StoreError("result_not_ready")
         return json.loads(turn["result_json"])
+
+    def _continuation_required(self):
+        if not self.continuation_v1:raise StoreError('continuation_store_opt_in_required')
+        self._check_existing_schema()
+
+    @staticmethod
+    def _continuation_work_config(work):
+        return {key:work[key] for key in ('id','owner_id','agent_id','project_id','ticket_id',
+            'workspace','executable','model','created_at')}
+
+    def continuation_enrollment(self, work_id):
+        self._continuation_required();self._require_lock(work_id)
+        row=self._db.execute('SELECT * FROM continuation_enrollments WHERE work_id=?',(work_id,)).fetchone()
+        if row is None:return None
+        raw=row['binding_json']
+        if type(raw) is not str or len(raw.encode())>16384:raise StoreError('continuation_enrollment_invalid')
+        try:value=json.loads(raw)
+        except (ValueError,TypeError):raise StoreError('continuation_enrollment_invalid') from None
+        fields={'schema','task_id','generation_id','cycle_id','attempt_id','work_id','scope_sha256','work_configuration_sha256'}
+        if (type(value) is not dict or set(value)!=fields or value['schema']!='runstore-continuation-enrollment-v1'
+                or value['work_id']!=work_id or _continuation_encoded(value).decode()!=raw
+                or _continuation_sha(value)!=row['binding_sha256']
+                or value['work_configuration_sha256']!=_continuation_sha(self._continuation_work_config(self._work(work_id)))):
+            raise StoreError('continuation_enrollment_invalid')
+        for key in ('generation_id','cycle_id','attempt_id','work_id'):_uuid(value[key])
+        if (len({value[key] for key in ('generation_id','cycle_id','attempt_id')})!=3
+                or type(value['task_id']) is not str or re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}',value['task_id']) is None
+                or type(value['scope_sha256']) is not str or re.fullmatch('[0-9a-f]{64}',value['scope_sha256']) is None):
+            raise StoreError('continuation_enrollment_invalid')
+        return value
+
+    def enroll_continuation_work_v1(self, work_id, *, task_id, generation_id, cycle_id, attempt_id, scope_sha256):
+        self._continuation_required();self._require_lock(work_id)
+        for value in (generation_id,cycle_id,attempt_id):_uuid(value)
+        if (len({generation_id,cycle_id,attempt_id})!=3 or type(task_id) is not str
+                or re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}',task_id) is None
+                or type(scope_sha256) is not str or re.fullmatch('[0-9a-f]{64}',scope_sha256) is None):
+            raise StoreError('continuation_enrollment_invalid')
+        with self._transaction() as db:
+            work=self._work(work_id)
+            binding={'schema':'runstore-continuation-enrollment-v1','task_id':task_id,
+                'generation_id':generation_id,'cycle_id':cycle_id,'attempt_id':attempt_id,'work_id':work_id,
+                'scope_sha256':scope_sha256,'work_configuration_sha256':_continuation_sha(self._continuation_work_config(work))}
+            previous=self.continuation_enrollment(work_id)
+            if previous is not None:
+                if previous!=binding:raise StoreError('continuation_enrollment_conflict')
+                return {'binding':previous,'binding_sha256':_continuation_sha(previous),'historical':True,'launchable':False}
+            if (work['status']!='open' or work['provider_session_id'] is not None
+                    or db.execute('SELECT 1 FROM turns WHERE work_id=? LIMIT 1',(work_id,)).fetchone()):
+                raise StoreError('continuation_fresh_work_required')
+            db.execute('INSERT INTO continuation_enrollments VALUES(?,?,?)',
+                (work_id,_continuation_encoded(binding).decode(),_continuation_sha(binding)))
+            return {'binding':binding,'binding_sha256':_continuation_sha(binding),'historical':False,'launchable':False}
+
+    def _continuation_state(self, work_id):
+        self._continuation_required();self._require_lock(work_id)
+        limits=self._db.execute('SELECT COUNT(*),COALESCE(SUM(length(CAST(result_json AS BLOB))),0) FROM turns WHERE work_id=?',(work_id,)).fetchone()
+        if limits[0]>CONTINUATION_MAX_TURNS or limits[1]>CONTINUATION_MAX_BYTES:
+            raise StoreError('continuation_state_too_large')
+        turns=[dict(row) for row in self._db.execute('SELECT * FROM turns WHERE work_id=? ORDER BY rowid LIMIT ?',
+            (work_id,CONTINUATION_MAX_TURNS+1))]
+        guard_size=self._db.execute('SELECT length(CAST(guard_json AS BLOB)) FROM context_guards WHERE work_id=?',(work_id,)).fetchone()
+        if guard_size is not None and guard_size[0]>2048:raise StoreError('continuation_state_too_large')
+        guard=self._db.execute('SELECT * FROM context_guards WHERE work_id=?',(work_id,)).fetchone()
+        if guard is not None and len(guard['guard_json'].encode())>2048:raise StoreError('continuation_state_too_large')
+        value={'work':self._work(work_id),'turns':turns,'context_guard':None if guard is None else dict(guard),
+            'enrollment':self.continuation_enrollment(work_id)}
+        if len(_continuation_encoded(value))>CONTINUATION_MAX_BYTES:raise StoreError('continuation_state_too_large')
+        return value
+
+    def continuation_state_sha256(self, work_id):
+        """Full bounded multi-turn CAS. Raw results remain inside this process."""
+        return _continuation_sha(self._continuation_state(work_id))
+
+    def continuation_closure(self, work_id):
+        """Read exact historical closure metadata; never creates an execution permit."""
+        self._continuation_required();self._require_lock(work_id)
+        row=self._db.execute('SELECT * FROM continuation_closures WHERE work_id=?',(work_id,)).fetchone()
+        if row is None:return None
+        try:
+            if type(row['metadata_json']) is not str or len(row['metadata_json'].encode())>16384:raise ValueError
+            value=json.loads(row['metadata_json'])
+            if (set(value)!={'schema','intent_id','work_id','reason','pre_state_sha256','binding_sha256',
+                    'boundary_sha256','provider_receipt_sha256','closed_at'}
+                    or value['schema']!='runstore-continuation-closure-v1' or value['work_id']!=work_id
+                    or value['intent_id']!=row['intent_id'] or value['reason'] not in ('provider','cycle','complete')
+                    or _continuation_encoded(value).decode()!=row['metadata_json']
+                    or _continuation_sha(value)!=row['request_sha256']
+                    or value['binding_sha256']!=_continuation_sha(self.continuation_enrollment(work_id))
+                    or self._work(work_id)['status']!='closed'
+                    or self.continuation_state_sha256(work_id)!=row['post_state_sha256']):raise ValueError
+            _uuid(value['intent_id'])
+            for key in ('pre_state_sha256','binding_sha256','boundary_sha256'):
+                if type(value[key]) is not str or re.fullmatch('[0-9a-f]{64}',value[key]) is None:raise ValueError
+            if (value['provider_receipt_sha256'] is not None and
+                    (type(value['provider_receipt_sha256']) is not str or re.fullmatch('[0-9a-f]{64}',value['provider_receipt_sha256']) is None)):
+                raise ValueError
+            if type(value['closed_at']) not in (int,float) or not math.isfinite(value['closed_at']) or value['closed_at']<=0:raise ValueError
+        except (ValueError,TypeError,KeyError):raise StoreError('continuation_closure_invalid') from None
+        return {**value,'post_state_sha256':row['post_state_sha256'],'closure_sha256':row['request_sha256'],
+            'historical':True,'launchable':False}
+
+    def seal_continuation_work_v1(self, work_id, *, expected_state_sha256, intent_id,
+                                  reason, boundary, provider_receipt=None):
+        """Close one explicitly enrolled cycle, preserving every turn unchanged.
+
+        Only a live core boundary can first close a work. Repeated exact intent
+        returns historical metadata; it cannot mint a boundary, run, or reopen.
+        """
+        self._continuation_required();self._require_lock(work_id);_uuid(intent_id)
+        if (reason not in ('provider','cycle','complete') or type(expected_state_sha256) is not str
+                or re.fullmatch('[0-9a-f]{64}',expected_state_sha256) is None):
+            raise StoreError('continuation_closure_invalid')
+        old=self.continuation_closure(work_id)
+        if old is not None:
+            if (old['intent_id']!=intent_id or old['reason']!=reason or old['pre_state_sha256']!=expected_state_sha256
+                    or boundary is not None and getattr(boundary,'payload_sha',None)!=old['boundary_sha256']):
+                raise StoreError('continuation_closure_conflict')
+            return old
+        from .continuation import CleanBoundary
+        if (type(boundary) is not CleanBoundary or not boundary.active or boundary.pid!=os.getpid()
+                or boundary.thread is not threading.current_thread()):raise StoreError('continuation_boundary_required')
+        binding=self.continuation_enrollment(work_id)
+        context=boundary.context
+        if (binding is None or context.logical_task_id!=binding['task_id'] or context.purpose!=reason
+                or any(getattr(context,key)!=binding[key] for key in ('generation_id','cycle_id','attempt_id'))
+                or boundary.task.snapshot()['state_sha256']!=context.state_sha256):
+            raise StoreError('continuation_boundary_mismatch')
+        boundary.task.checks.verify(context,provider=reason=='provider')
+        with self._transaction() as db:
+            before=self._continuation_state(work_id)
+            if (_continuation_sha(before)!=expected_state_sha256
+                    or not boundary.active or boundary.context is not context
+                    or boundary.task.snapshot()['state_sha256']!=context.state_sha256):
+                raise StoreError('continuation_state_conflict')
+            work,turns=before['work'],before['turns']
+            if (work['status'] not in ('open','needs_review') or not turns or work['provider_session_id'] is None
+                    or any(context.scope.get(key)!=work[key] for key in ('owner_id','project_id','ticket_id'))):
+                raise StoreError('continuation_predecessor_invalid')
+            provider=None
+            if reason=='provider':
+                from .provider_disposition import _consumed_provider_receipt_metadata
+                provider=_consumed_provider_receipt_metadata(provider_receipt)
+                if (work['status']!='needs_review' or provider['work_state_sha256']!=expected_state_sha256
+                        or any(provider[key]!=binding[key] for key in ('task_id','generation_id','cycle_id','attempt_id','work_id','scope_sha256'))
+                        or context.provider_receipt_sha256!=hashlib.sha256(provider_receipt.metadata_json.encode()).hexdigest()):
+                    raise StoreError('continuation_provider_receipt_invalid')
+            elif provider_receipt is not None or work['status']!='open':raise StoreError('continuation_predecessor_invalid')
+            for turn in turns:
+                if (turn['cancel_requested']!=0 or turn['resolution'] is not None or turn['resolution_reason'] is not None
+                        or turn['provider_session_id']!=work['provider_session_id']):raise StoreError('continuation_predecessor_invalid')
+                try:
+                    result=json.loads(turn['result_json'])
+                    if _result_json(result)!=turn['result_json']:raise ValueError
+                except (ValueError,TypeError):raise StoreError('continuation_predecessor_invalid') from None
+                if provider is not None and turn['id']==provider['turn_id']:
+                    if (turn is not turns[-1] or turn['status']!='blocked' or turn['requires_review']!=1
+                            or turn['request_id']!=provider['request_id'] or result.get('text') is not None
+                            or _continuation_sha(result)!=provider['result_sha256']):
+                        raise StoreError('continuation_provider_receipt_invalid')
+                elif (turn['status']!='completed' or turn['requires_review']!=0 or result.get('status')!='completed'
+                        or result.get('session_id')!=work['provider_session_id'] or result.get('reason')!='verified'
+                        or type(result.get('text')) is not str or not result['text']
+                        or type(result.get('verification')) is not dict
+                        or any(result['verification'].get(key) is not True for key in
+                            ('exit_zero','turn_completed','session_verified','tool_free','cleanup_confirmed'))
+                        or result['verification'].get('authentication')!='chatgpt'):
+                    raise StoreError('continuation_predecessor_invalid')
+            if provider is not None and turns[-1]['id']!=provider['turn_id']:raise StoreError('continuation_provider_receipt_invalid')
+            now=time.time()
+            if type(now) not in (int,float) or not math.isfinite(now) or now<work['updated_at']:
+                raise StoreError('continuation_clock_invalid')
+            metadata={'schema':'runstore-continuation-closure-v1','intent_id':intent_id,'work_id':work_id,'reason':reason,
+                'pre_state_sha256':expected_state_sha256,'binding_sha256':_continuation_sha(binding),
+                'boundary_sha256':boundary.payload_sha,'provider_receipt_sha256':None if provider is None else context.provider_receipt_sha256,
+                'closed_at':now}
+            changes=db.total_changes
+            db.execute("UPDATE works SET status='closed',updated_at=? WHERE id=?",(now,work_id))
+            post=self.continuation_state_sha256(work_id)
+            db.execute('INSERT INTO continuation_closures VALUES(?,?,?,?,?)',
+                (intent_id,work_id,_continuation_sha(metadata),_continuation_encoded(metadata).decode(),post))
+            after=self._continuation_state(work_id)
+            if (db.total_changes-changes!=2 or after!={**before,'work':{**work,'status':'closed','updated_at':now}}):
+                raise StoreError('continuation_postcondition')
+            result=self.continuation_closure(work_id)
+            return {**result,'historical':False}
 
     def interruption_state_sha256(self, work_id):
         """CAS fingerprint for the explicit single-turn administrative path."""

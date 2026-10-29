@@ -117,6 +117,44 @@ def in_installed_unit(manifest,release,account):
     if not any(unit in line.split(':',2)[-1].split('/') for line in raw.splitlines()):p.fail('pool_installed_unit_required')
 
 
+def in_continuation_unit(manifest,release,account):
+    """The separate opt-in unit is required before importing its controller."""
+    if not p.continuation_supported(manifest['adapter_version']):p.fail('pool_continuation_version_required')
+    unit=p.continuation_unit_name(manifest['unix_owner']);path=p.UNIT_DIR/unit
+    p.protected(path)
+    expected=p.render_continuation_unit(p.read_regular(release/'continuation.service.in').decode(),
+        manifest,release,account.pw_dir).encode()
+    if p.read_regular(path)!=expected:p.fail('pool_continuation_unit_changed')
+    raw=current_cgroup().decode('utf-8','strict')
+    if not any(unit in line.split(':',2)[-1].split('/') for line in raw.splitlines()):
+        p.fail('pool_continuation_unit_required')
+
+
+def continuation_entry(args,manifest,release,account):
+    if args.action not in ('continuation-plan','run-continuation-once'):p.fail('pool_continuation_mode_required')
+    if not p.continuation_supported(manifest['adapter_version']):p.fail('pool_continuation_version_required')
+    root=p.owner_root(args.owner);path=p.absolute(args.continuation)
+    if not path.is_relative_to(root/'config'):p.fail('pool_configuration_path_refused')
+    if args.action=='run-continuation-once':in_continuation_unit(manifest,release,account)
+    sys.path.insert(0,str(release/'source'))
+    if args.action=='continuation-plan':
+        from blackoutburst_agents.continuation_pool_configuration import continuation_plan
+        return continuation_plan(path,root=root,owner_id=manifest['board_owner'],
+            board_endpoint=manifest['board_endpoint'],max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
+    from blackoutburst_agents.continuation_pool_service import ContinuationPoolService
+    stop=threading.Event()
+    previous={number:signal.signal(number,lambda *_:stop.set()) for number in (signal.SIGTERM,signal.SIGINT)}
+    try:
+        service=ContinuationPoolService(root,configuration_path=path,owner_id=manifest['board_owner'],
+            board_endpoint=manifest['board_endpoint'],executable=release/'tools/codex',
+            cli_version='codex-cli '+manifest['codex_version'],interpreter=manifest['python']['path'],
+            unshare='/usr/bin/unshare',gh_executable=release/'tools/gh',
+            max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
+        return service.run_once(should_stop=stop.is_set)
+    finally:
+        for number,handler in previous.items():signal.signal(number,handler)
+
+
 def current_cgroup():
     """Only this live PID's procfs data: pseudo-files legitimately have size 0."""
     pid=os.getpid();descriptors=[]
@@ -170,11 +208,21 @@ def ensure_development_anchor(account):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release',required=True);parser.add_argument('--owner',required=True)
-    parser.add_argument('action',choices=('batch-plan','workflow-plan','run-batch','run-workflow','init-development-anchor'))
-    parser.add_argument('--batch');parser.add_argument('--workflow')
+    parser.add_argument('action',choices=('batch-plan','workflow-plan','run-batch','run-workflow','init-development-anchor',
+        'continuation-plan','run-continuation-once'))
+    parser.add_argument('--batch');parser.add_argument('--workflow');parser.add_argument('--continuation')
     args=parser.parse_args(argv)
     try:
+        continuation=args.action in ('continuation-plan','run-continuation-once')
+        if continuation:
+            if args.continuation is None:p.fail('pool_continuation_configuration_required')
+            if args.batch is not None or args.workflow is not None:p.fail('pool_continuation_mixed_modes')
+        elif args.continuation is not None:p.fail('pool_continuation_mode_required')
         release=p.absolute(args.release);manifest=p.verify_release(release);account=owner_context(manifest,args.owner)
+        if continuation:
+            result=continuation_entry(args,manifest,release,account)
+            print(json.dumps(result,sort_keys=True,separators=(',',':')))
+            return 0 if result.get('status') in ('plan','pass_complete') else 3
         if args.action=='init-development-anchor':
             result=ensure_development_anchor(account);print(json.dumps(result,sort_keys=True,separators=(',',':')));return 0
         root=p.owner_root(args.owner)

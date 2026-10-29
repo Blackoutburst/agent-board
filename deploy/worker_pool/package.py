@@ -17,6 +17,16 @@ REQUIRED_SDK_MODULES=('__init__','finite_pool_batch','linux_pool_preparation','c
     'development_pool_delivery','review_pool','review_client','review_worker','linux_review_binding',
     'review_lifecycle','review_lifecycle_client','development_client','development_frame',
     'development_authorization')
+CONTINUATION_SDK_MODULES=('continuation','continuation_journal','continuation_runner',
+    'continuation_pool_configuration','continuation_pool_service','development_provider_continuation',
+    'development_cycle_driver','development_checkpoint_proof','private_development_checkpoint',
+    'development_aggregate_delivery','development_aggregate_review_source',
+    'continuation_aggregate_review','continuation_human_handoff')
+
+
+def continuation_supported(version):
+    if type(version) is not str or re.fullmatch(r'0\.[0-9]+\.[0-9]+',version) is None:fail()
+    return tuple(int(part) for part in version.split('.')) >= (0,45,0)
 
 
 def required_sdk_modules(version):
@@ -24,7 +34,8 @@ def required_sdk_modules(version):
     # upgrade. Only releases using protected pins require the added module.
     if type(version) is not str or re.fullmatch(r'0\.[0-9]+\.[0-9]+',version) is None:fail()
     return REQUIRED_SDK_MODULES + (('protected_public_pins',) if
-        tuple(int(part) for part in version.split('.')) >= (0,35,0) else ())
+        tuple(int(part) for part in version.split('.')) >= (0,35,0) else ()) + (
+        CONTINUATION_SDK_MODULES if continuation_supported(version) else ())
 
 
 class PackageError(Exception):
@@ -96,6 +107,10 @@ def owner_root(owner):
     if owner not in OWNERS:fail('pool_owner_unknown')
     return BASE/'owners'/owner
 def unit_name(owner):owner_root(owner);return 'blackoutburst-agent-pool-'+owner+'.service'
+def continuation_unit_name(owner,*,timer=False):
+    owner_root(owner)
+    return 'blackoutburst-agent-continuation-'+owner+('.timer' if timer else '.service')
+def continuation_timer_name(owner):return continuation_unit_name(owner,timer=True)
 def limits(value):
     bounds={'memory_bytes':(512*1024*1024,64*1024**3),'memory_high_bytes':(256*1024*1024,64*1024**3),
         'tasks':(128,2048),'cpu_percent':(25,800),'lifetime_seconds':(120,14500),'stop_seconds':(30,90)}
@@ -124,6 +139,8 @@ def validate_manifest(value):
     required={'pool_entry.py','pool_package.py','pool_manage.py','unit.service.in','source/connect.py',
         'tools/codex','tools/codex-resources/bwrap','tools/gh'}|{
         'source/blackoutburst_agents/'+name+'.py' for name in required_sdk_modules(value['adapter_version'])}
+    if continuation_supported(value['adapter_version']):
+        required.update(('continuation.service.in','continuation.timer.in'))
     if type(files) is not dict or not required<=set(files) or not 10<=len(files)<=400:fail('pool_inventory_invalid')
     total=0
     for name,pin in files.items():
@@ -172,3 +189,9 @@ def render_unit(template,value,release,normal_home):
     for key,item in mapping.items():template=template.replace(key,item)
     if '@' in template:fail('invalid_pool_unit_template')
     return template
+
+
+def render_continuation_unit(template,value,release,normal_home):
+    if not continuation_supported(value['adapter_version']):fail('pool_continuation_version_required')
+    template=template.replace('@CONTINUATION_SERVICE@',continuation_unit_name(value['unix_owner']))
+    return render_unit(template,value,release,normal_home)

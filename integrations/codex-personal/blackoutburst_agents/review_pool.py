@@ -46,11 +46,16 @@ class HistoricalPoolDeliveryTests:
     its independent, current claim and Runtime authority through its own client.
     """
     def __init__(self, source, operation_id, receipt):
-        if type(source) is not DevelopmentPoolResultDelivery:
+        from .development_aggregate_review_source import PublishedAggregateReviewSource
+        if type(source) not in (DevelopmentPoolResultDelivery,PublishedAggregateReviewSource):
             fail('review_pool_concrete_source_required')
         self.source,self.operation_id,self.receipt = source,operation_id,deepcopy(receipt)
 
     def __call__(self, *, operation_id, scope, snapshot, evidence):
+        from .development_aggregate_review_source import PublishedAggregateReviewSource
+        if type(self.source) is PublishedAggregateReviewSource:
+            return self.source.verify_tests(operation_id=operation_id,scope=scope,snapshot=snapshot,
+                evidence=evidence,expected_receipt=self.receipt)
         if operation_id != self.operation_id or self.source.status(operation_id) != self.receipt:
             fail('review_pool_source_changed')
         root=self.source.paths['operations']/operation_id
@@ -111,6 +116,8 @@ class DeliveryReviewPoolDriver:
 
     @staticmethod
     def _descriptor(source, operation_id):
+        from .development_aggregate_review_source import PublishedAggregateReviewSource
+        if type(source) is PublishedAggregateReviewSource:return source.descriptor(operation_id)
         if type(source) is not DevelopmentPoolResultDelivery:fail('review_pool_concrete_source_required')
         receipt=source.status(operation_id)
         if receipt.get('status')!='complete':fail('review_pool_source_incomplete')

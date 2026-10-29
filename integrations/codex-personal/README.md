@@ -21,10 +21,14 @@ revue distinct dont l’avis exact est ajouté au même ticket. Le ticket reste 
 revue ; ce parcours ne fusionne pas la PR. Le mode historique
 `run-batch`/schema v1 conserve ses quatre résultats privés.
 
-La nouvelle unité du pool est installée, arrêtée et désactivée au démarrage. Les
-tests de ce parcours utilisent les vrais composants Board/Git/Runtime et des
-modèles, un transport GitHub et des qualifications Linux simulés ; les modèles
-réels sur le serveur restent à valider. Les [rôles manager et rédacteur](TEAM-ROLES.md)
+Le 29 octobre 2026, le pilote fini 0.44.2 a terminé le parcours réel codeur,
+tests, PR et reviewer distinct, avec nettoyage confirmé ; sa PR #74 a ensuite
+été fusionnée. Cette observation concerne cette sélection et ces sources. Le
+nouveau [parcours de continuation](CONTINUATION.md) de 0.45.0 est complet en
+source et testé sur de vrais composants temporaires Board/Git/Runtime avec
+modèles, transport GitHub et qualifications Linux simulés. Le pilote #62 doit
+encore valider deux générations réelles sur le serveur ; aucun service 0.45
+n'est déclaré validé. Les [rôles manager et rédacteur](TEAM-ROLES.md)
 produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
 l’[état des travailleurs serveur](CLOUD-WORKERS.md).
@@ -39,8 +43,9 @@ entraîner plusieurs lectures de contrôle comptées par le broker. La régressi
 Linux exerce une lecture, un patch, un test échoué ou annulé, une relecture,
 un second test et l'inspection finale : dix opérations sont nécessaires. Le
 plafond de huit refuse ce parcours ; des configurations explicitement dotées
-d'un budget suffisant le terminent. La pause et la continuation automatiques
-après quota ou fin de cycle restent à raccorder au contrôleur.
+d'un budget suffisant le terminent. Le contrôleur opt-in de 0.45 raccorde la
+pause et une nouvelle génération après une frontière de cycle ou une panne
+fournisseur proprement prouvée ; il ne déduit aucun quota du texte d'erreur.
 
 La version 0.41 place le préflight local du lancement Linux avant la collecte
 de la première fenêtre d'autorisation. Ce même contrôle ne consomme ainsi plus
@@ -175,4 +180,56 @@ La version 0.44 conserve l’option explicite `reasoning_effort` lors de la reco
 
 La version 0.44.1 vérifie la disponibilité du protocole une seule fois par client MCP ouvert. Les cadres de ticket, droits et claims restent relus avant les effets ; une nouvelle instance revérifie le protocole et une connexion fermée refuse les appels. Les refus de livraison inattendus exposent désormais une phase, une catégorie et un code fermés dans le journal du service, sans texte d’exception ni contenu privé. Le pilote réel a créé la PR #70 ; son passage au reviewer reste à valider.
 
-La version 0.44.2 reprend une seule fois certaines lectures MCP dont la connexion a été interrompue localement. La seconde requête garde les mêmes paramètres, le même client et le délai initial, avec un nouvel identifiant JSON-RPC. Les écritures, refus d’autorisation, erreurs TLS et réponses invalides ne sont pas rejoués. Le diagnostic réseau expose uniquement une catégorie fermée. Le pilote 0.44.1 a créé la PR #72, puis s’est arrêté pendant le passage au board ; sa cause réseau exacte et le parcours complet avec reviewer restent à valider.
+La version 0.45.0 compose le parcours de continuation explicite en source.
+`ContinuationTask` conserve un journal de cycles bornés sans plafond global de
+cycles. `ContinuationRunner` relie explicitement ces cycles au `PersonalRunner`
+textuel : pause fournisseur vérifiée, nouvelle observation de disponibilité,
+nouveau travail et nouvelle session, puis reprise après contrôles frais. Son
+stockage opt-in de schéma 3 exige un répertoire neuf et conserve les anciens
+résultats ; il ne migre pas un ancien travail. Les appels `run_cycle` et `wake`
+restent explicites.
+
+Le hook opt-in du planificateur de développement fournit maintenant une
+`DevelopmentCheckpointProof` à une frontière prête, après les actions confirmées
+et avant le prochain prompt ou débit de budget. Le producteur Git privé capture
+les postimages déclarées et vérifie l’arbre complet, les droits frais et la chaîne
+des sources. Ses commits et reçus privés ne sont ni une livraison testée, ni une
+acceptation, ni une autorisation de lancer une nouvelle génération.
+
+`DevelopmentCycleDriver` raccorde maintenant la retraite, la préparation et
+l’admission de la génération suivante par des appels explicites. Il arrête l’ancien travail,
+confirme son nettoyage Runtime, revérifie sa claim et libère le ticket par une
+requête idempotente. La préparation Linux suivante utilise un autre travail, une
+autre session et des dossiers neufs, avec ses qualifications et contrôles frais.
+Son admission passe par `run_checkpoint` et le Worker normal avec une claim fraîche.
+Les anciens journaux, budgets, résultats et arrêts restent conservés ; un reçu
+privé ou un accusé incertain ne permet pas de reprendre l’ancienne génération.
+
+`DevelopmentProviderContinuation` relie aussi une panne fournisseur terminale
+vérifiée à un checkpoint privé des seules actions confirmées. La cause reste
+inconnue ; aucun quota ni délai de reset n’est déduit du texte d’erreur. L’ancien
+travail bloqué conserve ses résultats, compteurs et session. Le réveil vérifie
+la disponibilité puis prépare et admet un nouveau Worker, une nouvelle session
+et de nouveaux dossiers, après les contrôles frais.
+
+Le contrôleur d’agrégat peut maintenant reconstruire un arbre distinct depuis
+la base publique originale. Il exige la vraie preuve des tests finaux et
+l’égalité de l’arbre complet avant de sceller, publier et transmettre le ticket
+en revue. Les checkpoints privés restent des éléments de lignée de source.
+Le résultat sain en mode fournisseur, la source de revue indépendante et le
+service de réveil sont composés avec le vrai lifecycle de revue distincte.
+Une demande humaine confirmée n'est produite que sous les droits, la claim et
+les preuves de nettoyage encore valables. Sinon, un avis fermé peut être
+publié sous les droits de réponse existants ; un refus reste localement en
+attente. Un Stop propre reste silencieux. Une réponse à Needs you ne rouvre
+pas le Core, ne libère pas une opération incertaine et ne vaut pas permission.
+
+L'entrée `run-continuation-once` traite uniquement les tâches sélectionnées.
+Le nouvel installateur ajoute un service et un timer désactivés, sans lire les
+journaux privés ni démarrer de modèle. L'activation humaine distincte du timer
+avec `enable --now` permet les passages suivants et le démarrage au boot.
+Le [contrat de continuation](CONTINUATION.md) décrit cette procédure, les
+limites et les refus sans adoption. La publication du code ou son installation
+n'active pas ce service. La recette réelle 0.45 à deux générations reste à faire.
+
+La version 0.44.2 reprend une seule fois certaines lectures MCP dont la connexion a été interrompue localement. La seconde requête garde les mêmes paramètres, le même client et le délai initial, avec un nouvel identifiant JSON-RPC. Les écritures, refus d’autorisation, erreurs TLS et réponses invalides ne sont pas rejoués. Le diagnostic réseau expose uniquement une catégorie fermée. Le pilote 0.44.1 a créé la PR #72, puis s’est arrêté pendant le passage au board ; sa cause réseau exacte n'est pas affirmée. Le pilote fini 0.44.2 a ensuite terminé le parcours complet et nettoyé ses deux travaux codeur/reviewer ; la PR #74 a été fusionnée. Ce succès ne valide pas encore le service de continuation 0.45.

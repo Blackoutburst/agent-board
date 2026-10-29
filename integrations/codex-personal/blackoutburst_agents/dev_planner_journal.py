@@ -7,7 +7,7 @@ import os
 import threading
 import uuid
 
-from .dev_journal import PrivateDirectory, decode
+from .dev_journal import PrivateDirectory, decode, _linux_lock_supported, _linux_lock_observation
 from .dev_manifest import DevelopmentError, canonical, digest, identity
 
 MAX_PLANNER_STATE = 2 * 1024 * 1024
@@ -43,6 +43,7 @@ class PlannerJournal:
         self.operation_id = operation_id
         self.fingerprint = digest(canonical(configuration))
         self._mutex = threading.Lock()
+        self._checkpoint_owner,self._checkpoint_token = None,None
         self.fd = None
         try:
             self.fd = os.open('planner.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
@@ -72,13 +73,27 @@ class PlannerJournal:
                 if identity(current) != identity(os.fstat(self.fd)):
                     raise DevelopmentError('planner_lock_changed')
                 self.private.validate_file(self.fd)
+                self._checkpoint_owner,self._checkpoint_token = (os.getpid(),threading.current_thread()),object()
             except (OSError, TypeError):
                 raise DevelopmentError('planner_busy') from None
             yield
         finally:
+            self._checkpoint_owner,self._checkpoint_token = None,None
             if locked:
                 fcntl.flock(self.fd, fcntl.LOCK_UN)
             self._mutex.release()
+
+    def checkpoint_lock(self, token=None):
+        """Observe this acquisition; never reacquire a lost kernel lock."""
+        if (self._checkpoint_owner!=(os.getpid(),threading.current_thread())
+                or self._checkpoint_token is None or token is not None and token is not self._checkpoint_token):
+            raise DevelopmentError('development_checkpoint_lock_required')
+        self.private.verify();self.private.validate_file(self.fd)
+        before=os.fstat(self.fd)
+        if identity(os.stat('planner.lock',dir_fd=self.private.fd,follow_symlinks=False))!=identity(before):
+            raise DevelopmentError('planner_lock_changed')
+        if _linux_lock_supported():_linux_lock_observation(self.fd,pid=os.getpid(),expected=identity(before))
+        return self._checkpoint_token
 
     def prepare(self, *, now):
         if type(now) not in (float, int) or not math.isfinite(now):
