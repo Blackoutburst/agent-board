@@ -1,4 +1,9 @@
 """Offline preparation and explicit additive root installation, never activation."""
+import sys
+# Standalone operator commands must not import from an untrusted working folder.
+if __name__=='__main__' and not __package__ and not sys.flags.isolated:
+    sys.stdout.write('{"status":"refused"}\n')
+    raise SystemExit(2)
 import argparse
 import fcntl
 import hashlib
@@ -16,8 +21,36 @@ import sys
 if __package__:
     from . import package as p
 else:
-    sys.path.insert(0,str(Path(__file__).resolve().parent))
-    import pool_package as p
+    # Never add a writable bundle to sys.path or execute a cached .pyc file.
+    # The caller separately pins both public source files before root invocation.
+    from types import ModuleType
+    def _standalone_package():
+        path=Path(__file__).absolute().parent/'pool_package.py'
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            before=os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink!=1
+                    or before.st_mode&0o022 or not 0<before.st_size<=1024*1024):
+                raise ValueError('invalid bootstrap package')
+            raw=bytearray()
+            while True:
+                chunk=os.read(fd,min(65536,1024*1024+1-len(raw)))
+                if not chunk:break
+                raw.extend(chunk)
+                if len(raw)>1024*1024:raise ValueError('oversized bootstrap package')
+            fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+            signature=lambda value:tuple(getattr(value,key) for key in fields)
+            if (len(raw)!=before.st_size or signature(before)!=signature(os.fstat(fd))
+                    or signature(before)!=signature(os.stat(path,follow_symlinks=False))):
+                raise ValueError('bootstrap package changed')
+        finally:os.close(fd)
+        module=ModuleType('pool_package');module.__file__=str(path);module.__package__=''
+        exec(compile(bytes(raw),str(path),'exec'),module.__dict__)
+        return module
+    try:p=_standalone_package()
+    except Exception:
+        sys.stdout.write('{"status":"refused"}\n')
+        raise SystemExit(2) from None
 
 
 def command(argv):
@@ -331,7 +364,7 @@ def continuation_install_plan(release):
         'timer':p.continuation_timer_name(owner),'unit_limits':manifest['unit_limits'],
         'actions':['write_new_disabled_continuation_units','daemon_reload'],
         'human_steps':['provide_and_review_continuation_configuration','review_explicit_continuation_plan',
-            'explicit_start_continuation_timer'],'activated':False,'execution_qualified':False,
+            'explicit_enable_and_start_continuation_timer'],'activated':False,'execution_qualified':False,
         'preserve_private_state':True}
 
 
