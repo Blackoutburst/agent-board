@@ -343,7 +343,7 @@
     "integrations/codex-personal/tests/test_context_read_frame.py": "48e7030b89dfc097afb6c4448269e430e1da10510f5a1bc453ca91b3987cb1dc",
     "integrations/codex-personal/tests/test_continuation.py": "28e7b43d29937847e5b29419669fbac90e103e529da85f7e97098b05ed8e8598",
     "integrations/codex-personal/tests/test_continuation_aggregate_review.py": "d497c71b4e46a75611d7dd0526bd95eed1eed52736f53d4215387580487cb552",
-    "integrations/codex-personal/tests/test_continuation_human_handoff.py": "16795702f86b61ec91f31ae43818175b714b849f22d86a565a299ef7c516d2cb",
+    "integrations/codex-personal/tests/test_continuation_human_handoff.py": "6c6747dae1e4717ccd3e17e2718003098be2b546a9407b7522e7b1bc4abd034c",
     "integrations/codex-personal/tests/test_continuation_pool_configuration.py": "f953a8bf18648c8050b92d04fe3fced083eab37602494d0ff82ee3617ad28c51",
     "integrations/codex-personal/tests/test_continuation_pool_service.py": "d324a701ce5b755f9da3ce5516d39817d3f6f911b7aac783fd60a8028f34083a",
     "integrations/codex-personal/tests/test_continuation_pool_service_human.py": "a9b635b302cb02ceb90936f2a217eff08d4d3b0800b7f9e06d6935883abdc3f7",
