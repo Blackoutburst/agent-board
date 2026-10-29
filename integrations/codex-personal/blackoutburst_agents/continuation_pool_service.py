@@ -42,6 +42,8 @@ REASONS=frozenset({'','continuation_pool_configuration_changed','continuation_po
     'continuation_pool_tools_changed','continuation_pool_owner_busy','continuation_pool_pending',
     'continuation_pool_stopped','continuation_pool_cleanup_unknown','continuation_pool_target_failed',
     'continuation_pool_binding_changed','continuation_pool_api_unavailable','continuation_pool_clock_changed'})
+PERMISSION_FAILURES=frozenset({'development_grants_unavailable','development_ticket_unavailable',
+    'development_registration_mismatch'})
 
 
 def fail(code='continuation_pool_target_failed'):raise DevelopmentError(code)
@@ -92,6 +94,7 @@ class _Pass:
         self.service,self.should_stop=service,should_stop
         self.deadline=time.monotonic()+min(service.max_seconds,service.loaded['batch']['timeout_seconds'])
         self.cancel=threading.Event();self.mutex=threading.Lock();self.pools=[];self.workers=[];self.reviewers=[];self.stop_failed=False
+        self.human_reports={}
     def stopping(self):
         if self.cancel.is_set():return True
         try:
@@ -123,6 +126,11 @@ class _Pass:
     def remove_reviewer(self,reviewer):
         with self.mutex:
             if reviewer in self.reviewers:self.reviewers.remove(reviewer)
+    def remember_human(self,name,report):
+        with self.mutex:self.human_reports[name]=deepcopy(report)
+    def decorate(self,name,projection):
+        with self.mutex:report=deepcopy(self.human_reports.get(name))
+        return projection if report is None else {**projection,'human_visibility':report}
     def add_worker(self,directory,operation_id,scope):
         with _existing_work_database(directory) as db_pin:
             record=(str(directory),_directory_pin(directory),db_pin,operation_id,deepcopy(scope))
@@ -335,7 +343,8 @@ class ContinuationPoolService:
                     try:results[target['name']]=self._target(owned.path,target,jobs[target['name']],control)
                     except Exception as error:
                         code=vars(error).get('code') if type(error) is DevelopmentError else None
-                        results[target['name']]=self._projection(target,reason=code if code in REASONS else 'continuation_pool_target_failed')
+                        results[target['name']]=control.decorate(target['name'],self._projection(target,
+                            reason=code if code in REASONS else 'continuation_pool_target_failed'))
                     except BaseException:
                         # A thread's abrupt interruption is not a clean or
                         # never-started task. Do not let threading print it.
@@ -510,13 +519,16 @@ class ContinuationPoolService:
                     elif result['status']=='review_ready':
                         result=new.publish()
                     snapshot=new.task.snapshot();phase=result['status']
+                    if phase=='needs_you':
+                        new.human_handoff();snapshot=new.task.snapshot()
+                        if snapshot['state']['stop_requested']:phase='stopped'
                     require(phase in STATES,'continuation_pool_target_failed')
                     require(snapshot['state']['phase']==phase or phase in ('awaiting_independent_review','independent_review_published')
                         and snapshot['state']['phase']=='complete')
                     finished=time.time();require(type(finished) in (int,float) and finished>=now,'continuation_pool_clock_changed')
                     not_before=finished+self.loaded['configuration']['provider_backoff_seconds'] if phase=='paused_provider' else None
-                    projection=self._projection(target,phase=phase,operation_id=new.operation,
-                        state_sha256=snapshot['state_sha256'],not_before=not_before)
+                    projection=control.decorate(target['name'],self._projection(target,phase=phase,operation_id=new.operation,
+                        state_sha256=snapshot['state_sha256'],not_before=not_before))
                     completed={'schema':'continuation-pool-cursor-v1','phase':'idle',
                         'generation':generation_id,'result':projection,'not_before':not_before}
                     if phase=='independent_review_published':
@@ -525,7 +537,7 @@ class ContinuationPoolService:
                             review_receipt_sha256=digest(canonical(result['review_receipt'])),accepted=False,historical=False)
                     _write(private,'cursor.json',completed,replace=True)
                     return projection
-                except Exception:
+                except Exception as error:
                     # The own running generation becomes NeedsYou with actual
                     # counters. This creates no accepted checkpoint or cleanup.
                     # An already sealed code completion is not reopened merely
@@ -536,6 +548,8 @@ class ContinuationPoolService:
                             if current['state']['phase']=='running':
                                 new.provider.driver._mark_review(new.operation,new.task._context(current,purpose='execute'))
                         except Exception:pass  # Pending service intent remains fail-closed.
+                        if not (type(error) is DevelopmentError and vars(error).get('code')=='continuation_pool_stopped'):
+                            new.human_handoff(error)
                     raise
 
 
@@ -707,7 +721,7 @@ class _Generation:
         uuid_value(generation)
         self.service,self.target,self.job,self.control,self.resources=service,target,job,control,resources
         self.target_directory=directory;self.directory=directory/'generations'/generation
-        self.generation=generation;self.worker=None;self.task=None;self.provider=None
+        self.generation=generation;self.worker=None;self.task=None;self.provider=None;self._resources_retained=False
         self.arguments={key:deepcopy(job[key]) for key in ('project_id','ticket_id','paths','resource','actions',
             'verifier_path','verifier_sha256','test_name','test_timeout_seconds','test_max_output_bytes','instruction','model')}
         self.arguments.update(planner_budgets=PlannerBudgets(**job['planner_budgets']),
@@ -841,6 +855,32 @@ class _Generation:
         require(self.task.snapshot()==snapshot)
         require(candidate['classification'] in ('available','provider_unavailable'))
         return candidate['classification']=='available'
+    def human_handoff(self,error=None):
+        """Best-effort closed visibility; never changes the original failure."""
+        from .development_worker import DevelopmentBoardWorker
+        if (type(self.worker) is not DevelopmentBoardWorker or type(self.task) is not ContinuationTask
+                or self._resources_retained):return
+        try:
+            self.control.local_guard()
+            state=self.task.snapshot()['state']
+            if state['phase']!='needs_you' or state['stop_requested'] or self.worker._stopped(self.operation):return
+            from .continuation_human_handoff import ContinuationHumanHandoff
+            code=vars(error).get('code') if type(error) is DevelopmentError else None
+            question='permissions' if code in PERMISSION_FAILURES else 'effects'
+            self.control.local_guard()
+            report=ContinuationHumanHandoff(self.worker,self.task,self.operation).publish(question_code=question)
+            require(type(report) is dict)
+            common={'schema','operation_id','status','human_question_confirmed','launchable'}
+            extra={'request_id'} if report.get('status')=='question_confirmed' else {'message_id'} if report.get('status')=='notice_confirmed' else set()
+            require(type(report) is dict and set(report)==common|extra
+                and report['schema']=='continuation-human-visibility-v1' and report['operation_id']==self.operation
+                and report['status'] in ('not_applicable','pending','notice_confirmed','question_confirmed')
+                and type(report['human_question_confirmed']) is bool
+                and report['human_question_confirmed']==(report['status']=='question_confirmed')
+                and report['launchable'] is False)
+            for field in extra:opaque(report[field],'continuation_pool_binding_changed',200)
+            if report['status']!='not_applicable':self.control.remember_human(self.target['name'],report)
+        except Exception:pass  # The original SDK error/Stop remains authoritative.
     def publish(self):
         # Exact final aggregation API is additive and intentionally mandatory.
         # An old SDK cannot silently publish only the last cycle's delta.
@@ -898,6 +938,7 @@ class _Generation:
         finally:
             if reviewer.pending or not review_confirmed:
                 self.control.stop_failed=True
+                self._resources_retained=True
                 self.control.service._retained_resources.append((reviewer,self.resources.pop_all()))
                 self.control.stop()
             else:self.control.remove_reviewer(reviewer)
