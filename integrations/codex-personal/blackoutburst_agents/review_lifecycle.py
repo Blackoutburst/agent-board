@@ -36,8 +36,10 @@ def fail(code='review_lifecycle_unconfirmed'):
 
 class DeliveryReviewLifecycle:
     def __init__(self,directory,*,pool,driver,source,executable,cli_version,interpreter='/usr/bin/python3.10'):
+        from .development_aggregate_review_source import PublishedAggregateReviewSource
         if (type(pool) is not WorkerPool or type(driver) is not DeliveryReviewPoolDriver
-                or type(source) is not DevelopmentPoolResultDelivery):fail('review_lifecycle_concrete_handles_required')
+                or type(source) not in (DevelopmentPoolResultDelivery,PublishedAggregateReviewSource)):
+            fail('review_lifecycle_concrete_handles_required')
         self.pool,self.driver,self.source=pool,driver,source
         self.directory=Path(directory).absolute()
         forbidden=(pool.journal.private.path,Path(driver.directory),source.directory,source.workspaces.repository,

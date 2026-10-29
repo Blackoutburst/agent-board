@@ -406,6 +406,8 @@ class GitHubDraftPublisher:
         return head
 
     def _authorize_effect(self, operation_id, workspace_private, delivery_private, private, value):
+        from .development_aggregate_review_source import PublishedAggregateReadView
+        if type(self) is PublishedAggregateReadView: fail('git_publication_readonly_view')
         # All GitHub/remote GETs precede this fresh Board observation. Nothing
         # remotely read follows it before push/POST. Repeat local proof/pins
         # after those Board reads without spending execution/test budgets.
@@ -420,6 +422,8 @@ class GitHubDraftPublisher:
         self._mutation_authority = operation_id,copied(value['request']),value['phase']
 
     def publish(self, *, operation_id, delivery_sha, title, body):
+        from .development_aggregate_review_source import PublishedAggregateReadView
+        if type(self) is PublishedAggregateReadView: fail('git_publication_readonly_view')
         _operation(operation_id); sha(delivery_sha)
         if (type(title) is not str or not 1 <= len(title.encode()) <= 200 or not title.strip()
                 or any(ord(c)<32 or ord(c)==127 for c in title)
