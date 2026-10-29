@@ -114,17 +114,25 @@ class AggregateDevelopmentDeliveryProof:
 
 class AggregateDevelopmentDeliveryController:
     """One final generation, one original-base capture, no model or daemon."""
-    def __init__(self, directory, *, task, final_proof, checkpoints, parent_checkpoint_id, original_workspaces):
+    def __init__(self, directory, *, task, final_proof, checkpoints, parent_checkpoint_id, original_workspaces,
+                 final_intent_mode='normal'):
         require(type(task) is ContinuationTask and type(final_proof) is DevelopmentDeliveryProof
             and type(checkpoints) is PrivateDevelopmentCheckpointController
             and type(original_workspaces) is LocalGitWorkspaceController,
             'development_aggregate_concrete_handles_required')
         self.task, self.final_proof, self.checkpoints = task, final_proof, checkpoints
         self.operation_id = _operation(final_proof.operation_id)
-        self.parent_checkpoint_id = _operation(parent_checkpoint_id)
+        require(type(final_intent_mode) is str and final_intent_mode in ('normal', 'provider_healthy_v1'),
+            'development_aggregate_final_mode_refused')
+        self.final_intent_mode = final_intent_mode
+        self.parent_checkpoint_id = None if parent_checkpoint_id is None else _operation(parent_checkpoint_id)
         self.original_workspaces = original_workspaces
         self.final_authority = DevelopmentGitPublicationAuthority(final_proof.worker, self.operation_id)
         self.original_base = checkpoints.configuration['original_public_base']
+        for original_root in (original_workspaces.state_root, original_workspaces.workspace_root):
+            for final_root in (final_proof.workspaces.state_root, final_proof.workspaces.workspace_root):
+                left, right = _ancestry(original_root), _ancestry(final_root)
+                require(left[-1] not in right and right[-1] not in left, 'development_aggregate_roots_overlap')
         self.directory = Path(directory)
         with PrivateDirectory(self.directory, create=True):
             pass
@@ -155,7 +163,7 @@ class AggregateDevelopmentDeliveryController:
         self._logical()
 
     def _controller_binding(self):
-        return {'schema': 'development-aggregate-controller-binding-v1', 'operation_id': self.operation_id,
+        return {'schema': 'development-aggregate-controller-binding-v2', 'operation_id': self.operation_id,
             'root': {'path': str(self.directory), 'pin': self.pin},
             'original_git': {'grant': self.original_workspaces.grant, 'pins': self.original_workspaces.pins,
                 'state': _directory_pin(self.original_workspaces.state_root),
@@ -168,6 +176,7 @@ class AggregateDevelopmentDeliveryController:
             'checkpoints': {'root': str(self.checkpoints.root), 'pin': self.checkpoints.pin,
                 'configuration_sha256': self.checkpoints.configuration_sha256},
             'parent_checkpoint_id': self.parent_checkpoint_id,
+            'final_intent_mode': self.final_intent_mode,
             'final_configuration_sha256': digest(canonical(self.final_proof.configuration))}
 
     def _bind_controller(self):
@@ -213,9 +222,14 @@ class AggregateDevelopmentDeliveryController:
         with PrivateDirectory(proof.worker.journal.directory) as private:
             intent = decode(private.read('development-checkpoint-intent-'+self.operation_id+'.json', 128*1024))
         cycle = state['current_cycle']
-        require(type(intent) is dict and set(intent) == {'schema', 'operation_id', 'request', 'controller_sha256',
-            'controller_root', 'controller_pin', 'parent_checkpoint_id', 'checkpoint_id'}
-            and intent['schema'] == 'development-worker-checkpoint-intent-v1'
+        fields = {'schema', 'operation_id', 'request', 'controller_sha256', 'controller_root',
+            'controller_pin', 'parent_checkpoint_id', 'checkpoint_id'}
+        provider_mode = self.final_intent_mode == 'provider_healthy_v1'
+        require(self.final_intent_mode in ('normal', 'provider_healthy_v1')
+            and type(intent) is dict and set(intent) == (fields|{'provider_mode'} if provider_mode else fields)
+            and intent['schema'] == ('development-worker-provider-checkpoint-intent-v1' if provider_mode
+                else 'development-worker-checkpoint-intent-v1')
+            and (not provider_mode or intent['provider_mode'] == 'terminal-failure-v1')
             and type(intent['request']) is dict and set(intent['request']) == {'task_id', 'generation_id', 'cycle_id', 'attempt_id',
                 'original_public_base', 'source_release_sha256', 'parent_checkpoint_sha256', 'after_actions'}
             and intent['checkpoint_id'] == checkpoint_id_for(self.operation_id)
@@ -247,16 +261,26 @@ class AggregateDevelopmentDeliveryController:
             return digest(raw)
 
     def _lineage(self):
-        cp = self.checkpoints.verify(self.parent_checkpoint_id)
+        cp = None if self.parent_checkpoint_id is None else self.checkpoints.verify(self.parent_checkpoint_id)
         config = self.checkpoints.configuration
-        require(cp['configuration_sha256'] == self.checkpoints.configuration_sha256
-            and cp['original_public_base'] == self.original_base
-            and cp['commit_sha'] == self.final_proof.workspaces.grant['base_commit']
-            and cp['checkout'] == self.final_proof.workspaces.grant['repository']
-            and self.final_proof.workspaces.grant['repository_id'] == config['repository_id'])
+        require(self.final_proof.workspaces.grant['repository_id'] == config['repository_id'])
+        state = self.task.snapshot()['state']
+        if cp is None:
+            require(self.final_proof.workspaces.grant['base_commit'] == self.original_base
+                and state['cycle_seq'] == 1
+                and (state['phase'] == 'complete' or state['checkpoint'] is None),
+                'development_aggregate_parent_required')
+        else:
+            require(cp['configuration_sha256'] == self.checkpoints.configuration_sha256
+                and cp['original_public_base'] == self.original_base
+                and cp['commit_sha'] == self.final_proof.workspaces.grant['base_commit']
+                and cp['checkout'] == self.final_proof.workspaces.grant['repository']
+                and (state['phase'] == 'complete' or state['checkpoint'] is not None
+                    and state['checkpoint']['diff_sha256'] == cp['checkpoint_sha256']),
+                'development_aggregate_parent_changed')
         with PrivateDirectory(self.final_proof.worker.journal.directory) as private:
             intent = decode(private.read('development-checkpoint-intent-'+self.operation_id+'.json', 128*1024))
-        require(intent['request']['parent_checkpoint_sha256'] == cp['checkpoint_sha256'])
+        require(intent['request']['parent_checkpoint_sha256'] == (None if cp is None else cp['checkpoint_sha256']))
         op = self.final_proof._operation()
         manifest, _, planner, _, documents = self.final_proof._documents(op)
         require(sorted(manifest['files']) == config['global_paths'] and manifest['resource'] == config['resource'])
@@ -329,7 +353,7 @@ class AggregateDevelopmentDeliveryController:
         require(type(request) is dict and set(request) == {'operation_id', 'parent_checkpoint_sha256',
             'original_public_base', 'final_configuration_sha256', 'original_grant', 'message', 'task_configuration_sha256'}
             and request['operation_id'] == self.operation_id
-            and request['parent_checkpoint_sha256'] == self._lineage()['checkpoint_sha256']
+            and request['parent_checkpoint_sha256'] == (None if self.parent_checkpoint_id is None else self._lineage()['checkpoint_sha256'])
             and request['original_public_base'] == self.original_base
             and request['final_configuration_sha256'] == digest(canonical(self.final_proof.configuration))
             and request['original_grant'] == self.original_workspaces.grant
@@ -374,7 +398,7 @@ class AggregateDevelopmentDeliveryController:
         files, _ = _inventory(manifest['root'])
         changes = self._changes(final.workspaces, manifest['root'], files)
         require(all(row['path'] in manifest['files'] for row in changes))
-        request = {'operation_id': self.operation_id, 'parent_checkpoint_sha256': parent['checkpoint_sha256'],
+        request = {'operation_id': self.operation_id, 'parent_checkpoint_sha256': None if parent is None else parent['checkpoint_sha256'],
             'original_public_base': self.original_base, 'final_configuration_sha256': digest(canonical(final.configuration)),
             'original_grant': deepcopy(self.original_workspaces.grant), 'message': message,
             'task_configuration_sha256': digest(canonical(self.task.configuration))}
