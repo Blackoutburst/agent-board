@@ -189,7 +189,15 @@ les postimages déclarées et vérifie l’arbre complet, les droits frais et la
 des sources. Ses commits et reçus privés ne sont ni une livraison testée, ni une
 acceptation, ni une autorisation de lancer une nouvelle génération.
 
-La retraite normale de l’ancienne génération, l’admission de la suivante, la
-publication agrégée depuis la base publique originale et le daemon de réveil du
-service serveur restent à raccorder. Ces composants de continuation ne sont pas
-encore déployés sur le serveur.
+`DevelopmentCycleDriver` raccorde maintenant la retraite et la préparation de la
+génération suivante par des appels explicites. Il arrête l’ancien travail,
+confirme son nettoyage Runtime, revérifie sa claim et libère le ticket par une
+requête idempotente. La préparation Linux suivante utilise un autre travail, une
+autre session et des dossiers neufs, avec ses qualifications et contrôles frais.
+Les anciens journaux, budgets, résultats et arrêts restent conservés ; un reçu
+privé ou un accusé incertain ne permet pas de reprendre l’ancienne génération.
+
+La pause fournisseur du parcours de développement, la publication agrégée depuis
+la base publique originale et le daemon de réveil du service serveur restent à
+raccorder. Ces composants de continuation ne sont pas encore déployés sur le
+serveur.

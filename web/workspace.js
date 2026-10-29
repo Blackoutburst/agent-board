@@ -319,7 +319,7 @@ const Workspace = (() => {
   async function projectEditor(p = null) {
     const key = idempotencyKey();
     const form = el("form", { class: "work-form" }, field("Project name", "name", { value: p?.name || "", required: true }), field("Description", "description", { value: p?.description || "", placeholder: "What is this project trying to achieve?" }), field("Goal, context & decisions", "context", { type: "textarea", rows: 6, value: p?.context || "" }),
-      field("Repository URL", "repository_url", { type: "url", value: p?.repository_url || "", placeholder: "https://github.com/owner/repository" }), field("Environment", "environment", { type: "textarea", value: p?.environment || "" }),
+      field("Repository", "repository_url", { value: p?.repository_url || "", placeholder: "https://github.com/owner/repository, git@host:owner/repository or /absolute/path" }), field("Environment", "environment", { type: "textarea", value: p?.environment || "" }),
       p ? el("div", {}, check("Allow ready work in the agent queue", "automation_enabled", p.automation_enabled), check("Archive this project", "archived", p.archived)) : el("fieldset", {}, el("legend", {}, "People"), state.owners.map(o => check(o.display_name, "participants", true, o.id || o.owner_id))), formButtons(p ? "Save project" : "Create project"));
     bindForm(form, async data => {
       const payload = Object.fromEntries(["name", "description", "context", "repository_url", "environment"].map(key => [key, String(data.get(key)).trim()]));

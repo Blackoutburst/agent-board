@@ -100,6 +100,13 @@ def run(args):
     Path(env["BOARD_DATA_DIR"]).mkdir(parents=True, exist_ok=True)
     print(f"Agent Board on {env['BOARD_BASE_URL']} (data: {env['BOARD_DATA_DIR']})", flush=True)
     command = [str(python), "-m", "uvicorn", "app:app", "--host", host, "--port", str(port)]
+    if not WINDOWS:
+        # Become the server process, so stopping the login item stops the board.
+        os.chdir(REPO)
+        if log:
+            os.dup2(log.fileno(), 1)
+            os.dup2(log.fileno(), 2)
+        os.execve(command[0], command, env)
     raise SystemExit(subprocess.call(command, cwd=REPO, env=env, stdout=log, stderr=log))
 
 

@@ -2,6 +2,10 @@
 import sqlite3
 import time
 
+import pytest
+
+from board import BoardError
+
 from test_coordination import new, reject, space  # noqa: F401  (fixture)
 
 
@@ -111,3 +115,37 @@ def test_repeated_agent_blocks_escalate_once_and_stop_automatic_retries(space):
     again = board.update_ticket(first, task['id'], claimed['version'], status='blocked', blocked_reason='Once more',
                                 release_claim=True)
     assert again['recheck_at'] is not None  # a human decision restarts the count
+
+
+def grant_review(board, human, profile_id):
+    settings = board.get_settings(human)['policy']
+    board.set_policy(human, True, True, True, True, [*settings['actions'], 'ticket.review'], settings['resources'])
+    profile = board.get_agent_profile(human, profile_id)
+    policy = {key: profile['policy'][key] for key in ('allow_read', 'allow_messages', 'allow_requests',
+                                                       'actions', 'resources', 'autonomy')}
+    policy['actions'] = [*policy['actions'], 'ticket.review']
+    board.update_agent_profile(human, profile_id, profile['version'], policy=policy)
+
+
+def test_assigned_ticket_in_review_needs_an_owner_granted_reviewer(space):
+    board, human, _, project, first, _, _ = space
+    other = reviewer(space)
+    with sqlite3.connect(board.db_path) as db:
+        author = db.execute("SELECT agent_id FROM sessions WHERE id=?", (first['session_id'],)).fetchone()[0]
+        reviewer_id = db.execute("SELECT agent_id FROM sessions WHERE id=?", (other['session_id'],)).fetchone()[0]
+    task = new(space, 'Assigned work')
+    task = board.update_ticket(human, task['id'], task['version'], assignee_agent_id=author)
+    delivered = deliver(board, first, task)
+    with pytest.raises(BoardError):
+        board.claim_ticket(other, delivered['id'], delivered['version'])  # no review grant yet
+    grant_review(board, human, reviewer_id)
+    board.register_agent(other, 'reviewer-2', 'Reviewer', ['python'], 'claude-code', True, 'reviewer')
+    other = board.actor_session(other, 'reviewer-2')
+    delivered = board.get_ticket(human, delivered['id'])['ticket']
+    claimed = board.claim_ticket(other, delivered['id'], delivered['version'])
+    assert claimed['status'] == 'review'
+    returned = board.update_ticket(other, delivered['id'], claimed['version'], status='todo',
+                                   progress='Please add a test', release_claim=True)
+    assert returned['status'] == 'todo' and returned['assignee_agent_id'] == author
+    with pytest.raises(BoardError):
+        board.claim_ticket(other, returned['id'], returned['version'])  # back in todo: assignee only
