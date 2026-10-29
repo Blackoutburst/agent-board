@@ -1,7 +1,9 @@
 """Actual failed cycle/Board question; transport/native/model seams synthetic."""
 from copy import deepcopy
+from contextlib import contextmanager
 import http.client
 import json
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +20,7 @@ from test_continuation_pool_service_integration import actual_service
 from test_development_cycle_linux_preparation import linux_lock_observation
 
 
-@pytest.mark.parametrize('mode', ['question', 'lost_ack', 'cleanup_unknown', 'request_revoked', 'all_revoked', 'stopped', 'provider_pause', 'fence_drift'])
+@pytest.mark.parametrize('mode', ['question', 'lost_ack', 'cleanup_unknown', 'request_revoked', 'all_revoked', 'stopped', 'provider_pause', 'fence_drift', 'source_drift', 'late_stop'])
 def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(actual_service, monkeypatch, mode):
     f, root, task_id, ticket, construct, calls, sequence = actual_service
     # Completed tool-free model output, rejected before any accepted action.
@@ -83,6 +85,24 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
                     return value
                 monkeypatch.setattr(PrivateDirectory, 'create', drift)
             visibility = ContinuationHumanHandoff(worker, generation.task, generation.operation)
+            if mode == 'source_drift':
+                op = worker.journal.get(generation.operation)
+                with PrivateDirectory(op['configuration']['pins']['broker']['path']) as broker:
+                    manifest = decode(broker.read('manifest.json', 128*1024))
+                (Path(manifest['root'])/next(iter(manifest['files']))).write_text('UNRECORDED_SOURCE\n')
+            if mode == 'late_stop':
+                effects = visibility._effects;stopped = []
+                @contextmanager
+                def late(op):
+                    with effects(op) as (manifest, sha, fresh):
+                        def changed():
+                            fresh()
+                            if not stopped:
+                                current = generation.task.snapshot()['state']
+                                generation.task.stop(expected_revision=current['revision'], request_id='stop-during-last-source-check')
+                                stopped.append(True)
+                        yield manifest, sha, changed
+                visibility._effects = late
             if mode == 'stopped':
                 current = generation.task.snapshot()['state']
                 generation.task.stop(expected_revision=current['revision'], request_id='human-stop-before-visibility')
@@ -120,8 +140,8 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
         assert not questions and not report['human_question_confirmed']
         assert names.count('request_human_input') == 0
         assert actual['status'] == 'in_progress' and actual['claimant'] is not None
-        assert report['status'] == ('pending' if mode in ('all_revoked', 'fence_drift') else 'notice_confirmed'), report
-        assert names.count('post_message') == (0 if mode == 'fence_drift' else 1)
+        assert report['status'] == ('pending' if mode in ('all_revoked', 'fence_drift', 'late_stop') else 'notice_confirmed'), report
+        assert names.count('post_message') == (0 if mode in ('fence_drift', 'late_stop') else 1)
     assert f.board.get_runtime(f.human)['active_count'] == 0
     assert 'PRIVATE_' not in json.dumps(report)
 

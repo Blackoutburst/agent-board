@@ -21,7 +21,7 @@ from .development_worker import DevelopmentBoardWorker
 from .development_aggregate_delivery import _existing_record
 from .dev_fence import DevelopmentFence, canonical_anchor
 from .dev_journal import PrivateDirectory, DevelopmentJournal, decode
-from .dev_manifest import DevelopmentError, canonical, digest, validate_manifest
+from .dev_manifest import DevelopmentError, RepositoryFiles, canonical, digest, validate_manifest
 from .dev_planner import _directory_pin
 from .dev_planner_journal import PlannerJournal
 from .dev_runtime import DevelopmentRuntimeGuard, development_work_id
@@ -126,9 +126,33 @@ class ContinuationHumanHandoff:
                     and planner['configuration']['work_id']==development_work_id(op['id'])
                     and planner['configuration']['manifest_hash']==op['configuration']['manifest_hash'])
                 step=planner['step']
-                require(step is None or step['action'] is None or
-                    step['tool_finished'] is True and type(step['receipt']) is dict and type(step['source_snapshot']) is dict)
+                # A current accepted action that was not advanced to history
+                # remains uncertain here, even if cleanup alone is positive.
+                require(step is None or step['action'] is None)
                 require(all(row['phase']=='broker_admitted' for row in broker.get('linux_execution',{}).values()))
+                postimages={path:row['sha256'] for path,row in manifest['files'].items()};operations=set()
+                for row in planner['history']:
+                    if row['kind'] not in ('patch','test'):continue
+                    key=digest(('dev-action-'+row['step_id']).encode('ascii'))
+                    entry=broker['operations'].get(key)
+                    require(entry is not None and entry['kind']==row['kind'] and key not in operations)
+                    operations.add(key)
+                    if row['kind']=='patch':
+                        detail=entry['detail'];receipt=entry['receipt']
+                        require(postimages[detail['path']]==detail['before_sha256']
+                            and receipt['result'] in ('applied','unchanged','verified_after_restart')
+                            and digest(canonical(receipt))==row['receipt_sha256'])
+                        postimages[detail['path']]=detail['after_sha256']
+                require(operations==set(broker['operations']))
+                def source():
+                    files=RepositoryFiles(manifest['root'],manifest['root_identity']);signatures={}
+                    try:
+                        for path,expected in postimages.items():
+                            data,pin=files.read(path,manifest['budgets']['max_file_bytes'])
+                            require(digest(data)==expected);signatures[path]=pin
+                    finally:files.close()
+                    return signatures
+                signatures=source()
                 expected={row['step_id']:row['kind'] for row in planner['history']}
                 if step is not None and step['action'] is not None:expected[step['id']]=step['action']['kind']
                 tools={}
@@ -153,9 +177,10 @@ class ContinuationHumanHandoff:
                         private.verify();fence.verify()
                         require(before==tuple(canonical(decode(private.read(name,MAX_DOCUMENT)))
                             for name in ('manifest.json','state.json','planner.json')))
+                        require(source()==signatures)
                         current=DevelopmentFence._validate(object.__new__(DevelopmentFence),decode(fence.read('fence.json',MAX_DOCUMENT)))
                         require(current['records'].get(key)==expected)
-                    yield manifest,digest(b''.join(before)),fresh
+                    yield manifest,digest(b''.join(before)+canonical(signatures)),fresh
                     fresh()
             finally:os.close(fd)
 
@@ -283,6 +308,9 @@ class ContinuationHumanHandoff:
                     require(self._runtime(op)==runtime_sha and self._claim(op,manifest)==version and self.task.snapshot()==snapshot)
                     try:
                         self._budget();fresh()
+                        require(self.task.snapshot()==snapshot and self.worker.journal.get(op['id'])==op
+                            and not self.worker._stopped(op['id']))
+                        self._budget()
                         value=self.worker.client.request_continuation_human_input(**self._request(intent),expected_version=version)
                         receipt=self._question_receipt(op,intent,value)
                         self._receipt(private,'continuation-human-receipt-'+op['id']+'.json',receipt)
