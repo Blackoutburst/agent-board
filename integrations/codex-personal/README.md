@@ -214,3 +214,5 @@ en revue. Les checkpoints privés restent des éléments de lignée de source.
 L’entrée du résultat sain en mode fournisseur, le passage à la revue indépendante
 par son Lifecycle et le service de réveil restent à finaliser. Ces composants de
 continuation ne sont pas encore déployés sur le serveur.
+
+La version 0.44.2 reprend une seule fois certaines lectures MCP dont la connexion a été interrompue localement. La seconde requête garde les mêmes paramètres, le même client et le délai initial, avec un nouvel identifiant JSON-RPC. Les écritures, refus d’autorisation, erreurs TLS et réponses invalides ne sont pas rejoués. Le diagnostic réseau expose uniquement une catégorie fermée. Le pilote 0.44.1 a créé la PR #72, puis s’est arrêté pendant le passage au board ; sa cause réseau exacte et le parcours complet avec reviewer restent à valider.
