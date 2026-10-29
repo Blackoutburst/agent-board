@@ -27,7 +27,12 @@ Elle copie ces outils dans la nouvelle release ; aucune authentification n’est
 copiée. Le schéma `worker-pool-addon-v1` a son propre inventaire fermé.
 
 Depuis le checkout public revérifié, avec `public-spec.json` contenant ces seuls
-arguments explicites, les commandes sont :
+arguments explicites, les commandes sont ci-dessous. La fabrication offline
+non root utilise le module du checkout public revu ; elle conserve son contexte
+package. Tous les scripts standalone du bundle publié, dont le manager et
+l'entrée d'exécution, s'invoquent avec `-I -B`. Revérifier les octets exacts du
+manager **et de son fichier adjacent `pool_package.py`** avant tout sudo ; un
+répertoire candidat ou un cache Python ne constitue pas une source approuvée :
 
 ```sh
 python3 -B -m deploy.worker_pool.manage prepare --source "$CHECKOUT" --output "$BUNDLE" --spec public-spec.json
@@ -148,3 +153,49 @@ reste inactive. Un échec avant le reçu complet restaure uniquement une unité
 reconnue. Une perte de confirmation du reçu laisse la nouvelle unité arrêtée
 dans un état à examiner, sans adoption ni rejeu. Un lot interrompu exige une
 nouvelle sélection explicite avec un nouvel UUID.
+
+
+## Continuation explicite : installation inactive puis activation humaine
+
+Le SDK 0.45 ajoute le service séparé
+`blackoutburst-agent-continuation-bb-agent-thescreamer.service` et son timer.
+Ils utilisent les mêmes plafonds d'unité et le même HOME normal, avec
+`Restart=no`. Le timer programme un passage après 30 secondes au boot puis
+30 secondes après l'inactivité du service ; `Persistent=false` ne rattrape pas
+les déclenchements manqués. La sélection reste celle des seuls documents
+opérateur, sans drainage de la file générale.
+
+Le bundle public exact doit déjà être installé et reçu. L'unité finie doit être
+arrêtée, désactivée, sans drop-in et conforme à sa release. Après vérification
+du manager et de `pool_package.py`, l'installation additionnelle est :
+
+```sh
+sudo /usr/bin/python3.10 -I -B "$RELEASE/pool_manage.py" install-continuation "$RELEASE" --expected-bundle-id "$APPROVED_BUNDLE_ID" --apply
+```
+
+Cette commande ajoute uniquement les nouveaux fichiers service/timer désactivés
+et recharge systemd. Elle ne crée ni configuration, ni journal logique, ni
+connexion ; une intention ou une installation partielle reste à examiner.
+Ne pas précréer `continuations` sous la racine privée, même vide : le service
+initialise lui-même cet état neuf après les contrôles.
+
+Fournir explicitement le [fichier continuation](../../integrations/codex-personal/CONTINUATION.md)
+privé 0600 et les nouveaux batch/workflow auxquels il renvoie. Les anciens
+fichiers et lots restent historiques. Lire ensuite le plan sans modèle :
+
+```sh
+sudo -u bb-agent-thescreamer -H /usr/bin/python3.10 -I -B "$RELEASE/pool_entry.py" --release "$RELEASE" --owner bb-agent-thescreamer continuation-plan --continuation "$POOLROOT/config/continuation.json"
+```
+
+Ce plan ne qualifie et n'active rien. Après revue humaine des sources, profils,
+tickets, chemins, tests, budgets et du plan, une étape distincte peut activer
+le timer maintenant **et au démarrage du serveur** :
+
+```sh
+sudo /usr/bin/systemctl enable --now blackoutburst-agent-continuation-bb-agent-thescreamer.timer
+```
+
+Une réponse perdue après cet effet n'autorise aucun nouvel essai automatique.
+Stop, les baux et Runtime restent contrôlés ; un nettoyage inconnu ou un refus
+de permission ne se transforme pas en checkpoint rejouable. Le parcours source
+est composé, mais le pilote réel 0.45 à deux générations reste à valider.

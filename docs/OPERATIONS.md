@@ -1,10 +1,46 @@
 # Operations and release procedure
 
-Current source is Board 2.17.4/schema 17 with adapter 0.44.2. Standalone Development
+Current source is Board 2.17.4/schema 17 with adapter 0.45.0. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
+
+## Explicit development continuation: adapter 0.45.0
+
+The complete opt-in source joins private source checkpoints, normal retirement
+and release of the old generation, fresh preparation/admission, final tested
+publication from the original public base, and the real lifecycle of a distinct
+reviewer. A completed local development cycle does not mark the ticket done or
+approve or merge the PR. Historical uncertain work, requests, sessions, counters
+and Stop records are retained; no old pool is reopened.
+
+`continuation-plan` reads the three explicit operator documents without a
+registration, qualification or model. After the public bundle is installed and
+the finite unit is stopped and disabled, `install-continuation` adds a separate
+service and timer, both disabled. Use `-I -B` for all standalone manager/entry
+commands, reverify the exact public manager and `pool_package.py` beforehand,
+and follow the [installation procedure](../deploy/worker_pool/README.md).
+Never precreate the private `continuations` directory or adopt a partial install.
+Only a separate human `systemctl enable --now` of the exact timer activates
+passes and boot startup. It selects the configured tasks, not an unbounded queue.
+
+A clean provider pause waits for backoff and fresh structural availability; it
+neither invents a quota reset nor clears a human owner pause. An unsafe effect,
+missing permission or unknown cleanup remains `needs_you`. With the actual
+Worker/Core still open, the visibility helper can ask the owner a fixed question
+only under a current own claim, fresh source/fence checks and positively closed
+Runtime. Otherwise it may post the existing closed failure notice with reply
+permission, or retain a local pending result. Stop stays silent. A human reply
+does not reopen the Core, rewrite evidence or authorize execution.
+
+As of 29 October 2026, the finite **0.44.2** pilot completed both coding and
+independent review with confirmed cleanup; its PR #74 was merged at
+`7012bbc02e096d5fa9cfde9546518a68c341a061`. This does not validate 0.45 on the
+server. The new selected pilot #62 still has to exercise two real generations,
+one final publication and a distinct review. Component tests use actual
+temporary Board/Git/Runtime with synthetic provider, GitHub and native
+qualification seams. No server 0.45 activation or acceptance is claimed here.
 
 Adapter 0.39 can post a closed failure notice to the selected ticket discussion
 from the code worker's existing initialized session. The message requires its

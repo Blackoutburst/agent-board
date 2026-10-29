@@ -1,10 +1,14 @@
-# Reprise du travail par cycles — source en préparation
+# Reprise du travail par cycles — adaptateur 0.45.0
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
 génération garde les plafonds approuvés du planificateur, du broker, des tests
-et de l'unité serveur. Cette source est une préparation distincte de la
-version 0.44.2 ; elle n'est pas encore validée par un parcours réel ni déployée.
+et de l'unité serveur. La source 0.45 compose les frontières de cycle,
+l'indisponibilité fournisseur, l'agrégat final, la revue distincte et le service
+borné. Elle n'a pas encore été validée par un parcours réel sur le serveur.
+Le pilote fini 0.44.2 a réussi avec nettoyage confirmé le 29 octobre 2026 et sa
+PR #74 a été fusionnée ; le nouveau pilote #62 doit encore valider deux
+générations réelles avec une seule publication finale et un reviewer distinct.
 
 Un cycle propre conserve le checkout, les actions confirmées, leurs reçus et
 la filiation Git dans un checkpoint privé. Le contrôleur termine et vérifie
@@ -22,8 +26,15 @@ ne vaut pas une autorisation.
 Une action dont le résultat est incertain, un nettoyage non confirmé ou une
 permission manquante exige une intervention. Une réponse humaine ne réécrit
 pas les reçus, n'efface pas Stop et ne rend pas une opération incertaine
-rejouable. L'état local `needs_you` doit rester distinct d'une demande humaine
-confirmée par le board.
+rejouable. L'état local `needs_you` reste distinct d'une demande humaine
+confirmée par le board. Le raccord de visibilité peut poser une question fixe
+sur les permissions ou les effets seulement avec le vrai Worker/Core vivant,
+une claim propre encore courante, la source et le fence frais, et Runtime
+positivement nettoyé. Il conserve une intention puis retrouve l'ACK sans
+renvoyer une question incertaine. À défaut, l'avis fermé existant exige encore
+le droit de réponse ; un refus reste localement en attente. Une pause propre,
+le backoff et Stop ne déclenchent pas cette alarme. Les réponses dans Needs you
+ne rouvrent pas le Core et ne constituent aucun grant d'exécution.
 
 ## Sélection explicite
 
@@ -65,9 +76,15 @@ puis recharge systemd. Elle ne lit aucun journal ou fichier de connexion
 privé, ne crée pas d'état logique et ne lance aucun travail. Une installation
 partielle est conservée pour examen, sans adoption automatique.
 
+Les scripts standalone du manager et de l'entrée s'exécutent toujours avec
+`-I -B`, après vérification des fichiers publics exacts, y compris
+`pool_package.py`. Ne pas précréer le répertoire privé `continuations` : un état
+partiel ou déjà présent ne devient pas une nouvelle préparation autorisée.
+
 Le service de continuation garde les limites et le durcissement de l'unité
-finie, avec `Restart=no`. Le timer est une activation humaine séparée et ne
-rattrape pas les déclenchements manqués. Chaque passage est borné ; les
+finie, avec `Restart=no`. Après configuration et lecture du plan, l'activation
+humaine distincte `systemctl enable --now` du timer démarre les passages et les
+active au boot. Le timer ne rattrape pas les déclenchements manqués. Chaque passage est borné ; les
 checkpoints durables relient les passages successifs. Stop, les baux, les
 capacités Runtime partagées et les droits du board continuent de s'appliquer.
 
