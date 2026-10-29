@@ -315,6 +315,84 @@ def install_addon(directory,*,apply=False,expected_bundle_id=None):
     finally:os.close(lock)
 
 
+def continuation_install_plan(release):
+    """Read public installed files only; planning cannot create/start anything."""
+    release=p.absolute(str(release) if isinstance(release,Path) else release);manifest=p.verify_release(release)
+    if not p.continuation_supported(manifest['adapter_version']):p.fail('pool_continuation_version_required')
+    bundle_id=p.manifest_id(manifest)
+    if release!=p.RELEASES/bundle_id:p.fail('unexpected_pool_release')
+    owner=manifest['unix_owner']
+    return {'status':'continuation_install_plan','bundle_id':bundle_id,'release':str(release),
+        'private_root':str(p.owner_root(owner)),'service':p.continuation_unit_name(owner),
+        'timer':p.continuation_timer_name(owner),'unit_limits':manifest['unit_limits'],
+        'actions':['write_new_disabled_continuation_units','daemon_reload'],
+        'human_steps':['provide_and_review_continuation_configuration','review_explicit_continuation_plan',
+            'explicit_start_continuation_timer'],'activated':False,'execution_qualified':False,
+        'preserve_private_state':True}
+
+
+def install_continuation(release,*,apply=False,expected_bundle_id=None):
+    """Add separate inert units to a receipted stopped installation.
+
+    Never opens owner state, replaces finite units, enables a timer, or adopts
+    an incomplete install. Intent/completion ACK uncertainty needs review.
+    """
+    plan=continuation_install_plan(release)
+    if not apply:return plan
+    if expected_bundle_id is None or p.sha(expected_bundle_id)!=plan['bundle_id']:p.fail('pool_approved_bundle_required')
+    release=p.absolute(str(release) if isinstance(release,Path) else release);manifest=p.verify_release(release);account=_root_context(manifest)
+    if p.manifest_id(manifest)!=plan['bundle_id']:p.fail('pool_bundle_selection_changed')
+    for parent in (p.BASE,p.BASE/'installations',p.RELEASES,p.UNIT_DIR):p.protected(parent)
+    lock=os.open(p.BASE/'install.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:p.fail('pool_install_busy')
+        _root_lock(lock)
+        if p.verify_release(release)!=manifest:p.fail('pool_bundle_selection_changed')
+        old_unit=p.unit_name(manifest['unix_owner']);old_path=p.UNIT_DIR/old_unit
+        root=p.owner_root(manifest['unix_owner']);p.no_symlinks(root);info=root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=account.pw_uid
+                or info.st_gid!=account.pw_gid or stat_mode(info)!=0o700):p.fail('pool_private_root_changed')
+        p.protected(root.parent)
+        receipt=p.BASE/'installations'/(plan['bundle_id']+'.complete.json')
+        p.protected(receipt);record=p.decode(p.read_regular(receipt,128*1024))
+        expected={'schema':p.SCHEMA,'status':'installed_disabled','bundle_id':plan['bundle_id'],
+            'unix_owner':manifest['unix_owner'],'uid':account.pw_uid,'gid':account.pw_gid,
+            'normal_home':account.pw_dir,'private_root':str(root),'release':str(release),
+            'service':old_unit,'unit_limits':manifest['unit_limits'],'activated':False,'execution_qualified':False}
+        if type(record) is not dict or any(record.get(key)!=value for key,value in expected.items()):
+            p.fail('pool_previous_receipt_invalid')
+        old_raw=p.render_unit(p.read_regular(release/'unit.service.in').decode(),manifest,release,account.pw_dir).encode()
+        if record.get('unit_sha256')!=hashlib.sha256(old_raw).hexdigest():p.fail('pool_previous_receipt_invalid')
+        p.protected(old_path)
+        if p.read_regular(old_path)!=old_raw:p.fail('pool_unit_changed')
+        before=_stopped_for_upgrade(old_unit)
+        rendered={name:p.render_continuation_unit(p.read_regular(release/template).decode(),manifest,release,account.pw_dir).encode()
+            for name,template in ((plan['service'],'continuation.service.in'),(plan['timer'],'continuation.timer.in'))}
+        for name in rendered:_absent_unit(name)
+        intent=p.BASE/'installations'/(plan['bundle_id']+'.continuation.json')
+        complete=intent.with_suffix('.complete.json')
+        if any(x.exists() or x.is_symlink() for x in (intent,complete)):p.fail('pool_continuation_install_exists')
+        request={**plan,'schema':'worker-pool-continuation-install-v1','status':'installing',
+            'unix_owner':manifest['unix_owner'],'uid':account.pw_uid,'gid':account.pw_gid,
+            'normal_home':account.pw_dir,'finite_unit_sha256':hashlib.sha256(old_raw).hexdigest(),
+            'unit_hashes':{name:hashlib.sha256(raw).hexdigest() for name,raw in rendered.items()}}
+        _new_file(intent,p.encoded(request),0o600)
+        # Recheck immediately before new writes; incomplete intentions are never adopted.
+        if _stopped_for_upgrade(old_unit)!=before or p.read_regular(old_path)!=old_raw:p.fail('pool_unit_state_changed')
+        for name in rendered:_absent_unit(name)
+        for name,raw in rendered.items():_new_file(p.UNIT_DIR/name,raw,0o644)
+        command(['/usr/bin/systemctl','daemon-reload'])
+        for name,raw in rendered.items():
+            _inactive(name);p.protected(p.UNIT_DIR/name)
+            if p.read_regular(p.UNIT_DIR/name)!=raw:p.fail('pool_unit_changed')
+        if _stopped_for_upgrade(old_unit)!=before or p.read_regular(old_path)!=old_raw:p.fail('pool_unit_state_changed')
+        request['status']='continuation_installed_disabled'
+        _new_file(complete,p.encoded(request),0o600)
+        return {**plan,'status':'continuation_installed_disabled','receipt':str(complete)}
+    finally:os.close(lock)
+
+
 def rollback_addon(receipt,*,apply=False):
     receipt=p.no_symlinks(receipt);p.protected(receipt)
     value=p.decode(p.read_regular(receipt,128*1024))
@@ -336,15 +414,16 @@ def rollback_addon(receipt,*,apply=False):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__);commands=parser.add_subparsers(dest='action',required=True)
     build=commands.add_parser('prepare');build.add_argument('--source',required=True);build.add_argument('--output',required=True);build.add_argument('--spec',required=True)
-    for name in ('plan','install','rollback','upgrade'):
+    for name in ('plan','install','rollback','upgrade','install-continuation'):
         command_parser=commands.add_parser(name);command_parser.add_argument('path')
         if name!='plan':command_parser.add_argument('--apply',action='store_true')
-        if name in ('install','upgrade'):command_parser.add_argument('--expected-bundle-id')
+        if name in ('install','upgrade','install-continuation'):command_parser.add_argument('--expected-bundle-id')
         if name=='upgrade':command_parser.add_argument('--previous-bundle-id',required=True)
     args=parser.parse_args(argv)
     try:
         if args.action=='prepare':result=prepare_addon(args.source,args.output,**p.decode(p.read_regular(args.spec,128*1024)))
         elif args.action=='plan':result=plan_addon(args.path)
+        elif args.action=='install-continuation':result=install_continuation(args.path,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         elif args.action=='install':result=install_addon(args.path,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         elif args.action=='upgrade':result=upgrade_addon(args.path,previous_bundle_id=args.previous_bundle_id,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         else:result=rollback_addon(args.path,apply=args.apply)
