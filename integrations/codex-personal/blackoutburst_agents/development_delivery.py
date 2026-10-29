@@ -276,10 +276,16 @@ class DevelopmentPublishedDelivery:
     """Closed read-only verification of an already complete concrete publisher."""
     def __init__(self, proof, deliveries, publisher):
         from .git_publication import GitHubDraftPublisher
-        if (type(proof) is not DevelopmentDeliveryProof or type(deliveries) is not LocalGitDeliveryController
+        from .development_aggregate_delivery import AggregateDevelopmentDeliveryProof
+        if (type(proof) not in (DevelopmentDeliveryProof,AggregateDevelopmentDeliveryProof)
+                or type(deliveries) is not LocalGitDeliveryController
                 or type(publisher) is not GitHubDraftPublisher or deliveries.workspaces is not proof.workspaces
                 or deliveries.test_guard is not proof or publisher.deliveries is not deliveries):
             fail('development_delivery_publication_required')
+        if type(proof) is AggregateDevelopmentDeliveryProof:
+            from .git_publication import _development_authority_pair
+            if not _development_authority_pair(publisher.authority,proof):
+                fail('development_delivery_publication_required')
         self.proof,self.deliveries,self.publisher = proof,deliveries,publisher
 
     def verify(self, worker, operation_id, scope):

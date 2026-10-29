@@ -50,6 +50,20 @@ def copied(value):
     return decode(canonical(value))
 
 
+def _development_authority_pair(authority, proof):
+    """Closed concrete pairs; an aggregate never uses the generic no-authority path."""
+    from .development_git_authority import DevelopmentGitPublicationAuthority
+    from .development_delivery import DevelopmentDeliveryProof
+    from .development_aggregate_delivery import (AggregateDevelopmentDeliveryProof,
+        AggregateDevelopmentGitPublicationAuthority)
+    if type(authority) is DevelopmentGitPublicationAuthority and type(proof) is DevelopmentDeliveryProof:
+        return proof.worker is authority.worker and proof.operation_id == authority.operation_id
+    return (type(authority) is AggregateDevelopmentGitPublicationAuthority
+        and type(proof) is AggregateDevelopmentDeliveryProof and authority.controller is proof.controller
+        and proof.controller.proof is proof and proof.worker is authority.worker
+        and proof.operation_id == authority.operation_id)
+
+
 def json_output(raw):
     def pairs(items):
         result = {}
@@ -92,14 +106,14 @@ class GitHubDraftPublisher:
         self.root, self.git, self.gh = _path(publication_root), _path(git_executable), _path(gh_executable)
         self.python = _path(python_executable or Path(sys.executable).resolve())
         self.authority, self.authority_pin, self._mutation_authority = authority, None, None
+        from .development_aggregate_delivery import AggregateDevelopmentDeliveryProof
+        if type(deliveries.test_guard) is AggregateDevelopmentDeliveryProof and authority is None:
+            fail('git_publication_authority_required')
         if authority is not None:
             # Lazy: the generic standalone publisher need not import the Board
             # worker. No callable/subclass/model-provided grant is accepted.
-            from .development_git_authority import DevelopmentGitPublicationAuthority
-            from .development_delivery import DevelopmentDeliveryProof
             proof = deliveries.test_guard
-            if (type(authority) is not DevelopmentGitPublicationAuthority or type(proof) is not DevelopmentDeliveryProof
-                    or proof.worker is not authority.worker or proof.operation_id != authority.operation_id):
+            if not _development_authority_pair(authority,proof):
                 fail('git_publication_authority_required')
             self.authority_pin = authority.descriptor()
         self.guardian = _path(Path(__file__).absolute().with_name('git_publication_guardian.py'))
@@ -124,13 +138,11 @@ class GitHubDraftPublisher:
 
     def _roots(self):
         self.deliveries._roots()
+        from .development_aggregate_delivery import AggregateDevelopmentDeliveryProof
+        if type(self.deliveries.test_guard) is AggregateDevelopmentDeliveryProof and self.authority is None:
+            fail('git_publication_authority_changed')
         if self.authority is not None:
-            from .development_git_authority import DevelopmentGitPublicationAuthority
-            from .development_delivery import DevelopmentDeliveryProof
-            if (type(self.authority) is not DevelopmentGitPublicationAuthority
-                    or type(self.deliveries.test_guard) is not DevelopmentDeliveryProof
-                    or self.deliveries.test_guard.worker is not self.authority.worker
-                    or self.deliveries.test_guard.operation_id != self.authority.operation_id):
+            if not _development_authority_pair(self.authority,self.deliveries.test_guard):
                 fail('git_publication_authority_changed')
         if ((self.authority is None) != (self.authority_pin is None)
                 or self.authority is not None and self.authority.descriptor() != self.authority_pin):
