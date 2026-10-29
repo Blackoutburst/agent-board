@@ -189,11 +189,12 @@ les postimages déclarées et vérifie l’arbre complet, les droits frais et la
 des sources. Ses commits et reçus privés ne sont ni une livraison testée, ni une
 acceptation, ni une autorisation de lancer une nouvelle génération.
 
-`DevelopmentCycleDriver` raccorde maintenant la retraite et la préparation de la
-génération suivante par des appels explicites. Il arrête l’ancien travail,
+`DevelopmentCycleDriver` raccorde maintenant la retraite, la préparation et
+l’admission de la génération suivante par des appels explicites. Il arrête l’ancien travail,
 confirme son nettoyage Runtime, revérifie sa claim et libère le ticket par une
 requête idempotente. La préparation Linux suivante utilise un autre travail, une
 autre session et des dossiers neufs, avec ses qualifications et contrôles frais.
+Son admission passe par `run_checkpoint` et le Worker normal avec une claim fraîche.
 Les anciens journaux, budgets, résultats et arrêts restent conservés ; un reçu
 privé ou un accusé incertain ne permet pas de reprendre l’ancienne génération.
 
