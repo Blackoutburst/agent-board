@@ -40,7 +40,7 @@ class _DevelopmentCycleExecution:
     def __reduce_ex__(self,_):raise TypeError('Live development cycles cannot be serialized')
     def __copy__(self):raise TypeError('Live development cycles cannot be copied')
     def __deepcopy__(self,_):raise TypeError('Live development cycles cannot be copied')
-    def verify(self,worker,operation_id):
+    def verify(self,worker,operation_id,*,fresh=True):
         require(worker is self.worker and operation_id==self.operation_id and self.pid==os.getpid()
             and self.thread is threading.current_thread(),'development_cycle_execution_changed')
         snapshot=self.task.snapshot();state=snapshot['state'];cycle=state['current_cycle']
@@ -48,21 +48,24 @@ class _DevelopmentCycleExecution:
             and state['stop_requested'] is False,'development_cycle_logical_stop')
         require(self.task._time(cycle)<cycle['started_at']+self.task.configuration['cycle_limits']['max_wall_seconds'],
             'development_cycle_wall_limit')
-        # The Runtime callback attests terminal/never-started boundaries. An
-        # active model is checked by the unchanged concrete Runtime guards.
-        for index in (0,1,2,3,5):
-            require(self.task.checks.callbacks[index](self.context) is None,
-                'development_cycle_check_result_invalid')
+        if fresh:
+            # Whole logical observations belong to model/action boundaries.
+            # Native control polling already collects its concrete permission
+            # frame; a local bracket must not repeat these remote callbacks.
+            # Runtime's terminal check remains a clean-boundary requirement.
+            for index in (0,1,2,3,5):
+                require(self.task.checks.callbacks[index](self.context) is None,
+                    'development_cycle_check_result_invalid')
         require(self.task.snapshot()==snapshot,'development_cycle_logical_stop')
         require(self.task._time(cycle)<cycle['started_at']+self.task.configuration['cycle_limits']['max_wall_seconds'],
             'development_cycle_wall_limit')
 
 
-def check_worker_cycle(worker,operation_id):
+def check_worker_cycle(worker,operation_id,*,fresh=False):
     value=getattr(worker,'_checkpoint_execution',None)
     if value is not None:
         require(type(value) is _DevelopmentCycleExecution,'development_cycle_execution_changed')
-        value.verify(worker,operation_id)
+        value.verify(worker,operation_id,fresh=fresh)
 
 
 class _DevelopmentCyclePreparation:
