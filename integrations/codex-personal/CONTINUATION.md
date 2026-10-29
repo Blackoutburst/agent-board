@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.45.0
+# Reprise du travail par cycles — adaptateur 0.45.1
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
@@ -7,8 +7,14 @@ et de l'unité serveur. La source 0.45 compose les frontières de cycle,
 l'indisponibilité fournisseur, l'agrégat final, la revue distincte et le service
 borné. Elle n'a pas encore été validée par un parcours réel sur le serveur.
 Le pilote fini 0.44.2 a réussi avec nettoyage confirmé le 29 octobre 2026 et sa
-PR #74 a été fusionnée ; le nouveau pilote #62 doit encore valider deux
-générations réelles avec une seule publication finale et un reviewer distinct.
+PR #74 a été fusionnée. Le premier pilote de continuation #62 a confirmé sa
+lecture et son patch, puis s’est arrêté au contrôle du résultat du test Linux
+avec `linux_result_boundary_invalid`. Le timer a été arrêté par le propriétaire ;
+la génération et sa source restent conservées et un nettoyage Runtime demeure
+à prouver. La recette à deux générations réelles, publication et revue reste
+à valider. La version 0.45.1 sépare les contrôles locaux de Stop/identité/délai
+des observations complètes aux frontières d’action ; les autorisations natives,
+les captures SOURCE et la fenêtre de 1,5 seconde restent obligatoires.
 
 Un cycle propre conserve le checkout, les actions confirmées, leurs reçus et
 la filiation Git dans un checkpoint privé. Le contrôleur termine et vérifie
