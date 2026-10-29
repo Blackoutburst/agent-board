@@ -18,7 +18,7 @@ from .development_aggregate_review_source import PublishedAggregateReviewSource
 from .development_pool_selection import file_document
 from .dev_journal import PrivateDirectory,decode
 from .dev_manifest import DevelopmentError,canonical,digest,check_content
-from .dev_planner import _directory_pin
+from .dev_planner import _directory_pin,_reasoning_configuration
 from .git_workspace import MAX_CHECKOUT_FILE_BYTES
 from .git_publication import REPOSITORY,HOST
 from .linux_planner_policy import _executable_pin
@@ -71,6 +71,10 @@ class ContinuationAggregateReviewer:
             and source.grant['owner_id']==self.owner_id
             and receipt['original_public_base']==coder['repository']['base_commit']
             and source.workspaces.grant['repository_id']==coder['repository']['repository_id']
+            and source.frame['floor']['resource']==coder['resource']
+            and source.aggregate.final_proof.configuration['model']==coder['model']
+            and _reasoning_configuration(source.aggregate.final_proof.configuration.get('reasoning_effort'))==
+                _reasoning_configuration(coder.get('reasoning_effort'))
             and self.reviewer['agent_id']!=scope['agent_id']
             and self.reviewer['connection_file']!=coder['connection_file'],
             'continuation_review_selection_changed')
