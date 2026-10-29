@@ -14,7 +14,8 @@ from blackoutburst_agents.development_client import DevelopmentBoardClient
 from blackoutburst_agents.board_reader import BoardReadError
 from blackoutburst_agents.dev_manifest import DevelopmentError
 from blackoutburst_agents.dev_journal import PrivateDirectory, decode
-from blackoutburst_agents.dev_manifest import canonical
+from blackoutburst_agents.dev_manifest import canonical, digest
+from blackoutburst_agents.continuation_journal import ContinuationJournal
 from test_board_reader import Response, Opener, URL
 from test_continuation_pool_service_integration import actual_service
 from test_development_cycle_linux_preparation import linux_lock_observation
@@ -26,23 +27,31 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
     # Completed tool-free model output, rejected before any accepted action.
     sequence.write_text(json.dumps([None if mode == 'provider_pause' else dict(schema=1, kind='PRIVATE_MODEL_TEXT')]))
     observed, packets, publications = [], [], []
+    provider_results, snapshots, replay_reports, callback_errors = [], [], [], []
+    def callback_check(value, message):
+        # The SDK intentionally catches controller errors. Keep test failures
+        # outside that recovery channel so they cannot turn into a passing case.
+        if not value:
+            error = AssertionError(message)
+            callback_errors.append(error)
+            raise error
     original = service._Generation.open_task
     def open_task(generation, *args, **kwargs):
         original(generation, *args, **kwargs)
         run = generation.provider.run_checkpoint
         def closed(*args, **kwargs):
             result = run(*args, **kwargs)
-            assert result['status'] == ('paused_provider' if mode == 'provider_pause' else 'needs_you'), result
+            provider_results.append(deepcopy(result))
             worker = generation.worker
             class Wire:
                 def open(self, request, timeout):
                     packet = json.loads(request.data)
                     packets.append(packet)
-                    assert packet['method'] == 'tools/call', 'No initialize/register during visibility'
+                    callback_check(packet['method'] == 'tools/call', 'No initialize/register during visibility')
                     name = packet['params']['name']
                     values = deepcopy(packet['params']['arguments']);values.pop('view', None)
                     sid = values.pop('session_id')
-                    assert name not in ('register_agent', 'claim_ticket', 'renew_ticket', 'release_ticket', 'update_ticket')
+                    callback_check(name not in ('register_agent', 'claim_ticket', 'renew_ticket', 'release_ticket', 'update_ticket'), 'Visibility cannot mutate work or register')
                     actor = f.board.actor_session(f.raw, sid)
                     try:
                         value = getattr(f.board, name)(actor, **values)
@@ -57,8 +66,8 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
             client = DevelopmentBoardClient({'mcp_url': 'https://board.test/mcp', 'token': 'SYNTHETIC',
                 'client': 'codex', 'identity_key': 'fixture', 'name': 'Fixture'}, worker.client.session_id, 3)
             client._registered = client._initialized = True;client._opener = Wire()
-            client.register = lambda: pytest.fail('Visibility never registers')
-            client.adopt_registration = lambda: pytest.fail('Visibility never adopts registration')
+            client.register = lambda: callback_check(False, 'Visibility never registers')
+            client.adopt_registration = lambda: callback_check(False, 'Visibility never adopts registration')
             worker.client = client
             monkeypatch.setattr(worker.control, 'close', lambda: None, raising=False)
             if mode in ('cleanup_unknown', 'runtime_worker_stop', 'runtime_core_stop'):
@@ -83,7 +92,7 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
                         with PrivateDirectory(worker.test_anchor) as anchor:
                             document = decode(anchor.read('fence.json', 2*1024*1024))
                             keys = [key for key, row in document['records'].items() if row['operation_id'] == generation.operation]
-                            assert len(keys) == 1
+                            callback_check(len(keys) == 1, 'Exactly one actual operation fence must be changed')
                             document['records'][keys[0]]['operation_id'] = '00000000-0000-0000-0000-000000000000'
                             anchor.replace('fence.json', canonical(document))
                     return value
@@ -113,19 +122,49 @@ def test_failed_actual_cycle_only_confirms_real_human_handoff_or_closed_notice(a
             before = generation.task.snapshot()
             report = visibility.publish(question_code='permissions')
             observed.append(report)
-            if mode == 'runtime_core_stop':assert generation.task.snapshot()['state']['stop_requested'] is True
-            else:assert generation.task.snapshot() == before
+            snapshots.append((before, generation.task.snapshot()))
             if mode in ('question', 'lost_ack'):
-                assert visibility.publish(question_code='permissions') == report
+                replay_reports.append(visibility.publish(question_code='permissions'))
             client.close()
             return result
-        generation.provider.run_checkpoint = closed
+        def checked_callback(*args, **kwargs):
+            try:return closed(*args, **kwargs)
+            except BaseException as error:
+                callback_errors.append(error)
+                raise
+        generation.provider.run_checkpoint = checked_callback
     monkeypatch.setattr(service._Generation, 'open_task', open_task)
     result = construct().run_once()
-    assert result['status'] == ('pass_complete' if mode == 'provider_pause' else 'needs_you')
+    assert callback_errors == [], [repr(error) for error in callback_errors]
+    assert len(provider_results) == 1
+    assert provider_results[0]['status'] == ('paused_provider' if mode == 'provider_pause' else 'needs_you')
+    stopped_modes = ('runtime_core_stop', 'stopped', 'late_stop')
+    assert result['status'] == ('pass_complete' if mode in stopped_modes + ('provider_pause',) else 'needs_you'), result
+    assert result['pass_complete_is_project_completion'] is False
+    assert len(snapshots) == 1
+    before, after = snapshots[0]
+    if mode in ('runtime_core_stop', 'late_stop'):
+        assert before['state']['stop_requested'] is False and after['state']['stop_requested'] is True
+    else:assert after == before
+    if mode in stopped_modes:
+        assert result['tasks'][0]['phase'] == 'stopped' and 'human_visibility' not in result['tasks'][0]
+        key = digest(canonical({'owner_id': 'owner', 'logical_task_id': task_id}))
+        with ContinuationJournal.open(root/'continuations'/key/'logical') as journal:
+            persisted = journal.snapshot()
+            assert persisted['state']['phase'] == 'stopped' and persisted['state']['stop_requested'] is True
+        calls_before = calls.read_bytes();packets_before = deepcopy(packets)
+        again = construct().run_once()
+        assert again['status'] == 'pass_complete' and again['tasks'][0]['phase'] == 'stopped'
+        assert again['pass_complete_is_project_completion'] is False
+        assert calls.read_bytes() == calls_before and packets == packets_before
+        with ContinuationJournal.open(root/'continuations'/key/'logical') as journal:
+            assert journal.snapshot() == persisted
+    assert callback_errors == [], [repr(error) for error in callback_errors]
+    assert len(provider_results) == 1
     assert len(calls.read_text().splitlines()) == 1
     assert len(observed) == 1, result
     report = observed[0]
+    assert replay_reports == ([report] if mode in ('question', 'lost_ack') else [])
     names = [p['params']['name'] for p in packets]
     questions = f.board.list_human_requests(f.human)
     actual = f.board.get_ticket(f.human, ticket['id'])['ticket']
