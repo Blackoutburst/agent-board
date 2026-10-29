@@ -31,6 +31,9 @@ _INTERRUPTED_READ_TOOLS = frozenset({"get_ticket", "get_thread", "get_message",
 _INTERRUPTED_EXCHANGES = (http.client.RemoteDisconnected, ConnectionResetError,
     BrokenPipeError, ConnectionAbortedError, http.client.IncompleteRead)
 _INTERRUPTION_ISSUER = object()
+_CONNECTION_FAILURE_ISSUER = object()
+CONNECTION_FAILURE_KINDS = frozenset({'remote_disconnected', 'reset', 'broken_pipe', 'aborted',
+    'incomplete_read', 'ssl_error', 'other_os', 'http_state', 'value_error'})
 
 
 class BoardReadError(Exception):
@@ -43,8 +46,42 @@ class BoardReadError(Exception):
 
 class _InterruptedExchange(Exception):
     """Local transport fact only; never exposed as a public Board error."""
-    def __init__(self, issuer):
-        self.issuer = issuer
+    def __init__(self, issuer, kind):
+        self.issuer, self.kind = issuer, kind
+
+
+def _transport_failure_kind(error):
+    known = {http.client.RemoteDisconnected: 'remote_disconnected', ConnectionResetError: 'reset',
+        BrokenPipeError: 'broken_pipe', ConnectionAbortedError: 'aborted', http.client.IncompleteRead: 'incomplete_read'}
+    if type(error) in known:return known[type(error)]
+    if isinstance(error, ssl.SSLError):return 'ssl_error'
+    if isinstance(error, http.client.HTTPException):return 'http_state'
+    if isinstance(error, ValueError):return 'value_error'
+    return 'other_os'
+
+
+def _connection_failure(kind):
+    error = BoardReadError('connection_failed')
+    if type(kind) is str and kind in CONNECTION_FAILURE_KINDS:
+        error._connection_failure_kind = (_CONNECTION_FAILURE_ISSUER, kind)
+    return error
+
+
+def connection_failure_diagnostic(error):
+    """Closed local telemetry, never retry authority or exception prose."""
+    if type(error) is not BoardReadError:return None
+    fields = vars(error)
+    if type(fields.get('code')) is not str or fields['code'] != 'connection_failed':return None
+    value = fields.get('_connection_failure_kind')
+    if (type(value) is not tuple or len(value) != 2 or value[0] is not _CONNECTION_FAILURE_ISSUER
+            or type(value[1]) is not str or value[1] not in CONNECTION_FAILURE_KINDS):return None
+    return value[1]
+
+
+def _interruption_kind(error):
+    if type(error) is _InterruptedExchange and error.issuer is _INTERRUPTION_ISSUER:
+        return error.kind
+    return None
 
 
 def _may_repeat_read(method, params_json):
@@ -269,7 +306,7 @@ class BoardReader:
                 # An arbitrary BoardReadError/remote response cannot request it.
                 if (type(error) is not _InterruptedExchange or error.issuer is not _INTERRUPTION_ISSUER
                         or not repeatable or attempt != 0):
-                    raise BoardReadError('connection_failed') from None
+                    raise _connection_failure(_interruption_kind(error)) from None
                 if self._closed:raise BoardReadError('connection_closed') from None
                 if time.monotonic() >= deadline:raise BoardReadError('timeout') from None
                 # Drop the failed HTTP connection, retaining the same verified
@@ -340,12 +377,13 @@ class BoardReader:
         except (TimeoutError,):
             raise BoardReadError("timeout") from None
         except urllib.error.URLError as error:
-            raise BoardReadError("timeout" if isinstance(error.reason, TimeoutError) else "connection_failed") from None
+            if isinstance(error.reason, TimeoutError):raise BoardReadError('timeout') from None
+            raise _connection_failure(_transport_failure_kind(error.reason)) from None
         except (OSError, ValueError, http.client.HTTPException) as error:
             self._discard_connection()
             if type(error) in _INTERRUPTED_EXCHANGES:
-                raise _InterruptedExchange(_INTERRUPTION_ISSUER) from None
-            raise BoardReadError("connection_failed") from None
+                raise _InterruptedExchange(_INTERRUPTION_ISSUER, _transport_failure_kind(error)) from None
+            raise _connection_failure(_transport_failure_kind(error)) from None
         try:
             result = _sse(raw) if content_type == "text/event-stream" else _json(raw, "invalid_response")
             if (not isinstance(result, dict) or result.get("jsonrpc") != "2.0"
