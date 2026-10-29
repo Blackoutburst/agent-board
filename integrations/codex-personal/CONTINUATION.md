@@ -10,8 +10,9 @@ Le pilote fini 0.44.2 a réussi avec nettoyage confirmé le 29 octobre 2026 et s
 PR #74 a été fusionnée. Le premier pilote de continuation #62 a confirmé sa
 lecture et son patch, puis s’est arrêté au contrôle du résultat du test Linux
 avec `linux_result_boundary_invalid`. Le timer a été arrêté par le propriétaire ;
-la génération et sa source restent conservées et un nettoyage Runtime demeure
-à prouver. La recette à deux générations réelles, publication et revue reste
+la génération et sa source restent conservées. La réconciliation normale a
+ensuite confirmé le nettoyage des six réservations Runtime ; le test reste
+non validé et le Core historique reste en `needs_you`. La recette à deux générations réelles, publication et revue reste
 à valider. La version 0.45.1 sépare les contrôles locaux de Stop/identité/délai
 des observations complètes aux frontières d’action ; les autorisations natives,
 les captures SOURCE et la fenêtre de 1,5 seconde restent obligatoires.

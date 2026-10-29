@@ -39,10 +39,12 @@ independent review with confirmed cleanup; its PR #74 was merged at
 `7012bbc02e096d5fa9cfde9546518a68c341a061`. This does not validate 0.45 on the
 server. The first 0.45.0 continuation pilot #62 completed three model turns and
 confirmed its read and patch, then stopped at the native test result boundary
-with `linux_result_boundary_invalid`. Its last Runtime cleanup is not yet
-confirmed; that generation and its source remain retained. The human stopped
-the timer and service. Two real generations, final publication and distinct
-review remain unvalidated. Component tests use actual temporary
+with `linux_result_boundary_invalid`. Its six Runtime receipts were then
+confirmed by the normal identity-only cleanup path. The historical Native
+receipt records `linux_authorization_expired` before SOURCE, without a source
+release intent. That does not validate the test; the generation, patch and
+Core `needs_you` state remain retained. The human stopped the timer and service.
+Two real generations, final publication and distinct review remain unvalidated. Component tests use actual temporary
 Board/Git/Runtime with synthetic provider, GitHub and native qualification seams.
 
 Adapter 0.45.1 separates cheap local logical Stop/identity/deadline checks from
