@@ -73,6 +73,9 @@ class LinuxPoolJobPreparer:
         self.connection = deepcopy(driver.selections.connection_pin)
 
     def _job(self, operation_id, project_id, ticket_id):
+        if getattr(self,'_continuation_initial_preparation',None) is not None:
+            from .continuation_pool_service import check_initial_preparation
+            check_initial_preparation(self,operation_id)
         if getattr(self,'_checkpoint_preparation',None) is not None:
             from .development_cycle_driver import check_preparer_cycle
             check_preparer_cycle(self,operation_id)
@@ -88,6 +91,9 @@ class LinuxPoolJobPreparer:
             return state['id'],job
 
     def _local(self, request):
+        if getattr(self,'_continuation_initial_preparation',None) is not None:
+            from .continuation_pool_service import check_initial_preparation
+            check_initial_preparation(self,request['job']['id'],fresh=True)
         if getattr(self,'_checkpoint_preparation',None) is not None:
             from .development_cycle_driver import check_preparer_cycle
             # Fresh callbacks stay outside the global Pool metadata mutex.

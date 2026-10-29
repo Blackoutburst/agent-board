@@ -370,3 +370,59 @@ def test_clean_paused_checkpoint_can_outlive_a_stopped_preparation_registry_with
     assert second['tasks'][0]['phase']=='paused_cycle',second
     assert len(calls.read_text().splitlines())==4 and (generation/'pool/pool-state.json').read_bytes()==registry
     assert f.board.get_runtime(f.human)['active_count']==0
+
+
+def test_initial_preparation_checks_stop_without_waiting_for_monitor(actual_service,monkeypatch):
+    from blackoutburst_agents.linux_planner_policy import LinuxPlannerPolicy
+    f,root,task_id,ticket,construct,calls,sequence=actual_service
+    service=construct();stopping,policy_entered=threading.Event(),threading.Event()
+    backend,policy=SupervisedLinuxNamedPythonBackend.qualify,LinuxPlannerPolicy.qualify
+    entered=[]
+    def backend_finished(value):
+        result=backend(value);stopping.set();return result
+    def policy_after_stop(value):
+        entered.append(stopping.is_set());policy_entered.set();return policy(value)
+    def entry_stop():
+        # Delay only the scheduler: preparation must inspect Stop itself.
+        if threading.current_thread() is service.thread and stopping.is_set():policy_entered.wait(.25)
+        return stopping.is_set()
+    monkeypatch.setattr(SupervisedLinuxNamedPythonBackend,'qualify',backend_finished)
+    monkeypatch.setattr(LinuxPlannerPolicy,'qualify',policy_after_stop)
+    result=service.run_once(should_stop=entry_stop)
+    assert result['status'] in ('needs_you','stopped')
+    assert not calls.exists() and not entered
+
+
+@pytest.mark.parametrize('unavailable_at',[2,3])
+def test_provider_wake_keeps_old_pause_and_exact_unadmitted_candidate(actual_service,monkeypatch,unavailable_at):
+    from blackoutburst_agents import provider_disposition
+    from blackoutburst_agents.dev_journal import PrivateDirectory,decode
+    from test_provider_disposition import usage
+    f,root,task_id,ticket,construct,calls,sequence=actual_service
+    sequence.write_text(json.dumps([None]))
+    first=construct().run_once();assert first['tasks'][0]['phase']=='paused_provider',first
+    key=digest(canonical({'owner_id':'owner','logical_task_id':task_id}));directory=root/'continuations'/key
+    def cursor():
+        with PrivateDirectory(directory) as private:return decode(private.read('cursor.json',512*1024))
+    def scheduled():
+        with PrivateDirectory(directory) as private:
+            prior=decode(private.read('cursor.json',512*1024))
+            private.replace('cursor.json',canonical({**prior,'not_before':1.}))
+    original=cursor();observations=[]
+    def observe(*args,**kwargs):
+        observations.append(len(observations)+1);return usage(len(observations)!=unavailable_at)
+    monkeypatch.setattr(provider_disposition,'read_usage',observe)
+    scheduled();second=construct().run_once()
+    assert second['tasks'][0]['phase']=='paused_provider',second
+    waiting=cursor()
+    assert waiting['generation']==original['generation'] and waiting['wake_generation']!=original['generation']
+    assert second['tasks'][0]['operation_id']==first['tasks'][0]['operation_id']
+    assert len(calls.read_text().splitlines())==1
+    sequence.write_text(json.dumps([
+        dict(schema=1,kind='patch',path='one.py',expected_sha256=digest(b'value = 1\n'),content='value = 2\n'),
+        dict(schema=1,kind='read',path='one.py')]))
+    scheduled();third=construct().run_once()
+    assert third['tasks'][0]['phase']=='paused_cycle',third
+    assert cursor()['generation']==waiting['wake_generation'] and 'wake_generation' not in cursor()
+    assert len(list((directory/'generations').iterdir()))==2
+    assert len(calls.read_text().splitlines())==3 and f.board.get_runtime(f.human)['active_count']==0

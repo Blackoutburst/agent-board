@@ -100,6 +100,13 @@ class _Pass:
         except Exception:value=True
         if value:self.stop()
         return value
+    def local_guard(self):
+        # A stop-only predicate. Never perform cross-pool Stop or RPC while
+        # the preparer may be inspecting its queue under the metadata mutex.
+        try:requested=bool(self.should_stop and self.should_stop())
+        except Exception:requested=True
+        if self.cancel.is_set() or time.monotonic()>=self.deadline or requested:
+            fail('continuation_pool_stopped')
     def guard(self):
         if self.stopping():fail('continuation_pool_stopped')
     def add_pool(self,pool):
@@ -140,6 +147,45 @@ class _Pass:
                         and op['configuration']['pins']['journal']==pin)
                     DevelopmentBoardWorker(journal,None,None,None,None).stop(operation)
             except Exception:self.stop_failed=True
+
+
+_PREPARATION_ISSUER=object()
+
+
+class _InitialPreparation:
+    """An ephemeral stop-only check; never source/claim/permission authority."""
+    def __init__(self,issuer,preparer,operation_id,control):
+        require(issuer is _PREPARATION_ISSUER and type(preparer) is LinuxPoolJobPreparer
+            and type(control) is _Pass,'continuation_pool_binding_changed')
+        self.issuer=issuer
+        self.preparer,self.operation_id,self.control=preparer,operation_id,control
+        self.pid,self.thread=os.getpid(),threading.current_thread();self.active=True
+    def __reduce_ex__(self,_):raise TypeError('Preparation controls cannot be serialized')
+    def __copy__(self):raise TypeError('Preparation controls cannot be copied')
+    def __deepcopy__(self,_):raise TypeError('Preparation controls cannot be copied')
+
+
+def check_initial_preparation(preparer,operation_id,*,fresh=False):
+    scope=getattr(preparer,'_continuation_initial_preparation',None)
+    require(type(scope) is _InitialPreparation and scope.issuer is _PREPARATION_ISSUER and scope.active is True and scope.preparer is preparer
+        and scope.operation_id==operation_id and scope.pid==os.getpid()
+        and scope.thread is threading.current_thread(),'continuation_pool_binding_changed')
+    scope.control.local_guard()
+    if fresh:scope.control.service._pins()
+    scope.control.local_guard()
+
+
+@contextmanager
+def _initial_preparing(control,preparer,operation_id):
+    require(getattr(preparer,'_continuation_initial_preparation',None) is None)
+    scope=_InitialPreparation(_PREPARATION_ISSUER,preparer,operation_id,control)
+    preparer._continuation_initial_preparation=scope
+    try:
+        check_initial_preparation(preparer,operation_id,fresh=True)
+        yield
+        check_initial_preparation(preparer,operation_id,fresh=True)
+    finally:
+        scope.active=False;del preparer._continuation_initial_preparation
 
 
 class ContinuationPoolService:
@@ -302,8 +348,15 @@ class ContinuationPoolService:
             else:
                 require(_read(private,'binding.json')==binding,'continuation_pool_binding_changed')
                 cursor=_read(private,'cursor.json')
-            require(type(cursor) is dict and set(cursor)=={'schema','phase','generation','result','not_before'}
+            require(type(cursor) is dict and set(cursor) in ({'schema','phase','generation','result','not_before'},
+                {'schema','phase','generation','result','not_before','wake_generation'})
                 and cursor['schema']=='continuation-pool-cursor-v1' and cursor['phase'] in ('idle','pending'))
+            waiting_generation=cursor.get('wake_generation')
+            if waiting_generation is not None:
+                uuid_value(waiting_generation)
+                require(cursor['phase']=='idle' and cursor['generation'] is not None
+                    and waiting_generation!=cursor['generation'] and type(cursor['result']) is dict
+                    and cursor['result'].get('phase')=='paused_provider','continuation_pool_binding_changed')
             if cursor['phase']=='pending':return self._projection(target,reason='continuation_pool_pending')
             now=time.time();require(type(now) in (int,float) and now>0,'continuation_pool_clock_changed')
             if cursor['not_before'] is not None:
@@ -344,11 +397,16 @@ class ContinuationPoolService:
                         _write(private,'cursor.json',{**cursor,'not_before':waiting},replace=True)
                         return self._projection(target,phase='paused_provider',operation_id=old.operation,
                             state_sha256=state['state_sha256'],not_before=waiting)
-                generation_id=str(uuid.uuid4())
+                generation_id=waiting_generation or str(uuid.uuid4())
                 # Persist BEFORE all preparation, registrations and model calls.
-                pending={**cursor,'phase':'pending','generation':generation_id,'result':None,'not_before':None}
+                pending={key:value for key,value in cursor.items() if key!='wake_generation'}
+                pending.update(phase='pending',generation=generation_id,result=None,not_before=None)
                 _write(private,'cursor.json',pending,replace=True)
-                new=_Generation.create(self,directory,target,job,generation_id,control,resources,old=old)
+                if waiting_generation is None:
+                    new=_Generation.create(self,directory,target,job,generation_id,control,resources,old=old)
+                else:
+                    require(old is not None and old.task.snapshot()['state']['phase']=='paused_provider')
+                    new=_Generation.open(self,directory,target,job,generation_id,control,resources,candidate_for=old)
                 try:
                     if old is None:
                         new.prepare();new.open_worker();new.open_task(create=True)
@@ -357,10 +415,26 @@ class ContinuationPoolService:
                     elif old.task.snapshot()['state']['phase']=='paused_provider':
                         # Atomic provider wake owns preparation/admission. There is
                         # deliberately no WorkerPool dispatch on either side.
-                        new.open_worker(unprepared=True);new.open_task(create=False,old=old)
+                        if waiting_generation is None:
+                            new.open_worker(unprepared=True);new.open_task(create=False,old=old)
+                        paused=old.task.snapshot()
                         result=old.provider.wake(old.operation,next_controller=new.provider,preparer=new.preparer,
                             next_operation_id=new.operation,parameters=new.arguments,
                             request_id='continuation-'+new.operation,after_actions=target['checkpoint_after_actions'])
+                        if result['status']=='paused_provider' and new.task.snapshot()==paused:
+                            # No new cycle was admitted. Keep the failed source
+                            # generation, plus this exact candidate for a fresh
+                            # normal wake; never orphan a prepared_waiting intent.
+                            control.guard()
+                            finished=time.time();require(type(finished) in (int,float) and finished>=now,
+                                'continuation_pool_clock_changed')
+                            not_before=finished+self.loaded['configuration']['provider_backoff_seconds']
+                            projection=self._projection(target,phase='paused_provider',operation_id=old.operation,
+                                state_sha256=paused['state_sha256'],not_before=not_before)
+                            _write(private,'cursor.json',{'schema':'continuation-pool-cursor-v1','phase':'idle',
+                                'generation':old.generation,'wake_generation':generation_id,
+                                'result':projection,'not_before':not_before},replace=True)
+                            return projection
                     else:
                         retired=old.provider.maintenance.retire_checkpoint(old.operation)
                         require(retired['phase']=='retired')
@@ -535,7 +609,7 @@ class _Generation:
         result._worker_open=False
         return result
     @classmethod
-    def open(cls,service,directory,target,job,generation,control,resources):
+    def open(cls,service,directory,target,job,generation,control,resources,*,candidate_for=None):
         uuid_value(generation);result=cls();result._setup(service,directory,target,job,generation,control,resources)
         with PrivateDirectory(result.directory) as private:value=_read(private,'generation.json')
         require(type(value) is dict and set(value)=={'schema','generation','grant','submitted','connection'}
@@ -551,7 +625,16 @@ class _Generation:
         result.submitted=value['submitted'];result._pool(create=False)
         require(result.driver.selections.connection_pin==value['connection'])
         result.task=None;result._worker_open=False;result.checkpoint_configuration=None
-        result.open_worker(existing=True);result.open_task(create=False)
+        if candidate_for is None:
+            result.open_worker(existing=True);result.open_task(create=False)
+        else:
+            cp=candidate_for.checkpoints.verify(checkpoint_id_for(candidate_for.operation))
+            require(result.grant=={**deepcopy(job['repository']),'repository':cp['checkout'],
+                'base_commit':cp['commit_sha'],'workspace_root':str(service.root/'checkouts'/directory.name/generation)})
+            with PrivateDirectory(result.directory) as private:
+                require(_read(private,'parent.json')=={'checkpoint_id':cp['checkpoint_id'],
+                    'checkpoint_sha256':cp['checkpoint_sha256']})
+            result.open_worker(existing=True,unprepared=True);result.open_task(create=False,old=candidate_for)
         return result
     def _setup(self,service,directory,target,job,generation,control,resources):
         uuid_value(generation)
@@ -599,7 +682,10 @@ class _Generation:
         self.preparer=LinuxPoolJobPreparer(self.directory/'preparation',pool=self.pool,
             driver=self.driver,workspaces=self.workspaces)
     def prepare(self):
-        self.control.guard();self.preparer.prepare(self.operation,**self.arguments);self.control.guard()
+        self.control.guard()
+        with _initial_preparing(self.control,self.preparer,self.operation):
+            self.preparer.prepare(self.operation,**self.arguments)
+        self.control.guard()
     def open_worker(self,*,existing=False,unprepared=False):
         require(not self._worker_open)
         if unprepared:
@@ -613,7 +699,7 @@ class _Generation:
             'board_session_id':self.context.session_id}
         record=self.control.add_worker(self.worker.journal.directory,self.operation,worker_scope)
         self.resources.callback(self.control.remove_worker,record)
-        if existing:self.worker.client.adopt_registration()
+        if existing and not unprepared:self.worker.client.adopt_registration()
         elif not unprepared:
             selection=bound['selection']
             self.worker.prepare(scope=selection['scope'],request_id='continuation-prepare-'+self.operation,
