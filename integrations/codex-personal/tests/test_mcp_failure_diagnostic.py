@@ -68,6 +68,15 @@ def test_declared_or_unissued_tags_never_reclassify_arbitrary_board_errors(tag):
     assert delivery_boundary_diagnostic(failure._development_delivery_diagnostic)['code'] == 'connection_failed'
 
 
+@pytest.mark.parametrize('kind', ['remote_disconnected', 'reset', 'broken_pipe', 'aborted',
+    'incomplete_read', 'ssl_error', 'other_os', 'http_state', 'value_error'])
+def test_diagnostic_subcodes_are_not_public_exception_codes_or_local_issuance(kind):
+    error = BoardReadError('connection_failed_'+kind)
+    assert connection_failure_diagnostic(error) is None
+    failure = _delivery_failure(error, 'board_handoff')
+    assert delivery_boundary_diagnostic(failure._development_delivery_diagnostic)['code'] == 'unknown'
+
+
 def test_foreign_exception_properties_are_never_read_for_diagnostics():
     class Foreign(BoardReadError):
         def __getattribute__(self, name):

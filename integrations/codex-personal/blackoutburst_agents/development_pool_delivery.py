@@ -37,11 +37,12 @@ STEPS = ('intent','capture-intent','captured','evidence','seal-intent','sealed',
 
 _DELIVERY_PHASE=ContextVar('development_delivery_phase',default='delivery')
 DELIVERY_PHASES=frozenset({'delivery','board_handoff'})
+_PUBLIC_BOARD_ERROR_CODES=frozenset({'connection_closed','timeout','connection_failed','redirect_blocked',
+    'authentication_failed','permission_denied','http_error','invalid_response','rpc_rejected',
+    'tool_rejected','session_mismatch','protocol_mismatch','response_too_large',
+    'development_ticket_frame_unavailable','development_registration_required','unknown'})
 DELIVERY_CODES={
-    'board_read_error':frozenset({'connection_closed','timeout','connection_failed','redirect_blocked',
-        'authentication_failed','permission_denied','http_error','invalid_response','rpc_rejected',
-        'tool_rejected','session_mismatch','protocol_mismatch','response_too_large',
-        'development_ticket_frame_unavailable','development_registration_required','unknown',
+    'board_read_error':_PUBLIC_BOARD_ERROR_CODES|frozenset({
         'connection_failed_remote_disconnected','connection_failed_reset','connection_failed_broken_pipe',
         'connection_failed_aborted','connection_failed_incomplete_read','connection_failed_ssl_error',
         'connection_failed_other_os','connection_failed_http_state','connection_failed_value_error'}),
@@ -68,7 +69,8 @@ def _delivery_failure(error,phase):
     if type(error) in (BoardReadError,JournalError):
         category='board_read_error' if type(error) is BoardReadError else 'journal_error'
         candidate=vars(error).get('code')
-        code=candidate if type(candidate) is str and candidate in DELIVERY_CODES[category] else 'unknown'
+        public_codes=_PUBLIC_BOARD_ERROR_CODES if type(error) is BoardReadError else DELIVERY_CODES[category]
+        code=candidate if type(candidate) is str and candidate in public_codes else 'unknown'
         if type(error) is BoardReadError and code=='connection_failed':
             kind=connection_failure_diagnostic(error)
             diagnostic='connection_failed_'+kind if kind is not None else None
