@@ -67,7 +67,7 @@ def test_pre_pin_releases_still_verify_without_the_new_module(bundle,version):
     assert 'protected_public_pins' not in p.required_sdk_modules(version)
 
 
-@pytest.mark.parametrize('version',['0.35.0','0.35.1','0.36.0','0.100.0'])
+@pytest.mark.parametrize('version',['0.35.0','0.35.1','0.36.0','0.44.1'])
 def test_protected_pin_releases_require_the_new_module_before_install(bundle,version):
     directory,value,_=bundle;value['adapter_version']=version
     (directory/'manifest.json').write_bytes(p.encoded(value))

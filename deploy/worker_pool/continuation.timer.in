@@ -1,0 +1,11 @@
+[Unit]
+Description=Blackoutburst opt-in continuation timer for @USER@
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+Persistent=false
+Unit=@CONTINUATION_SERVICE@
+
+[Install]
+WantedBy=timers.target

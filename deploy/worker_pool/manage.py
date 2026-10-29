@@ -43,6 +43,10 @@ def prepare_addon(source,output,*,codex,bwrap,gh,codex_version,gh_version,python
     if not set(names)<=set(tracked):p.fail('pool_source_incomplete')
     version=re.findall(r'^version = "(0\.[0-9]+\.[0-9]+)"$',git('show',revision+':integrations/codex-personal/pyproject.toml').decode(),re.M)
     if len(version)!=1:p.fail('pool_source_version_missing')
+    if p.continuation_supported(version[0]):
+        names.update({'deploy/worker_pool/continuation.service.in':'continuation.service.in',
+            'deploy/worker_pool/continuation.timer.in':'continuation.timer.in'})
+        if not set(names)<=set(tracked):p.fail('pool_source_incomplete')
     data={target:git('show',revision+':'+name) for name,target in names.items()}
     for target,path in (('tools/codex',codex),('tools/codex-resources/bwrap',bwrap),('tools/gh',gh)):
         data[target]=p.read_regular(path);p.elf(data[target],'x86_64')
