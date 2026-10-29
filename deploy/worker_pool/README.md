@@ -199,3 +199,30 @@ Une réponse perdue après cet effet n'autorise aucun nouvel essai automatique.
 Stop, les baux et Runtime restent contrôlés ; un nettoyage inconnu ou un refus
 de permission ne se transforme pas en checkpoint rejouable. Le parcours source
 est composé, mais le pilote réel 0.45 à deux générations reste à valider.
+
+### Mettre à jour une continuation existante
+
+Pour une nouvelle release, arrêter **et désactiver** le service et le timer de
+continuation sélectionnés avant toute mise à jour. La commande `upgrade` met
+d'abord à jour l'unité finie et installe le nouveau bundle public arrêté. Puis,
+après vérification des deux scripts publics, remplacer les unités de continuation :
+
+```sh
+python3 -I -B "$NEW_RELEASE/pool_manage.py" upgrade-continuation "$NEW_RELEASE" --previous-bundle-id "$PREVIOUS_CONTINUATION_BUNDLE_ID"
+sudo /usr/bin/python3.10 -I -B "$NEW_RELEASE/pool_manage.py" upgrade-continuation "$NEW_RELEASE" --previous-bundle-id "$PREVIOUS_CONTINUATION_BUNDLE_ID" --expected-bundle-id "$APPROVED_BUNDLE_ID" --apply
+```
+
+Les comptes, endpoint, outils, plafonds et trois modèles d'unités doivent être
+identiques. L'ancien reçu complet et les anciens octets service/timer sont
+vérifiés sous le verrou Root commun ; le nouveau reçu de l'unité finie doit
+correspondre à son installation arrêtée. La commande sauvegarde les deux fichiers
+d'unités dans les métadonnées Root, les remplace, recharge systemd et réinitialise
+seulement l'état failed du service de continuation. Ils restent désactivés ;
+aucun contenu de la racine privée ou des connexions n'est lu ou modifié.
+
+Un échec avant l'écriture du reçu complet restaure uniquement les octets encore
+reconnus. Une modification externe ou une confirmation de reçu incertaine reste
+à examiner ; la même intention ne peut pas être rejouée. Le reçu complet garde
+le format de l'installation initiale pour permettre une mise à jour ultérieure.
+Cette opération ne réactive pas le timer et ne reprend aucune génération : une
+éventuelle activation humaine reste une étape distincte après validation.

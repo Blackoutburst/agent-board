@@ -430,6 +430,147 @@ def install_continuation(release,*,apply=False,expected_bundle_id=None):
     finally:os.close(lock)
 
 
+def _continuation_rendered(plan,manifest,account):
+    release=Path(plan['release'])
+    return {name:p.render_continuation_unit(p.read_regular(release/template).decode(),
+        manifest,release,account.pw_dir).encode() for name,template in
+        ((plan['service'],'continuation.service.in'),(plan['timer'],'continuation.timer.in'))}
+
+
+def _continuation_completion(plan,manifest,account,rendered):
+    """One canonical installed state for both install and completed upgrade."""
+    release=Path(plan['release'])
+    finite=p.render_unit(p.read_regular(release/'unit.service.in').decode(),manifest,release,account.pw_dir).encode()
+    return {**plan,'schema':'worker-pool-continuation-install-v1','status':'continuation_installed_disabled',
+        'unix_owner':manifest['unix_owner'],'uid':account.pw_uid,'gid':account.pw_gid,
+        'normal_home':account.pw_dir,'finite_unit_sha256':hashlib.sha256(finite).hexdigest(),
+        'unit_hashes':{name:hashlib.sha256(raw).hexdigest() for name,raw in rendered.items()}}
+
+
+def _continuation_stopped(plan):
+    service=_stopped_for_upgrade(plan['service'])
+    timer=_unit_state(plan['timer'],timer=True)
+    if timer!={'LoadState':'loaded','ActiveState':'inactive','SubState':'dead','UnitFileState':'disabled',
+            'DropInPaths':'','FragmentPath':str(p.UNIT_DIR/plan['timer'])}:
+        p.fail('pool_unit_not_stopped_disabled')
+    return service,timer
+
+
+def _continuation_finite_receipt(release,manifest,account):
+    """Validate public Root receipt/unit only, never owner data or credentials."""
+    plan=plan_addon(release);bundle_id=plan['bundle_id'];unit=plan['service']
+    receipt=p.BASE/'installations'/(bundle_id+'.complete.json')
+    p.protected(receipt);record=p.decode(p.read_regular(receipt,128*1024))
+    if type(record) is not dict:p.fail('pool_previous_receipt_invalid')
+    raw=p.render_unit(p.read_regular(release/'unit.service.in').decode(),manifest,release,account.pw_dir).encode()
+    extra={}
+    if 'previous_bundle_id' in record:
+        previous_id=p.sha(record['previous_bundle_id']);previous_release=p.RELEASES/previous_id
+        previous=p.verify_release(previous_release)
+        old=p.render_unit(p.read_regular(previous_release/'unit.service.in').decode(),previous,previous_release,account.pw_dir).encode()
+        plan={**plan,'status':'upgrade_plan','previous_bundle_id':previous_id,
+            'actions':['publish_new_public_release','replace_receipted_disabled_unit','daemon_reload','reset_failed'],
+            'preserve_private_state':True}
+        extra={'old_unit_sha256':hashlib.sha256(old).hexdigest()}
+    expected={**plan,'schema':p.SCHEMA,'status':'installed_disabled','unix_owner':manifest['unix_owner'],
+        'uid':account.pw_uid,'gid':account.pw_gid,'normal_home':account.pw_dir,
+        'unit_sha256':hashlib.sha256(raw).hexdigest(),**extra}
+    if record!=expected:p.fail('pool_previous_receipt_invalid')
+    path=p.UNIT_DIR/unit;p.protected(path)
+    if p.read_regular(path)!=raw:p.fail('pool_unit_changed')
+    state=_stopped_for_upgrade(unit)
+    if state['ActiveState']!='inactive':p.fail('pool_unit_not_inactive_disabled')
+    return unit,path,raw,state
+
+
+def upgrade_continuation(release,*,previous_bundle_id,apply=False,expected_bundle_id=None):
+    """Replace two receipted stopped/disabled units, without activating them.
+
+    Only public Root releases, receipts, backups and unit bytes are read.
+    Owner contents remain untouched. A lost completion ACK is never replayed.
+    """
+    plan=continuation_install_plan(release);previous_bundle_id=p.sha(previous_bundle_id)
+    if previous_bundle_id==plan['bundle_id']:p.fail('pool_upgrade_requires_new_release')
+    result={**plan,'status':'continuation_upgrade_plan','previous_bundle_id':previous_bundle_id,
+        'actions':['replace_receipted_disabled_continuation_units','daemon_reload','reset_failed_service']}
+    if not apply:return result
+    if expected_bundle_id is None or p.sha(expected_bundle_id)!=plan['bundle_id']:p.fail('pool_approved_bundle_required')
+    release=Path(plan['release']);manifest=p.verify_release(release);account=_root_context(manifest)
+    if p.manifest_id(manifest)!=plan['bundle_id']:p.fail('pool_bundle_selection_changed')
+    for parent in (p.BASE,p.BASE/'installations',p.RELEASES,p.UNIT_DIR):p.protected(parent)
+    lock=os.open(p.BASE/'install.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:p.fail('pool_install_busy')
+        _root_lock(lock)
+        if p.verify_release(release)!=manifest:p.fail('pool_bundle_selection_changed')
+        previous_release=p.RELEASES/previous_bundle_id;previous=p.verify_release(previous_release)
+        old_plan=continuation_install_plan(previous_release)
+        continuity=('architecture','unix_owner','board_owner','board_endpoint','python','codex_version','gh_version','unit_limits')
+        same_files=('tools/codex','tools/codex-resources/bwrap','tools/gh','unit.service.in',
+            'continuation.service.in','continuation.timer.in')
+        if (any(previous[key]!=manifest[key] for key in continuity)
+                or any(previous['files'][name]!=manifest['files'][name] for name in same_files)):
+            p.fail('pool_upgrade_scope_changed')
+        root=p.owner_root(manifest['unix_owner']);p.no_symlinks(root);info=root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=account.pw_uid or info.st_gid!=account.pw_gid
+                or stat_mode(info)!=0o700):p.fail('pool_private_root_changed')
+        p.protected(root.parent)
+        old=_continuation_rendered(old_plan,previous,account)
+        receipt=p.BASE/'installations'/(previous_bundle_id+'.continuation.complete.json')
+        p.protected(receipt)
+        if p.decode(p.read_regular(receipt,128*1024))!=_continuation_completion(old_plan,previous,account,old):
+            p.fail('pool_continuation_previous_receipt_invalid')
+        finite,finite_path,finite_raw,finite_state=_continuation_finite_receipt(release,manifest,account)
+        rendered=_continuation_rendered(plan,manifest,account);completion=_continuation_completion(plan,manifest,account,rendered)
+        def files(expected):
+            for name,raw in expected.items():
+                p.protected(p.UNIT_DIR/name)
+                if p.read_regular(p.UNIT_DIR/name)!=raw:p.fail('pool_unit_changed')
+        def finite_unchanged():
+            p.protected(finite_path)
+            if p.read_regular(finite_path)!=finite_raw or _stopped_for_upgrade(finite)!=finite_state:
+                p.fail('pool_unit_state_changed')
+        files(old);before=_continuation_stopped(plan)
+        intent=p.BASE/'installations'/(plan['bundle_id']+'.continuation.json')
+        complete=intent.with_suffix('.complete.json')
+        backups={name:intent.with_suffix('.previous-service' if name==plan['service'] else '.previous-timer') for name in old}
+        if any(path.exists() or path.is_symlink() for path in (intent,complete,*backups.values())):
+            p.fail('pool_continuation_install_exists')
+        request={**result,'schema':'worker-pool-continuation-upgrade-v1','status':'upgrading',
+            'unix_owner':manifest['unix_owner'],'uid':account.pw_uid,'gid':account.pw_gid,'normal_home':account.pw_dir,
+            'old_unit_hashes':{name:hashlib.sha256(raw).hexdigest() for name,raw in old.items()},
+            'unit_hashes':completion['unit_hashes'],'finite_unit_sha256':completion['finite_unit_sha256']}
+        _new_file(intent,p.encoded(request),0o600)
+        for name,path in backups.items():_new_file(path,old[name],0o600)
+        attempted=[];committing=False
+        try:
+            for name,raw in rendered.items():
+                finite_unchanged()
+                if _continuation_stopped(plan)!=before:p.fail('pool_unit_state_changed')
+                files({other:(rendered[other] if other in attempted else old[other]) for other in old})
+                attempted.append(name);_replace_unit(p.UNIT_DIR/name,old[name],raw)
+            command(['/usr/bin/systemctl','daemon-reload'])
+            command(['/usr/bin/systemctl','reset-failed',plan['service']])
+            for name in rendered:_inactive(name,timer=name==plan['timer'])
+            files(rendered);finite_unchanged()
+            committing=True;_new_file(complete,p.encoded(completion),0o600)
+        except BaseException:
+            if committing:p.fail('pool_continuation_upgrade_completion_unconfirmed')
+            if attempted:
+                _continuation_stopped(plan);finite_unchanged()
+                current={}
+                for name in old:
+                    p.protected(p.UNIT_DIR/name);current[name]=p.read_regular(p.UNIT_DIR/name)
+                    if current[name] not in (old[name],rendered[name]):p.fail('pool_continuation_upgrade_units_unconfirmed')
+                for name in reversed(attempted):
+                    if current[name]==rendered[name]:_replace_unit(p.UNIT_DIR/name,rendered[name],old[name])
+                command(['/usr/bin/systemctl','daemon-reload']);files(old)
+            raise
+        return {**result,'status':'continuation_upgraded_disabled','receipt':str(complete)}
+    finally:os.close(lock)
+
+
 def rollback_addon(receipt,*,apply=False):
     receipt=p.no_symlinks(receipt);p.protected(receipt)
     value=p.decode(p.read_regular(receipt,128*1024))
@@ -451,16 +592,17 @@ def rollback_addon(receipt,*,apply=False):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__);commands=parser.add_subparsers(dest='action',required=True)
     build=commands.add_parser('prepare');build.add_argument('--source',required=True);build.add_argument('--output',required=True);build.add_argument('--spec',required=True)
-    for name in ('plan','install','rollback','upgrade','install-continuation'):
+    for name in ('plan','install','rollback','upgrade','install-continuation','upgrade-continuation'):
         command_parser=commands.add_parser(name);command_parser.add_argument('path')
         if name!='plan':command_parser.add_argument('--apply',action='store_true')
-        if name in ('install','upgrade','install-continuation'):command_parser.add_argument('--expected-bundle-id')
-        if name=='upgrade':command_parser.add_argument('--previous-bundle-id',required=True)
+        if name in ('install','upgrade','install-continuation','upgrade-continuation'):command_parser.add_argument('--expected-bundle-id')
+        if name in ('upgrade','upgrade-continuation'):command_parser.add_argument('--previous-bundle-id',required=True)
     args=parser.parse_args(argv)
     try:
         if args.action=='prepare':result=prepare_addon(args.source,args.output,**p.decode(p.read_regular(args.spec,128*1024)))
         elif args.action=='plan':result=plan_addon(args.path)
         elif args.action=='install-continuation':result=install_continuation(args.path,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
+        elif args.action=='upgrade-continuation':result=upgrade_continuation(args.path,previous_bundle_id=args.previous_bundle_id,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         elif args.action=='install':result=install_addon(args.path,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         elif args.action=='upgrade':result=upgrade_addon(args.path,previous_bundle_id=args.previous_bundle_id,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         else:result=rollback_addon(args.path,apply=args.apply)
