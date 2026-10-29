@@ -1,0 +1,30 @@
+{
+  "adapter_version": "0.44.2",
+  "board_version": "2.17.4",
+  "change": "One bounded retry for exact locally interrupted read-only MCP exchanges, with a shared deadline and closed local diagnostic tags",
+  "product_commit": "c4b6a4fbf78de6f17fe437ff248b6a224f8cfa33",
+  "validation": {
+    "independent_existing_read_tests_passed": 129,
+    "independent_existing_subtests_passed": 11,
+    "independent_final_diagnostic_counter_cases_passed": 43,
+    "author_composed_handoff_cases_passed": 2
+  },
+  "guards_preserved": [
+    "no replay of mutations, TLS/auth/protocol errors or timeouts",
+    "frozen endpoint, owner, headers, session and parameters",
+    "fresh JSON-RPC ID with remaining original wall budget only",
+    "fresh policy and claim checks before effects",
+    "closed public error code; local telemetry contains no exception prose",
+    "no reopening stopped pools or adopting uncertain publication effects"
+  ],
+  "live_facts": {
+    "last_attempt_adapter": "0.44.1",
+    "pull_request": 72,
+    "failure_phase": "board_handoff",
+    "failure_category": "board_read_error",
+    "failure_code": "connection_failed",
+    "complete_coder_to_reviewer_workflow": false,
+    "unique_failure_cause": "not asserted"
+  },
+  "continuation_preview_pr68": "separate unmerged work"
+}
