@@ -207,6 +207,10 @@ travail bloqué conserve ses résultats, compteurs et session. Le réveil vérif
 la disponibilité puis prépare et admet un nouveau Worker, une nouvelle session
 et de nouveaux dossiers, après les contrôles frais.
 
-La publication agrégée depuis la base publique originale et le service de réveil
-restent à raccorder. Ces composants de continuation ne sont pas encore déployés
-sur le serveur.
+Le contrôleur d’agrégat peut maintenant reconstruire un arbre distinct depuis
+la base publique originale. Il exige la vraie preuve des tests finaux et
+l’égalité de l’arbre complet avant de sceller, publier et transmettre le ticket
+en revue. Les checkpoints privés restent des éléments de lignée de source.
+L’entrée du résultat sain en mode fournisseur, le passage à la revue indépendante
+par son Lifecycle et le service de réveil restent à finaliser. Ces composants de
+continuation ne sont pas encore déployés sur le serveur.
