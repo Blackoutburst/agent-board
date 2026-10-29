@@ -1,12 +1,12 @@
 # Operations and release procedure
 
-Current source is Board 2.17.4/schema 17 with adapter 0.45.0. Standalone Development
+Current source is Board 2.17.4/schema 17 with adapter 0.45.1. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
 
-## Explicit development continuation: adapter 0.45.0
+## Explicit development continuation: adapter 0.45.1
 
 The complete opt-in source joins private source checkpoints, normal retirement
 and release of the old generation, fresh preparation/admission, final tested
@@ -37,10 +37,25 @@ does not reopen the Core, rewrite evidence or authorize execution.
 As of 29 October 2026, the finite **0.44.2** pilot completed both coding and
 independent review with confirmed cleanup; its PR #74 was merged at
 `7012bbc02e096d5fa9cfde9546518a68c341a061`. This does not validate 0.45 on the
-server. The new selected pilot #62 still has to exercise two real generations,
-one final publication and a distinct review. Component tests use actual
-temporary Board/Git/Runtime with synthetic provider, GitHub and native
-qualification seams. No server 0.45 activation or acceptance is claimed here.
+server. The first 0.45.0 continuation pilot #62 completed three model turns and
+confirmed its read and patch, then stopped at the native test result boundary
+with `linux_result_boundary_invalid`. Its six Runtime receipts were then
+confirmed by the normal identity-only cleanup path. The historical Native
+receipt records `linux_authorization_expired` before SOURCE, without a source
+release intent. That does not validate the test; the generation, patch and
+Core `needs_you` state remain retained. The human stopped the timer and service.
+Two real generations, final publication and distinct review remain unvalidated. Component tests use actual temporary
+Board/Git/Runtime with synthetic provider, GitHub and native qualification seams.
+
+Adapter 0.45.1 separates cheap local logical Stop/identity/deadline checks from
+full continuation observations at action boundaries. A native heartbeat keeps
+the existing concrete authorization, SOURCE captures and 1.5-second window;
+complete logical checks no longer multiply inside a supposedly local poll. A
+reproduction with three 0.8-second scope callbacks exceeded the old window and
+produced the observed refusal pattern. This is a sufficient reproducer, not a
+measurement or exclusive diagnosis of server latency. The component changes have independent reviews and synthetic regression
+coverage. A fresh selected server pilot still has to exercise the composed
+release on the installed unit.
 
 Adapter 0.39 can post a closed failure notice to the selected ticket discussion
 from the code worker's existing initialized session. The message requires its

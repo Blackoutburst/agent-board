@@ -21,7 +21,9 @@ class LockObservationFixture:
                 ('os.dup', self._dup), ('fcntl.flock', self._flock),
                 ('blackoutburst_agents.dev_journal._linux_lock_supported', lambda: True),
                 ('blackoutburst_agents.dev_journal._linux_lock_observation', self.observe)]:
-            context = patch(target, side_effect=replacement)
+            # These global wrappers can see millions of descriptor operations.
+            # Keep the exact model without retaining a Mock history for each.
+            context = patch(target, new=replacement)
             context.start();case.addCleanup(context.stop)
 
     def _open(self, *args, **kwargs):

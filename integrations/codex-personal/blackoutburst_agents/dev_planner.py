@@ -107,13 +107,13 @@ class DevelopmentPlanner:
                  planner_policy, authorization, claim_id, instruction, model,
                  budgets=None, enabled=False, _test_anchor=None, _transport=None,
                  _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None, fence_intent=None, fence_verify=None,
-                 local_guard=None, reasoning_effort=None):
+                 local_guard=None, reasoning_effort=None, fresh_guard=None):
         reasoning = _reasoning_configuration(reasoning_effort)
         self.broker, self.store, self.runtime_journal = broker, store, runtime_journal
         self.client, self.scope, self.policy = control_client, dict(board_scope), planner_policy
         self.authorization, self.claim_id, self.clock = authorization, opaque(claim_id), _clock
         self.enabled, self.active_guard, self.journal, self.fence = enabled, None, None, None
-        self.local_guard, self._last_local_time = local_guard, None
+        self.local_guard, self.fresh_guard, self._last_local_time = local_guard, fresh_guard, None
         self._broker_refusal_reason = None
         self._base_authorize = broker.authorize_scope
         if ((fence_intent is not None and (not callable(fence_intent) or not callable(fence_verify) or parent_operation is None))
@@ -122,6 +122,7 @@ class DevelopmentPlanner:
         self.fence_intent, self.fence_verify = fence_intent, fence_verify
         if (type(enabled) is not bool or type(_allow_fixture_backend) is not bool
                 or not callable(authorization) or local_guard is not None and not callable(local_guard)
+                or fresh_guard is not None and not callable(fresh_guard)
                 or fence_intent is not None and local_guard is None):
             raise DevelopmentError('invalid_planner_controller')
         if not enabled:
@@ -319,6 +320,8 @@ class DevelopmentPlanner:
                 raise DevelopmentError('planner_directory_changed')
 
     def _fresh(self, state, action=None, *, inspection=False):
+        if getattr(self,'fresh_guard',None) is not None and self.fresh_guard(inspection=inspection) is not True:
+            raise DevelopmentError('planner_controller_stopped')
         self._local_fresh(state, inspection=inspection)
         self._fresh_after_fence_wait(lambda:self._grant(action),
             lambda:self._local_fresh(state, inspection=inspection))

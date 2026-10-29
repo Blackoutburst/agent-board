@@ -76,6 +76,14 @@ class DevelopmentBoardWorker:
             raise DevelopmentError('development_controller_stopped')
         return True
 
+    def _fresh_control(self, operation_id, *, inspection=False):
+        """Logical observations at model/action boundaries, never polling."""
+        self._local_control(operation_id,inspection=inspection)
+        if getattr(self,'_checkpoint_execution',None) is not None:
+            from .development_cycle_driver import check_worker_cycle
+            check_worker_cycle(self,operation_id,fresh=True)
+        return True
+
     def _controller_cancelled(self, operation_id=None, *, inspection=False):
         if getattr(self,'_checkpoint_execution',None) is not None:
             try:
@@ -535,6 +543,8 @@ class DevelopmentBoardWorker:
                         validate_worker_checkpoint_caps(op,manifest,backend,checkpoint[1])
                     broker=DevelopmentBroker(pins['broker']['path'],authorize_scope=allowed,enabled=True,test_backend=backend)
                     try:
+                        logical_guard={} if getattr(self,'_checkpoint_execution',None) is None else {
+                            'fresh_guard':lambda **options:self._fresh_control(op['id'],**options)}
                         planner=self.planner_factory(broker=broker,store=self.store,runtime_journal=self.runtime,
                             control_client=self.control,board_scope=op['scope'],planner_policy=policy,
                             authorization=authorization,claim_id=op['payload']['claim_id'],
@@ -548,6 +558,7 @@ class DevelopmentBoardWorker:
                             fence_verify=None if self.fence_intent is None else
                                 lambda target:self._verify_family_binding(target,'planner'),
                             local_guard=lambda **options:self._local_control(op['id'],**options),
+                            **logical_guard,
                             _transport=self.transport,_test_anchor=self.test_anchor,
                             _allow_fixture_backend=self.allow_fixture,_clock=self.clock)
                         try:
