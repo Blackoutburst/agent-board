@@ -93,12 +93,14 @@ def _file(path, maximum, *, executable=False):
                 or executable and before.st_uid not in (0, os.geteuid())
                 or before.st_size > maximum or before.st_mode & 0o022):
             _fail('git_workspace_file_refused')
-        data = b''
-        while len(data) <= maximum:
-            part = os.read(descriptor, min(65536, maximum + 1 - len(data)))
+        parts, total = [], 0
+        while total <= maximum:
+            part = os.read(descriptor, min(65536, maximum + 1 - total))
             if not part:
                 break
-            data += part
+            parts.append(part)
+            total += len(part)
+        data = b''.join(parts)
         after = os.fstat(descriptor)
         named = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
         pin = lambda i: (i.st_dev, i.st_ino, i.st_mode, i.st_uid, i.st_size, i.st_mtime_ns, i.st_ctime_ns)
