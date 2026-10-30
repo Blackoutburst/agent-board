@@ -6,22 +6,27 @@ thread, and actual model/tool Runtime guards still admit every execution.
 An unfinished pass intent is evidence of uncertainty, never a replay request.
 """
 from contextlib import ExitStack, closing, contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 import fcntl
 import os
 from pathlib import Path
+import sqlite3
 import threading
 import time
 import uuid
 
 from .continuation_pool_configuration import load_continuation, MAX_CONFIGURATION
 from .continuation import ContinuationTask, ContinuationChecks, PHASES
-from .continuation_journal import ContinuationJournal
+from .continuation_journal import ContinuationJournal, ContinuationError
+from .board_reader import BoardReadError
+from .context import ContextError
 from .dev_journal import PrivateDirectory, decode, DevelopmentJournal
 from .dev_manifest import Budgets, DevelopmentError, canonical, digest, identity, opaque, validate_manifest
 from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .development_authorization import DevelopmentAuthorization
+from .development_client import FAILURE_NOTICE_CODES
 from .development_cycle_driver import DevelopmentCycleDriver, _test_caps
 from .development_pool import DevelopmentPoolDriver
 from .development_pool_selection import file_document
@@ -30,9 +35,13 @@ from .git_workspace import LocalRepositoryGrant, LocalGitWorkspaceController
 from .linux_input_snapshot import _path
 from .linux_planner_policy import _executable_pin, linux_source_pins
 from .linux_pool_preparation import LinuxPoolJobPreparer
-from .pool_journal import uuid_value
+from .linux_execution_qualification import qualification_diagnostic
+from .planner_policy import PlannerPolicyError
+from .pool_journal import uuid_value, PoolError
 from .private_development_checkpoint import PrivateDevelopmentCheckpointController, checkpoint_id_for
-from .runtime_guard import RuntimeGuard
+from .run_store import StoreError
+from .runtime_guard import RuntimeGuard, RuntimeControlError, RuntimeAdmissionRefused
+from .work_journal import JournalError
 from .worker_pool import WorkerPool
 
 MAX_RECORD=512*1024
@@ -44,6 +53,520 @@ REASONS=frozenset({'','continuation_pool_configuration_changed','continuation_po
     'continuation_pool_binding_changed','continuation_pool_api_unavailable','continuation_pool_clock_changed'})
 PERMISSION_FAILURES=frozenset({'development_grants_unavailable','development_ticket_unavailable',
     'development_registration_mismatch'})
+
+# Closed public error producers, frozen at development time. The provenance
+# test scans public source; no source or owner file is read to classify a failure.
+TARGET_FAILURE_CODES=frozenset({
+    'abandonment_conflict', 'absent', 'action_not_allowed', 'aggregate_review_attachment_uncertain',
+    'aggregate_review_command_refused', 'aggregate_review_concrete_source_required',
+    'aggregate_review_fence_changed', 'aggregate_review_handoff_required',
+    'aggregate_review_published_source_required', 'aggregate_review_reader_changed',
+    'aggregate_review_reader_required', 'aggregate_review_source_changed',
+    'aggregate_review_source_stopped', 'aggregate_review_writer_pending', 'availability_expired',
+    'availability_in_future', 'availability_scope_mismatch', 'availability_unverified',
+    'backend_controller_changed', 'backend_executable_changed', 'backend_executable_unavailable',
+    'bounds', 'broker_busy', 'broker_disabled', 'canonical_checkout_busy', 'canonical_family_changed',
+    'canonical_family_invalid', 'canonical_family_required', 'canonical_fence_changed',
+    'canonical_operation_conflict', 'canonical_parent_conflict', 'catalog_changed', 'changed',
+    'children', 'children_identity', 'cleanup_unconfirmed', 'cloud_workflow_already_bound',
+    'cloud_workflow_cleanup_unconfirmed', 'cloud_workflow_configuration_changed',
+    'cloud_workflow_connection_changed', 'cloud_workflow_delivery_history_changed',
+    'cloud_workflow_distinct_reviewer_required', 'cloud_workflow_driver_collision',
+    'cloud_workflow_no_selected_change', 'cloud_workflow_paths_outside_manifest',
+    'cloud_workflow_pool_history_changed', 'cloud_workflow_publication_unconfirmed',
+    'cloud_workflow_review_history_changed', 'cloud_workflow_review_material_too_large',
+    'cloud_workflow_review_preparation_unconfirmed', 'cloud_workflow_review_publication_unconfirmed',
+    'cloud_workflow_selected_job_changed', 'cloud_workflow_stop_unconfirmed', 'cloud_workflow_stopped',
+    'cloud_workflow_tool_changed', 'conflict', 'connection_closed', 'connection_failed',
+    'connection_too_large', 'connection_unavailable', 'context_changed', 'context_guard_capacity',
+    'context_guard_changed', 'context_guard_invalid', 'context_guard_required',
+    'context_guard_session_unbound', 'context_profile_mismatch', 'context_read_denied',
+    'context_read_failed', 'context_scope_mismatch', 'context_too_large',
+    'continuation_boundary_mismatch', 'continuation_boundary_required', 'continuation_boundary_unknown',
+    'continuation_busy', 'continuation_check_result_invalid', 'continuation_checkpoint_refused',
+    'continuation_checks_failed', 'continuation_clock_changed', 'continuation_clock_invalid',
+    'continuation_closure_conflict', 'continuation_closure_invalid',
+    'continuation_configuration_changed', 'continuation_cycle_limit', 'continuation_enrollment_conflict',
+    'continuation_enrollment_invalid', 'continuation_enrollment_required',
+    'continuation_fresh_directory_required', 'continuation_fresh_state_required',
+    'continuation_fresh_work_required', 'continuation_human_channel_unavailable',
+    'continuation_human_handoff_unconfirmed', 'continuation_invalid', 'continuation_journal_changed',
+    'continuation_journal_corrupt', 'continuation_journal_schema', 'continuation_journal_unavailable',
+    'continuation_permit_stale', 'continuation_pool_api_unavailable',
+    'continuation_pool_binding_changed', 'continuation_pool_cleanup_unknown',
+    'continuation_pool_clock_changed', 'continuation_pool_configuration_changed',
+    'continuation_pool_configuration_invalid', 'continuation_pool_cycle_exceeds_batch_timeout',
+    'continuation_pool_cycle_limits_invalid', 'continuation_pool_explicit_batch_required',
+    'continuation_pool_owner_busy', 'continuation_pool_pending', 'continuation_pool_source_changed',
+    'continuation_pool_stopped', 'continuation_pool_target_failed', 'continuation_pool_tools_changed',
+    'continuation_postcondition', 'continuation_predecessor_invalid', 'continuation_process_changed',
+    'continuation_provider_receipt_invalid', 'continuation_provider_unconfirmed',
+    'continuation_quota_unconfirmed', 'continuation_request_conflict', 'continuation_review_changed',
+    'continuation_review_cleanup_unknown', 'continuation_review_configuration_changed',
+    'continuation_review_directory_exists', 'continuation_review_history_changed',
+    'continuation_review_material_too_large', 'continuation_review_owner_changed',
+    'continuation_review_paths_changed', 'continuation_review_pending',
+    'continuation_review_preparation_unknown', 'continuation_review_publication_changed',
+    'continuation_review_registry_conflict', 'continuation_review_roots_overlap',
+    'continuation_review_selection_changed', 'continuation_review_source_required',
+    'continuation_review_stopped', 'continuation_review_tools_changed', 'continuation_revision_conflict',
+    'continuation_runner_requires_review', 'continuation_runtime_unknown', 'continuation_scope_changed',
+    'continuation_start_refused', 'continuation_state_conflict', 'continuation_state_invalid',
+    'continuation_state_too_large', 'continuation_stopped', 'continuation_store_opt_in_required',
+    'continuation_store_optin_required', 'continuation_usage_regressed', 'continuation_wake_refused',
+    'continuation_wake_required', 'controller_review', 'credential_fields_forbidden',
+    'decision_hash_mismatch', 'decision_in_future', 'decision_memory_required',
+    'decision_scope_mismatch', 'development_aggregate_authority_changed',
+    'development_aggregate_authority_required', 'development_aggregate_board_publication_unconfirmed',
+    'development_aggregate_caps_changed', 'development_aggregate_changed',
+    'development_aggregate_completion_refused', 'development_aggregate_completion_required',
+    'development_aggregate_completion_uncertain', 'development_aggregate_concrete_handles_required',
+    'development_aggregate_controller_changed', 'development_aggregate_controller_conflict',
+    'development_aggregate_fence_changed', 'development_aggregate_final_mode_refused',
+    'development_aggregate_handoff_unconfirmed', 'development_aggregate_logical_stop',
+    'development_aggregate_mode_changed', 'development_aggregate_not_sealed',
+    'development_aggregate_parent_changed', 'development_aggregate_parent_required',
+    'development_aggregate_public_base_changed', 'development_aggregate_publisher_required',
+    'development_aggregate_result_limit', 'development_aggregate_roots_overlap',
+    'development_aggregate_source_capture_changed', 'development_aggregate_source_capture_uncertain',
+    'development_aggregate_tree_changed', 'development_aggregate_uncertain',
+    'development_aggregate_unselected_change', 'development_backend_policy_mismatch',
+    'development_backend_unqualified', 'development_checkpoint_lock_required',
+    'development_checkpoint_request_invalid', 'development_checkpoint_unconfirmed',
+    'development_checkpoint_work_busy', 'development_child_scope_changed', 'development_claim_changed',
+    'development_claim_invalid', 'development_claim_lost', 'development_claim_too_short',
+    'development_cleanup_identity_changed', 'development_cleanup_receipt_missing',
+    'development_configuration_changed', 'development_connection_changed',
+    'development_connection_overlap', 'development_connection_scope_mismatch',
+    'development_connection_unavailable', 'development_context_already_sealed',
+    'development_context_changed', 'development_context_changed_during_claim',
+    'development_controller_required', 'development_controller_stopped', 'development_cycle_busy',
+    'development_cycle_caps_changed', 'development_cycle_capture_uncertain',
+    'development_cycle_check_result_invalid', 'development_cycle_claim_changed',
+    'development_cycle_cleanup_unconfirmed', 'development_cycle_concrete_handles_required',
+    'development_cycle_context_changed', 'development_cycle_execution_changed',
+    'development_cycle_identity_reused', 'development_cycle_linux_preparation_required',
+    'development_cycle_live_permit_required', 'development_cycle_logical_state_changed',
+    'development_cycle_logical_stop', 'development_cycle_operation_changed',
+    'development_cycle_parameters_changed', 'development_cycle_parent_changed',
+    'development_cycle_preparation_changed', 'development_cycle_preparation_conflict',
+    'development_cycle_preparation_uncertain', 'development_cycle_preparation_unconfirmed',
+    'development_cycle_release_uncertain', 'development_cycle_request_conflict',
+    'development_cycle_retirement_changed', 'development_cycle_retirement_required',
+    'development_cycle_roots_reused', 'development_cycle_stage_refused',
+    'development_cycle_stop_without_retirement', 'development_cycle_tools_changed',
+    'development_cycle_unconfirmed', 'development_cycle_usage_unknown', 'development_cycle_wall_limit',
+    'development_cycle_work_changed', 'development_delivery_controller_required',
+    'development_delivery_linux_proof_required', 'development_delivery_proof_changed',
+    'development_delivery_publication_incomplete', 'development_delivery_publication_required',
+    'development_delivery_work_busy', 'development_directory_changed',
+    'development_execution_profile_changed', 'development_execution_profile_invalid',
+    'development_family_reservation_conflict', 'development_family_reservation_missing',
+    'development_family_target_incomplete', 'development_fence_overlap',
+    'development_foreign_or_expired_claim', 'development_frame_invalid_protocol',
+    'development_frame_invalid_response', 'development_frame_unavailable',
+    'development_git_authority_changed', 'development_git_authority_controller_required',
+    'development_git_authority_unavailable', 'development_grants_unavailable',
+    'development_implicit_registration_forbidden', 'development_input_preparation_is_not_cleanup_proof',
+    'development_linux_configuration_changed', 'development_linux_journal_required',
+    'development_linux_pair_mismatch', 'development_not_ready_for_publication',
+    'development_notice_receipt_conflict', 'development_output_inside_checkout',
+    'development_output_inside_planner', 'development_parent_changed',
+    'development_planner_scope_mismatch', 'development_pool_absolute_path_required',
+    'development_pool_cleanup_unconfirmed', 'development_pool_connection_changed',
+    'development_pool_delivery_author_assignment_required',
+    'development_pool_delivery_board_unconfirmed', 'development_pool_delivery_busy_or_incomplete',
+    'development_pool_delivery_changed', 'development_pool_delivery_concrete_handles_required',
+    'development_pool_delivery_existing_files_only', 'development_pool_delivery_fence_changed',
+    'development_pool_delivery_fence_unavailable', 'development_pool_delivery_handoff_unconfirmed',
+    'development_pool_delivery_incomplete', 'development_pool_delivery_intent_conflict',
+    'development_pool_delivery_journal_pending', 'development_pool_delivery_limit',
+    'development_pool_delivery_operation_missing', 'development_pool_delivery_private_receipt_changed',
+    'development_pool_delivery_private_result_required',
+    'development_pool_delivery_publication_unconfirmed', 'development_pool_delivery_receipt_changed',
+    'development_pool_delivery_record_changed', 'development_pool_delivery_record_unavailable',
+    'development_pool_delivery_roots_overlap', 'development_pool_delivery_runtime_unconfirmed',
+    'development_pool_delivery_scope_mismatch', 'development_pool_delivery_text_refused',
+    'development_pool_delivery_unavailable', 'development_pool_file_changed',
+    'development_pool_linux_profile_required', 'development_pool_registry_changed',
+    'development_pool_runtime_scope_mismatch', 'development_pool_runtime_unconfirmed',
+    'development_pool_selection_already_bound', 'development_pool_selection_mismatch',
+    'development_pool_stop_unconfirmed', 'development_pool_stopped', 'development_pool_unqualified',
+    'development_pool_work_scope_mismatch', 'development_prepare_conflict',
+    'development_private_overlap', 'development_provider_busy',
+    'development_provider_new_generation_required', 'development_provider_process_changed',
+    'development_provider_request_conflict', 'development_provider_retirement_required',
+    'development_provider_run_uncertain', 'development_provider_session_required',
+    'development_provider_unconfirmed', 'development_provider_wake_changed',
+    'development_provider_wake_conflict', 'development_provider_wake_required',
+    'development_provider_wake_uncertain', 'development_provider_wake_unconfirmed',
+    'development_publication_conflict', 'development_publication_unconfirmed',
+    'development_registration_already_pinned', 'development_registration_mismatch',
+    'development_registration_required', 'development_renewal_unconfirmed',
+    'development_review_handoff_author_assignment_required', 'development_review_handoff_changed',
+    'development_review_handoff_context_changed', 'development_review_handoff_controller_required',
+    'development_review_handoff_intent_changed', 'development_review_handoff_permission_denied',
+    'development_review_handoff_publication_required', 'development_review_handoff_unavailable',
+    'development_review_handoff_unconfirmed', 'development_stage_requires_review',
+    'development_stop_corrupt', 'development_stop_requested',
+    'development_ticket_frame_invalid_response', 'development_ticket_frame_unavailable',
+    'development_ticket_unavailable', 'development_tool_not_allowed', 'directory_access_refused',
+    'directory_not_exclusive', 'duplicate_document_key', 'executed_disposition_clock_invalid',
+    'executed_disposition_postcondition', 'executed_disposition_predecessor_invalid',
+    'explicit_runtime_abandonment_required', 'failure_notice_unconfirmed', 'family_accept_audit_changed',
+    'family_accept_unconfirmed', 'family_audit_budget_exhausted', 'family_audit_receipt_changed',
+    'family_authorization_changed', 'family_authorization_scope_changed', 'family_bindings_required',
+    'family_budget_overallocated', 'family_busy', 'family_candidate_not_utf8',
+    'family_candidate_too_large', 'family_child_publication_unconfirmed', 'family_child_requires_review',
+    'family_child_scope_changed', 'family_cleanup_unconfirmed', 'family_clock_invalid',
+    'family_configuration_changed', 'family_configuration_conflict', 'family_connection_scope_changed',
+    'family_controller_overlap', 'family_controller_sources_changed',
+    'family_controller_sources_too_large', 'family_corrupt', 'family_deadline',
+    'family_directory_changed', 'family_document_too_large', 'family_execution_profile_mismatch',
+    'family_fence_incomplete', 'family_file_caps_overlap', 'family_finalize_audit_changed',
+    'family_finalize_unconfirmed', 'family_initial_files_changed',
+    'family_input_preparation_is_not_test_proof', 'family_intent_conflict', 'family_lock_changed',
+    'family_lock_required', 'family_lock_unavailable', 'family_manifest_caps_changed',
+    'family_manifest_changed', 'family_not_open', 'family_open_unconfirmed',
+    'family_parent_instruction_too_large', 'family_parent_not_ready',
+    'family_parent_publication_unconfirmed', 'family_parent_requires_review', 'family_private_overlap',
+    'family_qualification_changed', 'family_qualification_scope_invalid', 'family_read_protocol_changed',
+    'family_registrations_required', 'family_revision_conflict', 'family_roles_ambiguous',
+    'family_root_already_delegated', 'family_root_authorization_changed', 'family_root_changed',
+    'family_root_overlap', 'family_root_source_changed', 'family_scope_mismatch',
+    'family_server_plan_changed', 'family_session_overlap', 'family_source_snapshot_changed',
+    'family_stop_corrupt', 'family_stop_requested', 'family_stop_unconfirmed', 'family_stopped',
+    'family_target_conflict', 'family_test_proof_changed', 'family_test_proof_missing',
+    'family_work_identity_changed', 'family_workflow_intent_changed', 'family_workflow_not_review_ready',
+    'fence_busy', 'fence_corrupt', 'fence_directory_unavailable', 'fence_full', 'fence_lock_changed',
+    'fence_wait_context_invalid', 'fence_wait_family_forbidden', 'file_access_refused', 'file_changed',
+    'file_not_text', 'file_not_utf8', 'file_too_large', 'file_type_not_allowed',
+    'final_test_proof_missing', 'final_test_receipt_changed', 'finite_pool_batch_busy',
+    'finite_pool_batch_conflict', 'finite_pool_batch_incomplete', 'finite_pool_batch_invalid',
+    'finite_pool_concrete_workflow_required', 'finite_pool_configuration_changed',
+    'finite_pool_connection_changed', 'finite_pool_jobs_not_distinct', 'finite_pool_path_refused',
+    'finite_pool_preparation_unconfirmed', 'finite_pool_record_directory_closed',
+    'finite_pool_record_limit', 'finite_pool_root_changed', 'finite_pool_source_changed',
+    'finite_pool_stop_unconfirmed', 'finite_pool_stopped', 'finite_pool_tool_changed',
+    'finite_pool_workflow_history_changed', 'git_delivery_base_refused', 'git_delivery_busy',
+    'git_delivery_changes_refused', 'git_delivery_commit_changed', 'git_delivery_controller_required',
+    'git_delivery_distinct_reviewer_required', 'git_delivery_hooks_refused',
+    'git_delivery_index_changed', 'git_delivery_interrupted_or_changed', 'git_delivery_invalid',
+    'git_delivery_material_refused', 'git_delivery_message_refused', 'git_delivery_not_readonly',
+    'git_delivery_not_sealed', 'git_delivery_object_changed', 'git_delivery_path_alias',
+    'git_delivery_payload_changed', 'git_delivery_postimage_changed', 'git_delivery_record_refused',
+    'git_delivery_request_conflict', 'git_delivery_review_changed',
+    'git_delivery_review_interrupted_or_changed', 'git_delivery_review_selection_changed',
+    'git_delivery_root_changed', 'git_delivery_roots_overlap', 'git_delivery_scope_changed',
+    'git_delivery_snapshot_changed', 'git_delivery_test_evidence_required',
+    'git_delivery_test_evidence_unconfirmed', 'git_delivery_tree_changed', 'git_delivery_tree_refused',
+    'git_delivery_tree_too_large', 'git_delivery_undeclared_change', 'git_delivery_workspace_not_ready',
+    'git_publication_authentication_changed', 'git_publication_authentication_location_refused',
+    'git_publication_authentication_unavailable', 'git_publication_authority_changed',
+    'git_publication_authority_refused', 'git_publication_authority_required',
+    'git_publication_authority_unconfirmed', 'git_publication_base_changed',
+    'git_publication_base_refused', 'git_publication_branch_occupied',
+    'git_publication_branch_unconfirmed', 'git_publication_command_unconfirmed',
+    'git_publication_controller_required', 'git_publication_copy_retained',
+    'git_publication_create_retained', 'git_publication_destination_refused',
+    'git_publication_input_changed', 'git_publication_invalid', 'git_publication_pin_changed',
+    'git_publication_pr_ambiguous', 'git_publication_pr_mismatch', 'git_publication_push_retained',
+    'git_publication_readonly_view', 'git_publication_record_changed', 'git_publication_record_refused',
+    'git_publication_remote_invalid', 'git_publication_remote_unavailable',
+    'git_publication_repository_unavailable', 'git_publication_request_conflict',
+    'git_publication_roots_overlap', 'git_publication_scope_changed', 'git_publication_sha_refused',
+    'git_publication_text_refused', 'git_publication_timeout_refused',
+    'git_publication_tool_location_refused', 'git_publication_tool_mismatch',
+    'git_publication_tool_unavailable', 'git_publication_transport_changed',
+    'git_workspace_base_refused', 'git_workspace_busy', 'git_workspace_checkout_changed',
+    'git_workspace_command_failed', 'git_workspace_command_timeout', 'git_workspace_copy_layout_refused',
+    'git_workspace_directory_refused', 'git_workspace_file_changed', 'git_workspace_file_refused',
+    'git_workspace_git_refused', 'git_workspace_grant_refused',
+    'git_workspace_interrupted_requires_review', 'git_workspace_invalid', 'git_workspace_not_ready',
+    'git_workspace_operation_refused', 'git_workspace_output_limit', 'git_workspace_owner_refused',
+    'git_workspace_path_refused', 'git_workspace_pin_changed', 'git_workspace_record_refused',
+    'git_workspace_request_conflict', 'git_workspace_roots_overlap', 'git_workspace_scope_refused',
+    'git_workspace_source_layout_refused', 'git_workspace_source_too_large',
+    'git_workspace_timeout_refused', 'git_workspace_tree_refused', 'git_workspace_tree_too_large',
+    'guard', 'guard_required', 'history', 'host_authorization_changed', 'host_stopped',
+    'human_stop_required', 'idempotency_conflict', 'identifier', 'identity', 'immutable_queue_identity',
+    'insecure_connection_file', 'insecure_fence_ancestor', 'insecure_fence_directory',
+    'insecure_journal_directory', 'insecure_journal_file', 'insecure_policy_file',
+    'insecure_private_directory', 'insecure_private_file', 'insecure_runtime_directory',
+    'insecure_state_directory', 'insecure_state_file', 'instance', 'interruption_state_conflict',
+    'invalid', 'invalid_actions', 'invalid_arguments', 'invalid_backend_executable',
+    'invalid_backend_nonlaunch_receipt', 'invalid_board_origin', 'invalid_budget',
+    'invalid_configuration', 'invalid_connection', 'invalid_context_hash', 'invalid_context_limits',
+    'invalid_context_pagination', 'invalid_context_source', 'invalid_continuation_configuration',
+    'invalid_controller', 'invalid_decision', 'invalid_development_controller',
+    'invalid_development_publication', 'invalid_directory', 'invalid_document', 'invalid_existing_only',
+    'invalid_failure_notice', 'invalid_family_budget', 'invalid_family_configuration',
+    'invalid_family_directory', 'invalid_family_files', 'invalid_family_plan',
+    'invalid_family_workflows', 'invalid_fence_directory', 'invalid_files', 'invalid_final_summary',
+    'invalid_journal_file', 'invalid_linux_test_protocol', 'invalid_lock_mode', 'invalid_manifest',
+    'invalid_operation_id', 'invalid_patch', 'invalid_path', 'invalid_payload', 'invalid_planner_action',
+    'invalid_planner_budget', 'invalid_planner_budget_charge', 'invalid_planner_clock',
+    'invalid_planner_context', 'invalid_planner_controller', 'invalid_planner_instruction',
+    'invalid_planner_parent', 'invalid_planner_reasoning_effort', 'invalid_policy', 'invalid_process_id',
+    'invalid_prompt', 'invalid_resolution', 'invalid_response', 'invalid_result',
+    'invalid_reviewer_registration', 'invalid_revision', 'invalid_routing_configuration',
+    'invalid_runtime_identity', 'invalid_runtime_phase', 'invalid_runtime_provider', 'invalid_scope',
+    'invalid_session', 'invalid_session_id', 'invalid_session_or_timeout', 'invalid_sha256',
+    'invalid_signal_canary', 'invalid_stage', 'invalid_stage_transition', 'invalid_state_file',
+    'invalid_task_class', 'invalid_test_admission', 'invalid_test_budget', 'invalid_test_name',
+    'invalid_test_plan', 'invalid_test_receipt', 'invalid_test_request', 'invalid_tests',
+    'invalid_timeout', 'invalid_transport_capabilities', 'invalid_trusted_script_pin',
+    'invalid_work_paths', 'invalid_worker_absence', 'journal_access_failed', 'journal_closed',
+    'journal_corrupt', 'journal_full', 'journal_inside_workspace', 'journal_lock_changed',
+    'journal_lock_lease_invalid', 'journal_lock_unavailable', 'journal_locked', 'journal_unavailable',
+    'legacy_mutation', 'linked_work_scope_mismatch', 'linux_authorization_expired', 'linux_backend_busy',
+    'linux_backend_identity_changed', 'linux_backend_lock_changed', 'linux_capture_count_changed',
+    'linux_execution_attempt_required', 'linux_execution_context_expired',
+    'linux_execution_context_mismatch', 'linux_execution_context_required',
+    'linux_execution_directory_overlap', 'linux_execution_environment_changed',
+    'linux_execution_identity_cleanup_required', 'linux_execution_interpreter_changed',
+    'linux_execution_invalid', 'linux_execution_plan_changed', 'linux_execution_plan_limit',
+    'linux_execution_proof_mismatch', 'linux_execution_runtime_limit', 'linux_execution_script_changed',
+    'linux_execution_source_changed', 'linux_execution_state_changed', 'linux_execution_step_changed',
+    'linux_execution_unqualified', 'linux_identity_ack_missing', 'linux_input_admission_invalid',
+    'linux_input_attempt_not_held', 'linux_input_attempt_not_reusable', 'linux_input_boundary_order',
+    'linux_input_capture_permit_invalid', 'linux_input_directory_changed',
+    'linux_input_fresh_directory_required', 'linux_input_fresh_journal_required',
+    'linux_input_only_journal', 'linux_input_payload_changed', 'linux_input_plan_invalid',
+    'linux_input_reconciliation_forbidden', 'linux_input_state_changed', 'linux_job_already_attempted',
+    'linux_kernel_guard_failed', 'linux_namespace_identity_invalid', 'linux_namespace_invalid',
+    'linux_native_cleanup_unconfirmed', 'linux_native_receipt_missing', 'linux_output_limit',
+    'linux_planner_attempt_not_reusable', 'linux_planner_canary_created_file',
+    'linux_planner_canary_output_invalid', 'linux_planner_cli_version_changed',
+    'linux_planner_cli_version_invalid', 'linux_planner_environment_unconfirmed',
+    'linux_planner_executable_unconfirmed', 'linux_planner_fresh_directory_required',
+    'linux_planner_native_policy_unqualified', 'linux_planner_plan_too_large',
+    'linux_planner_policy_busy', 'linux_planner_policy_changed', 'linux_planner_policy_closed',
+    'linux_planner_policy_scope_mismatch', 'linux_planner_policy_unavailable',
+    'linux_planner_policy_unqualified', 'linux_planner_qualification_cleanup_unconfirmed',
+    'linux_planner_sources_unconfirmed', 'linux_pool_backend_unqualified',
+    'linux_pool_concrete_handles_required', 'linux_pool_driver_mismatch',
+    'linux_pool_environment_changed', 'linux_pool_explicit_budgets_required',
+    'linux_pool_inputs_invalid', 'linux_pool_job_changed', 'linux_pool_job_not_queued',
+    'linux_pool_preparation_busy', 'linux_pool_preparation_changed', 'linux_pool_preparation_incomplete',
+    'linux_pool_preparation_limit', 'linux_pool_registration_changed', 'linux_pool_request_conflict',
+    'linux_pool_selection_changed', 'linux_pool_source_changed', 'linux_pool_ticket_not_ready',
+    'linux_pool_verifier_changed', 'linux_pool_verifier_invalid',
+    'linux_qualification_already_attempted', 'linux_qualification_case_invalid',
+    'linux_qualification_cleanup_unconfirmed', 'linux_qualification_concrete_backend_required',
+    'linux_qualification_corruption_not_refused', 'linux_qualification_document_changed',
+    'linux_qualification_driver_refused', 'linux_qualification_environment_changed',
+    'linux_qualification_eof', 'linux_qualification_evidence_changed',
+    'linux_qualification_fault_message_unconfirmed', 'linux_qualification_fault_not_observed',
+    'linux_qualification_files_changed', 'linux_qualification_guards_unconfirmed',
+    'linux_qualification_job_changed', 'linux_qualification_matrix_expired',
+    'linux_qualification_native_changed', 'linux_qualification_native_missing',
+    'linux_qualification_observer_init_unconfirmed', 'linux_qualification_observer_required',
+    'linux_qualification_origin_changed', 'linux_qualification_outcome_changed',
+    'linux_qualification_process_unconfirmed', 'linux_qualification_protocol_limit',
+    'linux_qualification_protocol_timeout', 'linux_qualification_protocol_unconfirmed',
+    'linux_qualification_ready_state_changed', 'linux_qualification_real_host_required',
+    'linux_qualification_replay_changed_job', 'linux_qualification_replay_not_refused',
+    'linux_qualification_request_changed', 'linux_qualification_source_ack_changed',
+    'linux_qualification_source_revoked', 'linux_qualification_source_unconfirmed',
+    'linux_qualification_threads_unconfirmed', 'linux_qualification_unconfirmed',
+    'linux_qualification_unexpected_native_receipt', 'linux_result_boundary_invalid',
+    'linux_review_binding_unconfirmed', 'linux_runtime_changed', 'linux_runtime_inventory_limit',
+    'linux_script_wall_expired', 'linux_source_ack_missing', 'linux_source_boundary_missing',
+    'linux_source_boundary_replayed', 'linux_source_boundary_unconfirmed', 'linux_source_window_invalid',
+    'linux_startup_expired', 'linux_supervisor_changed', 'linux_supervisor_cleanup_unconfirmed',
+    'linux_supervisor_lost', 'local_intent_required', 'local_runtime_reason_forbidden', 'lock',
+    'managed_protocol_invalid', 'managed_registration_forbidden', 'managed_required', 'manifest_changed',
+    'manifest_too_large', 'message_context_changed', 'message_context_guard_required',
+    'model_not_allowed', 'model_policy_required', 'model_unavailable', 'native_reconciliation_required',
+    'native_test_platform_unqualified', 'no_interruption', 'operation_id_conflict',
+    'operation_not_found', 'original_proposal_required', 'outbox', 'outbox_changed',
+    'override_model_required', 'parent_changed', 'patch_hash_conflict', 'patch_reconciliation_uncertain',
+    'patch_write_uncertain', 'path_not_allowed', 'pending', 'permission_revoked', 'plan',
+    'planner_authorization_changed', 'planner_backend_policy_mismatch', 'planner_boundary_overlap',
+    'planner_busy', 'planner_cli_version_changed', 'planner_cli_version_invalid',
+    'planner_clock_changed', 'planner_controller_stopped', 'planner_directory_changed',
+    'planner_disabled', 'planner_effect_requires_review', 'planner_fence_overlap',
+    'planner_input_only_journal_forbidden', 'planner_journal_corrupt', 'planner_journal_full',
+    'planner_linux_pair_mismatch', 'planner_lock_changed', 'planner_lock_unavailable',
+    'planner_model_receipt_unavailable', 'planner_model_requires_review',
+    'planner_native_policy_unqualified', 'planner_parent_operation_required',
+    'planner_platform_unqualified', 'planner_policy_busy', 'planner_policy_changed',
+    'planner_policy_closed', 'planner_policy_scope_mismatch', 'planner_policy_unavailable',
+    'planner_policy_unqualified', 'planner_prompt_too_large',
+    'planner_qualification_cleanup_unconfirmed', 'planner_reasoning_effort_changed',
+    'planner_reconciliation_required', 'planner_recovered_effect_requires_review',
+    'planner_response_too_large', 'planner_runtime_scope_changed', 'planner_runtime_stopped',
+    'planner_scope_mismatch', 'planner_stop_corrupt', 'planner_stop_requested',
+    'planner_supervised_backend_required', 'planner_tool_finish_unconfirmed',
+    'planner_tool_receipt_unavailable', 'planner_wall_budget_exhausted', 'planner_workspace_changed',
+    'planner_workspace_invalid', 'planner_workspace_not_empty_or_private', 'planner_workspace_overlap',
+    'policy_changed', 'policy_scope_mismatch', 'policy_too_large', 'policy_unavailable',
+    'preferred_provider_unsupported', 'private_checkpoint_alternative_key_refused',
+    'private_checkpoint_base_changed', 'private_checkpoint_busy',
+    'private_checkpoint_configuration_changed', 'private_checkpoint_configuration_refused',
+    'private_checkpoint_controller_required', 'private_checkpoint_head_changed',
+    'private_checkpoint_head_or_index_changed', 'private_checkpoint_index_changed',
+    'private_checkpoint_interrupted_requires_review', 'private_checkpoint_invalid',
+    'private_checkpoint_lock_missing_or_changed', 'private_checkpoint_mode_changed',
+    'private_checkpoint_object_changed', 'private_checkpoint_parent_changed',
+    'private_checkpoint_parent_required', 'private_checkpoint_payload_changed',
+    'private_checkpoint_postimage_changed', 'private_checkpoint_producer_unavailable',
+    'private_checkpoint_proof_changed', 'private_checkpoint_proof_required',
+    'private_checkpoint_record_changed', 'private_checkpoint_ref_changed',
+    'private_checkpoint_request_conflict', 'private_checkpoint_root_changed',
+    'private_checkpoint_roots_overlap', 'private_checkpoint_scope_changed',
+    'private_checkpoint_source_changed', 'private_checkpoint_tree_changed',
+    'private_checkpoint_undeclared_change', 'private_checkpoint_workspace_changed',
+    'private_directory_changed', 'private_directory_unavailable', 'private_document_changed',
+    'private_document_too_large', 'private_file_exists', 'private_path', 'private_read_failed',
+    'private_write_failed', 'process_conflict', 'process_state_unknown', 'process_still_running',
+    'proof', 'protocol_mismatch', 'provider_disposition_requires_review', 'provider_not_supported',
+    'read_bytes_budget_exhausted', 'reasoning_not_allowed', 'reasoning_not_supported',
+    'receipt_conflict', 'reconciliation_required', 'redirect_blocked', 'request_configuration_conflict',
+    'request_conflict', 'requires_stopped', 'resolution_conflict', 'response_too_large',
+    'result_not_ready', 'result_too_large', 'review_authorization_requires_reconciliation',
+    'review_controller_guard_required', 'review_controller_tool_not_allowed',
+    'review_lifecycle_activity_unconfirmed', 'review_lifecycle_busy_or_incomplete',
+    'review_lifecycle_claim_unconfirmed', 'review_lifecycle_completed_review_required',
+    'review_lifecycle_concrete_handles_required', 'review_lifecycle_connection_changed',
+    'review_lifecycle_context_changed', 'review_lifecycle_driver_changed',
+    'review_lifecycle_intent_changed', 'review_lifecycle_invalid_request',
+    'review_lifecycle_journal_pending', 'review_lifecycle_opinion_changed',
+    'review_lifecycle_opinion_incomplete', 'review_lifecycle_permission_denied',
+    'review_lifecycle_preparation_unconfirmed', 'review_lifecycle_publication_event_unconfirmed',
+    'review_lifecycle_publication_unconfirmed', 'review_lifecycle_queued_job_required',
+    'review_lifecycle_receipt_changed', 'review_lifecycle_record_changed',
+    'review_lifecycle_record_limit', 'review_lifecycle_roots_changed', 'review_lifecycle_roots_overlap',
+    'review_lifecycle_runtime_unconfirmed', 'review_lifecycle_source_changed',
+    'review_lifecycle_source_ticket_changed', 'review_lifecycle_stop_record_unconfirmed',
+    'review_lifecycle_stopped', 'review_lifecycle_ticket_changed', 'review_lifecycle_unconfirmed',
+    'review_pool_cleanup_unconfirmed', 'review_pool_concrete_source_required',
+    'review_pool_connection_changed', 'review_pool_operation_changed', 'review_pool_opinion_incomplete',
+    'review_pool_policy_changed', 'review_pool_registration_required', 'review_pool_resources_required',
+    'review_pool_runtime_scope_changed', 'review_pool_runtime_unconfirmed',
+    'review_pool_selection_changed', 'review_pool_selection_limit',
+    'review_pool_source_attachment_required', 'review_pool_source_changed',
+    'review_pool_source_incomplete', 'review_pool_stopped', 'review_publication_only',
+    'reviewer_registration_required', 'reviewer_tool_not_allowed', 'revision', 'revision_conflict',
+    'rpc_rejected', 'runtime_abandonment_conflict', 'runtime_already_abandoned',
+    'runtime_already_finished', 'runtime_already_refused', 'runtime_cached_turn_unregistered',
+    'runtime_capacity_exhausted', 'runtime_cleanup_unconfirmed', 'runtime_configuration_conflict',
+    'runtime_development_scope_mismatch', 'runtime_existing_turn_requires_review',
+    'runtime_finish_conflict', 'runtime_finish_requires_review', 'runtime_finish_unconfirmed',
+    'runtime_identity_changed', 'runtime_journal_corrupt', 'runtime_model_required',
+    'runtime_not_admitted', 'runtime_operation_not_found', 'runtime_receipt_invalid',
+    'runtime_refusal_identity_unconfirmed', 'runtime_refusal_invalid', 'runtime_refusal_result_conflict',
+    'runtime_registration_forbidden', 'runtime_reservation_requires_review',
+    'runtime_reservation_unconfirmed', 'runtime_result_invalid', 'runtime_scope_mismatch',
+    'runtime_seal_invalid', 'runtime_start_requires_review', 'runtime_start_unconfirmed',
+    'runtime_turn_requires_review', 'schema', 'scope_busy', 'scope_configuration_conflict',
+    'scope_has_unfinished_operation', 'scope_lock_required', 'scope_lock_unavailable',
+    'secret_content_refused', 'selection_not_authorized', 'selection_permission_denied',
+    'selection_proof_mismatch', 'selection_unconfirmed', 'session_conflict', 'session_mismatch',
+    'session_not_recorded', 'session_scope_conflict', 'signal_canary_unavailable', 'slot_changed',
+    'source', 'stage_cleanup_requires_review', 'state', 'state_schema_invalid', 'state_sidecar_present',
+    'state_unavailable', 'store_closed', 'supervisor_authorization_expired',
+    'supervisor_boundary_unknown', 'supervisor_clock_changed', 'supervisor_clock_unavailable',
+    'supervisor_control_invalid', 'supervisor_control_write_failed', 'supervisor_controller_changed',
+    'supervisor_controller_unavailable', 'supervisor_journal_corrupt', 'supervisor_workspace_overlap',
+    'team_manager_cycle_refused', 'team_role_connection_changed', 'team_role_context_changed',
+    'team_role_grants_changed', 'team_role_inputs_changed', 'team_role_inputs_too_large',
+    'team_role_interrupted', 'team_role_invalid', 'team_role_output_invalid', 'team_role_policy_changed',
+    'team_role_prompt_too_large', 'team_role_registry_changed', 'team_role_result_unconfirmed',
+    'team_role_selection_conflict', 'team_role_stopped', 'team_writer_concrete_source_required',
+    'team_writer_reference_changed', 'team_writer_review_incomplete', 'team_writer_source_changed',
+    'team_writer_source_thread_required', 'test_admission_requires_review', 'test_backend_access_failed',
+    'test_backend_busy', 'test_backend_journal_corrupt', 'test_backend_journal_full',
+    'test_backend_lock_changed', 'test_backend_lock_unavailable', 'test_backend_unqualified',
+    'test_not_allowed', 'test_outcome_uncertain', 'test_plan_changed', 'test_plan_scope_mismatch',
+    'test_plan_too_large', 'tests_budget_exhausted', 'timeout', 'tls_unavailable', 'tool_not_allowed',
+    'tool_rejected', 'transaction', 'transaction_active', 'trusted_script_access_refused',
+    'trusted_script_changed', 'trusted_script_directory_refused', 'trusted_script_in_patch_caps',
+    'turn_not_found', 'turn_not_running', 'turn_still_running', 'unsettled',
+    'unsupported_journal_version', 'unsupported_platform', 'unsupported_policy_version',
+    'unsupported_runtime_journal', 'unsupported_state_version', 'usage_connection_mismatch', 'work_busy',
+    'work_closed', 'work_identity_conflict', 'work_lock_required', 'work_lock_unavailable',
+    'work_locked', 'work_not_found', 'worker_not_found', 'worker_not_resolved', 'worker_not_successful',
+    'worker_proof_mismatch', 'worker_proof_required', 'workspace_identity_changed',
+    'workspace_not_exclusive', 'write_set',
+})|FAILURE_NOTICE_CODES
+TARGET_FAILURE_STAGES=frozenset({'unknown','target_entry','target_binding','cursor_read',
+    'historical_review','previous_generation_open','previous_state_check','provider_availability',
+    'next_generation_intent','next_generation_create','initial_preparation','previous_retirement',
+    'next_preparation','worker_open','task_open','cycle_run','provider_wake','cycle_retirement',
+    'aggregate_publication','result_checkpoint','cursor_commit'})
+_TARGET_OBSERVATION=ContextVar('continuation_target_failure_observation',default=None)
+_CODE_ERROR_TYPES=((DevelopmentError,'development_error'),(ContinuationError,'continuation_error'),
+    (PlannerPolicyError,'planner_policy_error'),(BoardReadError,'board_read_error'),
+    (JournalError,'journal_error'),(StoreError,'store_error'),(ContextError,'context_error'),
+    (RuntimeControlError,'runtime_control_error'),(RuntimeAdmissionRefused,'runtime_admission_refused'))
+_FIXED_ERROR_TYPES=((PoolError,'pool_error'),(PermissionError,'permission_denied'),
+    (FileNotFoundError,'file_not_found'),(FileExistsError,'file_exists'),
+    (OSError,'os_error'),(NotADirectoryError,'os_error'),(IsADirectoryError,'os_error'),
+    (BlockingIOError,'os_error'),(InterruptedError,'os_error'),(BrokenPipeError,'os_error'),
+    (TimeoutError,'os_error'),(ConnectionError,'os_error'),(ConnectionAbortedError,'os_error'),
+    (ConnectionRefusedError,'os_error'),(ConnectionResetError,'os_error'),
+    (sqlite3.Error,'sqlite_error'),(sqlite3.DatabaseError,'sqlite_error'),
+    (sqlite3.OperationalError,'sqlite_error'),(sqlite3.IntegrityError,'sqlite_error'),
+    (sqlite3.ProgrammingError,'sqlite_error'),(sqlite3.InterfaceError,'sqlite_error'),
+    (sqlite3.DataError,'sqlite_error'),(sqlite3.InternalError,'sqlite_error'),
+    (sqlite3.NotSupportedError,'sqlite_error'),(KeyError,'missing_key'),
+    (TypeError,'invalid_type'),(ValueError,'invalid_value'),(RuntimeError,'runtime_error'))
+
+
+def _failure_uuid(value):
+    if type(value) is not str:return None
+    parts=value.split('-')
+    return value if tuple(map(len,parts))==(8,4,4,4,12) and all(
+        char in '0123456789abcdef' for part in parts for char in part) else None
+
+
+class _TargetObservation:
+    """Transient correlation only; never a permit or retained SDK handle."""
+    __slots__=('logical_task_id','stage','generation_id','operation_id')
+    def __init__(self,logical_task_id):
+        self.logical_task_id=_failure_uuid(logical_task_id);self.stage='target_entry'
+        self.generation_id=None;self.operation_id=None
+
+
+def _observe_stage(stage):
+    observation=_TARGET_OBSERVATION.get()
+    if type(observation) is _TargetObservation:
+        observation.stage=stage if type(stage) is str and stage in TARGET_FAILURE_STAGES else 'unknown'
+
+
+def _observe_identity(generation_id,operation_id=None):
+    observation=_TARGET_OBSERVATION.get()
+    if type(observation) is _TargetObservation:
+        observation.generation_id=_failure_uuid(generation_id)
+        observation.operation_id=_failure_uuid(operation_id)
+
+
+def _target_failure(error,observation):
+    """No arbitrary exception attributes, text, args or paths enter stdout."""
+    category,code='unknown_error','unrecognized_code'
+    for cls,label in _CODE_ERROR_TYPES:
+        if type(error) is cls:
+            category=label;candidate=vars(error).get('code')
+            if type(candidate) is str and candidate in TARGET_FAILURE_CODES:code=candidate
+            break
+    else:
+        for cls,label in _FIXED_ERROR_TYPES:
+            if type(error) is cls:
+                category=label;code=label
+                break
+    value={'schema':'continuation-target-failure-v1','stage':'unknown','category':category,'code':code,
+        'logical_task_id':None,'generation_id':None,'operation_id':None}
+    if type(observation) is _TargetObservation:
+        value.update(stage=observation.stage if type(observation.stage) is str and
+            observation.stage in TARGET_FAILURE_STAGES else 'unknown',
+            **{key:_failure_uuid(getattr(observation,key)) for key in
+               ('logical_task_id','generation_id','operation_id')})
+    if type(error) is DevelopmentError:
+        qualification=qualification_diagnostic(vars(error).get('_linux_backend_qualification_diagnostic'))
+        if qualification is not None:value['qualification']=qualification
+    return value
 
 
 def fail(code='continuation_pool_target_failed'):raise DevelopmentError(code)
@@ -340,16 +863,21 @@ class ContinuationPoolService:
                 def advance(target):
                     # Every concrete handle and callback is constructed here,
                     # not in the owner/scheduler thread.
+                    observation=_TargetObservation(target['logical_task_id'])
+                    token=_TARGET_OBSERVATION.set(observation)
                     try:results[target['name']]=self._target(owned.path,target,jobs[target['name']],control)
                     except Exception as error:
                         code=vars(error).get('code') if type(error) is DevelopmentError else None
-                        results[target['name']]=control.decorate(target['name'],self._projection(target,
-                            reason=code if code in REASONS else 'continuation_pool_target_failed'))
+                        projection=self._projection(target,reason=code if type(code) is str and code in REASONS
+                            else 'continuation_pool_target_failed')
+                        projection['failure']=_target_failure(error,observation)
+                        results[target['name']]=control.decorate(target['name'],projection)
                     except BaseException:
                         # A thread's abrupt interruption is not a clean or
                         # never-started task. Do not let threading print it.
                         control.stop_failed=True;control.stop()
                         results[target['name']]=self._projection(target,reason='continuation_pool_cleanup_unknown')
+                    finally:_TARGET_OBSERVATION.reset(token)
                 try:
                     while index<len(targets) or threads:
                         held()
@@ -388,6 +916,7 @@ class ContinuationPoolService:
         finally:self._mutex.release()
 
     def _target(self,root,target,job,control):
+        _observe_stage('target_binding')
         control.guard();self._pins(full=True)
         key=digest(canonical({'owner_id':self.owner_id,'logical_task_id':target['logical_task_id']}))
         directory=root/key;binding=self._binding(target,job)
@@ -401,7 +930,9 @@ class ContinuationPoolService:
                 _write(private,'cursor.json',cursor)
             else:
                 require(_read(private,'binding.json')==binding,'continuation_pool_binding_changed')
+                _observe_stage('cursor_read')
                 cursor=_read(private,'cursor.json')
+            _observe_stage('cursor_read')
             require(type(cursor) is dict and set(cursor) in ({'schema','phase','generation','result','not_before'},
                 {'schema','phase','generation','result','not_before','wake_generation'},
                 {'schema','phase','generation','result','not_before','review_receipt'})
@@ -414,6 +945,7 @@ class ContinuationPoolService:
                     and cursor['result'].get('phase')=='paused_provider','continuation_pool_binding_changed')
             if cursor['phase']=='pending':return self._projection(target,reason='continuation_pool_pending')
             if 'review_receipt' in cursor:
+                _observe_stage('historical_review')
                 require(cursor['generation'] is not None and type(cursor['result']) is dict
                     and cursor['result'].get('phase')=='independent_review_published','continuation_pool_binding_changed')
                 with ContinuationJournal.open(directory/'logical') as journal:
@@ -444,7 +976,10 @@ class ContinuationPoolService:
             with ExitStack() as resources:
                 old=None
                 if cursor['generation'] is not None:
+                    _observe_stage('previous_generation_open')
+                    _observe_identity(cursor['generation'])
                     old=_Generation.open(self,directory,target,job,cursor['generation'],control,resources)
+                    _observe_stage('previous_state_check')
                     state=old.task.snapshot()
                     if state['state']['phase'] not in ('paused_cycle','paused_provider'):
                         phase=state['state']['phase']
@@ -462,16 +997,20 @@ class ContinuationPoolService:
                         and cursor['result']['operation_id']==old.operation and cursor['result']['phase']==state['state']['phase'],
                         'continuation_pool_binding_changed')
                     require(old.provider.status(old.operation)['status']==state['state']['phase'])
+                    _observe_stage('provider_availability')
                     if state['state']['phase']=='paused_provider' and not old.can_wake():
                         waiting=time.time()+self.loaded['configuration']['provider_backoff_seconds']
                         _write(private,'cursor.json',{**cursor,'not_before':waiting},replace=True)
                         return self._projection(target,phase='paused_provider',operation_id=old.operation,
                             state_sha256=state['state_sha256'],not_before=waiting)
                 generation_id=waiting_generation or str(uuid.uuid4())
+                _observe_stage('next_generation_intent')
+                _observe_identity(generation_id)
                 # Persist BEFORE all preparation, registrations and model calls.
                 pending={key:value for key,value in cursor.items() if key!='wake_generation'}
                 pending.update(phase='pending',generation=generation_id,result=None,not_before=None)
                 _write(private,'cursor.json',pending,replace=True)
+                _observe_stage('next_generation_create')
                 if waiting_generation is None:
                     new=_Generation.create(self,directory,target,job,generation_id,control,resources,old=old)
                 else:
@@ -479,15 +1018,20 @@ class ContinuationPoolService:
                     new=_Generation.open(self,directory,target,job,generation_id,control,resources,candidate_for=old)
                 try:
                     if old is None:
-                        new.prepare();new.open_worker();new.open_task(create=True)
+                        _observe_stage('initial_preparation');new.prepare()
+                        _observe_stage('worker_open');new.open_worker()
+                        _observe_stage('task_open');new.open_task(create=True)
+                        _observe_stage('cycle_run')
                         result=new.provider.run_checkpoint(new.operation,request_id='continuation-'+new.operation,
                             after_actions=target['checkpoint_after_actions'])
                     elif old.task.snapshot()['state']['phase']=='paused_provider':
                         # Atomic provider wake owns preparation/admission. There is
                         # deliberately no WorkerPool dispatch on either side.
                         if waiting_generation is None:
-                            new.open_worker(unprepared=True);new.open_task(create=False,old=old)
+                            _observe_stage('worker_open');new.open_worker(unprepared=True)
+                            _observe_stage('task_open');new.open_task(create=False,old=old)
                         paused=old.task.snapshot()
+                        _observe_stage('provider_wake')
                         result=old.provider.wake(old.operation,next_controller=new.provider,preparer=new.preparer,
                             next_operation_id=new.operation,parameters=new.arguments,
                             request_id='continuation-'+new.operation,after_actions=target['checkpoint_after_actions'])
@@ -506,18 +1050,27 @@ class ContinuationPoolService:
                                 'result':projection,'not_before':not_before},replace=True)
                             return projection
                     else:
+                        _observe_stage('previous_retirement')
+                        _observe_identity(old.generation,old.operation)
                         retired=old.provider.maintenance.retire_checkpoint(old.operation)
                         require(retired['phase']=='retired')
+                        _observe_stage('next_preparation')
+                        _observe_identity(new.generation,new.operation)
                         old.provider.maintenance.prepare_next(old.operation,preparer=new.preparer,
                             next_operation_id=new.operation,parameters=new.arguments)
-                        new.open_worker();new.open_task(create=False,old=old)
+                        _observe_stage('worker_open');new.open_worker()
+                        _observe_stage('task_open');new.open_task(create=False,old=old)
+                        _observe_stage('cycle_run')
                         result=new.provider.run_checkpoint(new.operation,request_id='continuation-'+new.operation,
                             parent_checkpoint_id=checkpoint_id_for(old.operation),after_actions=target['checkpoint_after_actions'])
                     control.guard()
                     if result['status']=='paused_cycle':
+                        _observe_stage('cycle_retirement')
                         require(new.provider.maintenance.retire_checkpoint(new.operation)['phase']=='retired')
                     elif result['status']=='review_ready':
+                        _observe_stage('aggregate_publication')
                         result=new.publish()
+                    _observe_stage('result_checkpoint')
                     snapshot=new.task.snapshot();phase=result['status']
                     if phase=='needs_you':
                         new.human_handoff();snapshot=new.task.snapshot()
@@ -535,6 +1088,7 @@ class ContinuationPoolService:
                         completed['review_receipt']=result['review_receipt']
                         projection.update(review_operation_id=result['review_receipt']['review_operation_id'],
                             review_receipt_sha256=digest(canonical(result['review_receipt'])),accepted=False,historical=False)
+                    _observe_stage('cursor_commit')
                     _write(private,'cursor.json',completed,replace=True)
                     return projection
                 except Exception as error:
@@ -719,6 +1273,7 @@ class _Generation:
         return result
     def _setup(self,service,directory,target,job,generation,control,resources):
         uuid_value(generation)
+        _observe_identity(generation)
         self.service,self.target,self.job,self.control,self.resources=service,target,job,control,resources
         self.target_directory=directory;self.directory=directory/'generations'/generation
         self.generation=generation;self.worker=None;self.task=None;self.provider=None;self._resources_retained=False
@@ -756,6 +1311,7 @@ class _Generation:
                 # grants nothing; clean Core/checkpoint/retirement + Runtime
                 # proofs must still pass before a NEW queued generation.
         self.operation=self.submitted['id']
+        _observe_identity(self.generation,self.operation)
         self.context=self.pool._context(self.submitted if create else deepcopy(current),create=create)
         if not create:
             for kind,name in (('work','work-journal.sqlite3'),('runs','runs.sqlite3'),('runtime','runtime.sqlite3')):

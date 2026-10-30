@@ -52,6 +52,42 @@ NATIVE_REASONS = frozenset({'completed','script_failed','linux_authorization_exp
     'linux_output_limit','linux_native_unconfirmed'})
 
 
+FAULT_OPERATIONS = frozenset({'observer_init','first_message','base_proof','job_state','ready_state','driver_refused'})
+DRIVER_STAGES = frozenset({'backend_open','host','packet_binding','run_case','fault_boundary','ack_wait','ack_validate'})
+# Only literal public producer codes can cross the child/parent boundary.
+FAULT_ERROR_CODES = CONTROL_CODES | frozenset({'linux_execution_invalid','linux_execution_plan_changed',
+    'linux_execution_environment_changed','linux_execution_source_changed','linux_execution_script_changed',
+    'linux_execution_interpreter_changed','linux_backend_identity_changed','linux_qualification_real_host_required',
+    'linux_qualification_environment_changed','linux_qualification_unconfirmed','linux_qualification_request_changed',
+    'linux_qualification_job_changed','linux_qualification_observer_required','linux_qualification_protocol_limit',
+    'linux_qualification_protocol_unconfirmed','linux_qualification_protocol_timeout','linux_supervisor_cleanup_unconfirmed',
+    'linux_supervisor_lost','linux_native_receipt_missing','linux_qualification_fault_not_observed',
+    'linux_qualification_process_unconfirmed','linux_qualification_threads_unconfirmed',
+    'linux_qualification_observer_init_unconfirmed','linux_qualification_fault_message_unconfirmed',
+    'linux_qualification_ready_state_changed','linux_qualification_driver_refused'})
+
+
+def _fault_diagnostic(value):
+    if type(value) is not dict:return None
+    value=dict(value)
+    if (any(type(key) is not str for key in value)
+            or set(value)!={'operation','driver_stage','bucket','code'}
+            or type(value['operation']) is not str or value['operation'] not in FAULT_OPERATIONS
+            or not (value['driver_stage'] is None or type(value['driver_stage']) is str and value['driver_stage'] in DRIVER_STAGES)
+            or (value['operation']=='driver_refused') != (value['driver_stage'] is not None)
+            or not (value['bucket'] is None or type(value['bucket']) is str and value['bucket'] in {'development','os_error','other'})
+            or not (value['code'] is None or type(value['code']) is str and value['code'] in FAULT_ERROR_CODES)
+            or value['code'] is not None and value['bucket']!='development'
+            or value['operation']=='driver_refused' and value['bucket'] is None):return None
+    return value
+
+
+def _fault_detail(operation,error=None,*,driver_stage=None):
+    return {'operation':operation,'driver_stage':driver_stage,
+        'bucket':None if error is None else 'development' if type(error) is DevelopmentError else 'os_error' if isinstance(error,OSError) else 'other',
+        'code':error.code if type(error) is DevelopmentError and type(error.code) is str and error.code in FAULT_ERROR_CODES else None}
+
+
 def qualification_diagnostic(value):
     """Closed copied observations only; never a proof, path, packet or exception text."""
     try:
@@ -59,7 +95,9 @@ def qualification_diagnostic(value):
         value=dict(value)
         if (any(type(key) is not str for key in value)
                 or set(value) not in ({'case','stage','phase','controller','native'},
-                {'case','stage','phase','controller','native','scope_check'})
+                {'case','stage','phase','controller','native','scope_check'},
+                {'case','stage','phase','controller','native','fault'},
+                {'case','stage','phase','controller','native','scope_check','fault'})
                 or type(value['case']) is not str or value['case'] not in CASES
                 or type(value['stage']) is not str or value['stage'] not in DIAGNOSTIC_STAGES
                 or not (value['phase'] is None or type(value['phase']) is str and value['phase'] in DIAGNOSTIC_PHASES)):
@@ -90,6 +128,10 @@ def qualification_diagnostic(value):
                     or set(item['cleanup'])!={'init_identity_received','init_terminal','launcher_reaped','cleanup_confirmed','numeric_pid_signalled'}
                     or any(type(key) is not str or type(flag) is not bool for key,flag in item['cleanup'].items())):return None
             value['native']=item
+        if 'fault' in value:
+            item=_fault_diagnostic(value['fault'])
+            if item is None:return None
+            value['fault']=item
         if 'scope_check' in value:
             if type(value['scope_check']) is not dict:return None
             item=dict(value['scope_check'])
@@ -574,33 +616,38 @@ def _driver_entry(token):
             {'case','backend_directory','manifest','plan_sha256','environment_sha256','channel_fd','nonce'})
     case=packet['case'];require(case in FAULT_CASES and type(packet['channel_fd']) is int and packet['channel_fd']>=3)
     require(type(packet['nonce']) is str and re.fullmatch('[0-9a-f]{32}',packet['nonce']) is not None)
-    channel=socket.socket(fileno=packet['channel_fd']);backend=None
+    channel=socket.socket(fileno=packet['channel_fd']);backend=None;driver_stage='backend_open'
     try:
         backend=_backend_class()(packet['backend_directory'],manifest=packet['manifest'],authorize_scope=lambda *_:True)
-        _real_host(backend)
+        driver_stage='host';_real_host(backend)
+        driver_stage='packet_binding'
         require(backend.document['plan_hash']==packet['plan_sha256']
                 and digest(canonical(backend.environment))==packet['environment_sha256'])
         def authorize_fault(actual,child,state,request):
+            nonlocal driver_stage
+            driver_stage='fault_boundary'
             require(actual==case and child.poll() is None and state['phase']=='source_ack_written'
                     and state['request_sha256']==_request(backend,case,request))
             message={'schema':MATRIX_SCHEMA,'kind':'fault_ready','case':case,'nonce':packet['nonce'],
                 'supervisor_pid':child.pid,'state':state,'request':request}
             started=time.monotonic();_send(channel,message)
-            ack=_receive(channel,ACK_SECONDS)
+            driver_stage='ack_wait';ack=_receive(channel,ACK_SECONDS)
+            driver_stage='ack_validate'
             require(ack=={'schema':MATRIX_SCHEMA,'kind':'fault_ack','case':case,'nonce':packet['nonce'],
                 'request_sha256':digest(canonical(request))}
                 and time.monotonic()-started<ACK_SECONDS,'linux_qualification_observer_required')
             return True
         try:
-            backend._qualify_case(case,fault_authorizer=authorize_fault)
+            driver_stage='run_case';backend._qualify_case(case,fault_authorizer=authorize_fault)
         except DevelopmentError as error:
             if case=='supervisor_loss' and error.code=='linux_supervisor_lost':
                 _send(channel,{'schema':MATRIX_SCHEMA,'kind':'fault_observed','case':case,'nonce':packet['nonce'],
                     'reason':'linux_supervisor_lost'});return 0
             raise
         require(False,'linux_qualification_fault_not_observed')
-    except (DevelopmentError,OSError,ValueError,TypeError):
-        try:_send(channel,{'schema':MATRIX_SCHEMA,'kind':'driver_refused','case':case,'nonce':packet['nonce']})
+    except (DevelopmentError,OSError,ValueError,TypeError) as error:
+        try:_send(channel,{'schema':MATRIX_SCHEMA,'kind':'driver_refused','case':case,'nonce':packet['nonce'],
+            'failure':_fault_detail('driver_refused',error,driver_stage=driver_stage)})
         except (DevelopmentError,OSError):pass
         return 2
     finally:
@@ -627,15 +674,34 @@ def _fault(backend,case):
         driver=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
             env={'LANG':'C.UTF-8','PATH':'/usr/bin:/bin'},cwd=backend.private.path,
             pass_fds=(packet_fd,child.fileno()),close_fds=True,start_new_session=True)
-        child.close();observer=_FaultObserver(driver)
+        child.close()
+        _observe(backend,case,fault=_fault_detail('observer_init'))
+        try:observer=_FaultObserver(driver)
+        except (DevelopmentError,OSError,ValueError,TypeError) as error:
+            _observe(backend,case,fault=_fault_detail('observer_init',error))
+            raise DevelopmentError('linux_qualification_observer_init_unconfirmed') from None
+        _observe(backend,case,fault=_fault_detail('first_message'))
         message=_receive(parent,CASE_SECONDS)
+        if type(message) is dict and message.get('kind')=='driver_refused':
+            failure=_fault_diagnostic(message.get('failure'))
+            require(set(message)=={'schema','kind','case','nonce','failure'}
+                and message['schema']==MATRIX_SCHEMA and message['case']==case and message['nonce']==nonce
+                and failure is not None and failure['operation']=='driver_refused',
+                'linux_qualification_fault_message_unconfirmed')
+            _observe(backend,case,fault=failure)
+            raise DevelopmentError('linux_qualification_driver_refused') from None
         require(type(message) is dict and set(message)=={'schema','kind','case','nonce','supervisor_pid','state','request'}
                 and message['schema']==MATRIX_SCHEMA and message['kind']=='fault_ready'
-                and message['case']==case and message['nonce']==nonce)
-        request=message['request'];proof=_base_proof(backend,case,request)
+                and message['case']==case and message['nonce']==nonce,
+                'linux_qualification_fault_message_unconfirmed')
+        request=message['request'];_observe(backend,case,fault=_fault_detail('base_proof'))
+        proof=_base_proof(backend,case,request)
+        _observe(backend,case,fault=_fault_detail('job_state'))
         private,job,state=_job(backend,case,request)
         with private:
-            require(_same(state,message['state']) and state['phase']=='source_ack_written')
+            _observe(backend,case,fault=_fault_detail('ready_state'),phase=state['phase'])
+            require(_same(state,message['state']) and state['phase']=='source_ack_written',
+                'linux_qualification_ready_state_changed')
             _observe(backend,case,stage='fault',phase=state['phase'])
             require(observer.acquire(message['supervisor_pid']) is True,'linux_qualification_observer_required')
             # Read the exact linked state again after kernel handle acquisition.

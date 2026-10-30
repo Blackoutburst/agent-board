@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.45.3
+# Reprise du travail par cycles — adaptateur 0.45.4
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
@@ -44,6 +44,25 @@ observations d'identité et empreintes complètes. Les droits, contrôles de
 source, délais et règles de reprise restent identiques. La mesure locale sur
 un fichier synthétique de 64 Mio passe de 5,326 s à 0,030 s ; elle ne démontre
 pas la cause exacte de l'arrêt serveur ni une validation réelle de cette version.
+
+Le pilote 0.45.3 a ensuite conservé son premier checkpoint et retiré sa première
+génération avec six reçus Runtime locaux terminés et nettoyés. La préparation
+de la génération suivante a refusé la qualification `controller_loss`, avant
+tout nouveau Work ou Runtime. Le service et le timer sont arrêtés ; le Core,
+les générations et la préparation interrompue restent historiques. Une
+qualification réelle des neuf cas sous Ubuntu UID1000 a réussi. Une pause
+contrôlée de 1,2 seconde après `fault_ready` reproduit la signature du refus,
+mais ces essais ne prouvent pas sa cause dans le compte de production UID994.
+
+La version 0.45.4 conserve dans le résultat public du passage la phase, la
+catégorie, le code public connu et les UUID déjà disponibles d'un refus de
+cible. Elle y ajoute l'observation fermée de qualification lorsqu'elle existe.
+Le protocole du test distingue aussi les refus de l'observateur, du processus
+enfant et de la relecture d'état avant ACK. L'erreur de l'enfant garde seulement
+son étape et un code autorisé ; aucun texte d'exception, chemin privé, prompt
+ou résultat modèle n'est publié. Les contrôles, délais, conditions de succès,
+nettoyage et règles de non-rejeu restent identiques. Cette correction rend le
+prochain refus observable ; elle ne valide pas encore le parcours réel complet.
 
 Un cycle propre conserve le checkout, les actions confirmées, leurs reçus et
 la filiation Git dans un checkpoint privé. Le contrôleur termine et vérifie
