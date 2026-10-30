@@ -132,6 +132,40 @@ def test_qualification_attached_to_an_unknown_exception_is_not_inspected():
     assert 'qualification' not in result and 'PRIVATE' not in json.dumps(result)
 
 
+def test_real_backend_default_reason_survives_both_closed_codecs():
+    from blackoutburst_agents import linux_execution_qualification as qualification
+    from blackoutburst_agents import linux_test_backend as backend
+    with pytest.raises(module.DevelopmentError) as caught:backend.require(False)
+    error=caught.value
+    assert error.code=='linux_execution_invalid'
+    diagnostic=qualification._case_observation('controller_loss');diagnostic['stage']='fault'
+    diagnostic['fault']=qualification._fault_detail('driver_refused',error,driver_stage='run_case')
+    error._linux_backend_qualification_diagnostic=diagnostic
+    result=module._target_failure(error,observation())
+    assert result['code']=='linux_execution_invalid'
+    assert result['qualification']['fault']['code']=='linux_execution_invalid'
+
+
+def test_actual_pass_exposes_child_fault_without_retrying_or_creating_work(service_case,monkeypatch):
+    from blackoutburst_agents import linux_execution_qualification as qualification
+    construct,_=service_case;legacy.available_apis(monkeypatch)
+    diagnostic=qualification._case_observation('controller_loss');diagnostic['stage']='fault'
+    diagnostic['fault']=qualification._fault_detail('driver_refused',
+        module.DevelopmentError('linux_qualification_protocol_timeout'),driver_stage='ack_wait')
+    error=module.DevelopmentError('linux_qualification_driver_refused')
+    error._linux_backend_qualification_diagnostic=diagnostic
+    calls=[]
+    def refused(*args):
+        calls.append(True);module._observe_stage('next_preparation');raise error
+    monkeypatch.setattr(module.ContinuationPoolService,'_target',refused)
+    result=construct().run_once();row=result['tasks'][0]
+    assert result['status']=='needs_you' and row['reason']=='continuation_pool_target_failed'
+    assert row['failure']['code']=='linux_qualification_driver_refused'
+    assert row['failure']['qualification']==diagnostic
+    assert row['operation_id'] is row['state_sha256'] is None
+    assert calls==[True] and module._TARGET_OBSERVATION.get() is None
+
+
 def test_nested_and_two_thread_contexts_never_share_correlation():
     outer=observation('cursor_read');token=module._TARGET_OBSERVATION.set(outer)
     barrier=threading.Barrier(2);results={};errors=[]
@@ -231,10 +265,10 @@ def test_frozen_catalogue_is_exactly_public_literal_error_producers():
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in classes|helpers:
                 index=1 if node.func.id in ('require','_require') else 0
                 if len(node.args)>index:values.append(node.args[index])
-                values.extend(k.value for k in node.keywords if k.arg=='code')
+                values.extend(k.value for k in node.keywords if k.arg in {'code','reason'})
             if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) and node.name in helpers:
                 arguments=node.args.posonlyargs+node.args.args
-                values.extend(value for arg,value in zip(arguments[-len(node.args.defaults):],node.args.defaults) if arg.arg=='code')
+                values.extend(value for arg,value in zip(arguments[-len(node.args.defaults):],node.args.defaults) if arg.arg in {'code','reason'})
             codes.update(value.value for value in values if isinstance(value,ast.Constant)
                 and type(value.value) is str and re.fullmatch('[a-z][a-z0-9_]{0,127}',value.value))
     assert module.TARGET_FAILURE_CODES==codes|module.FAILURE_NOTICE_CODES

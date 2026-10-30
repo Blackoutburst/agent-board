@@ -24,7 +24,7 @@ revue ; ce parcours ne fusionne pas la PR. Le mode historique
 Le 29 octobre 2026, le pilote fini 0.44.2 a terminé le parcours réel codeur,
 tests, PR et reviewer distinct, avec nettoyage confirmé ; sa PR #74 a ensuite
 été fusionnée. Cette observation concerne cette sélection et ces sources. Le
-nouveau [parcours de continuation](CONTINUATION.md) de 0.45.3 est complet en
+nouveau [parcours de continuation](CONTINUATION.md) de 0.45.4 est complet en
 source et testé sur de vrais composants temporaires Board/Git/Runtime avec
 modèles, transport GitHub et qualifications Linux simulés. Le premier pilote
 0.45.0 #62 a confirmé sa lecture et son patch puis rencontré un refus au
@@ -39,7 +39,12 @@ patch, tout en conservant un delta publié non vide contre la base publique.
 Le pilote 0.45.2 a repris le checkpoint et publié la PR #77, puis sa passe
 s'est arrêtée pendant la revue sans avis final confirmé. La version 0.45.3
 évite les copies répétées des gros fichiers dans le lecteur protégé, sans
-supprimer de contrôle ni augmenter les délais. La recette réelle complète,
+supprimer de contrôle ni augmenter les délais. Son pilote a conservé un
+checkpoint, puis refusé la qualification `controller_loss` du cycle suivant.
+La version 0.45.4 expose les codes, étapes et observations fermées de ces refus
+directement dans le résultat du passage, sans texte d'exception ni contenu
+privé. Elle ne change pas les délais, le nettoyage ou les règles de reprise.
+La recette réelle complète,
 avec publication et revue, reste à valider. Les [rôles manager et rédacteur](TEAM-ROLES.md)
 produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
