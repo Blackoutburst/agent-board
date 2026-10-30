@@ -1,12 +1,12 @@
 # Operations and release procedure
 
-Current source is Board 2.17.4/schema 17 with adapter 0.45.1. Standalone Development
+Current source is Board 2.17.4/schema 17 with adapter 0.45.2. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
 [stopped pool upgrade](../deploy/worker_pool/README.md#lecture-de-lautorisation-et-mise-à-jour-arrêtée).
 
-## Explicit development continuation: adapter 0.45.1
+## Explicit development continuation: adapter 0.45.2
 
 The complete opt-in source joins private source checkpoints, normal retirement
 and release of the old generation, fresh preparation/admission, final tested
@@ -44,7 +44,7 @@ confirmed by the normal identity-only cleanup path. The historical Native
 receipt records `linux_authorization_expired` before SOURCE, without a source
 release intent. That does not validate the test; the generation, patch and
 Core `needs_you` state remain retained. The human stopped the timer and service.
-Two real generations, final publication and distinct review remain unvalidated. Component tests use actual temporary
+The full two-generation publication and distinct-review path remains unvalidated. Component tests use actual temporary
 Board/Git/Runtime with synthetic provider, GitHub and native qualification seams.
 
 Adapter 0.45.1 separates cheap local logical Stop/identity/deadline checks from
@@ -56,6 +56,18 @@ produced the observed refusal pattern. This is a sufficient reproducer, not a
 measurement or exclusive diagnosis of server latency. The component changes have independent reviews and synthetic regression
 coverage. A fresh selected server pilot still has to exercise the composed
 release on the installed unit.
+
+The subsequent 0.45.1 pilot reached a first checkpoint and a second generation
+whose Worker is `result_ready` and Planner is `review_ready`. Its Core stopped
+in `needs_you` during finalization. The human diagnostic confirmed twelve
+finished local Runtime records with cleanup receipts; the normal Lead release
+then passed the server Runtime gate. The stopped historical task is retained.
+A synthetic counter reproduces this shape when the last generation only reads,
+tests and finalizes: its private parent delta is empty although the aggregate
+public delta is not. Adapter 0.45.2 handles that private source case while
+keeping ordinary public capture and the final nonempty publication checks.
+No historical failed Core is reopened by this update. Real composed publication
+and independent-review acceptance remain pending.
 
 Adapter 0.39 can post a closed failure notice to the selected ticket discussion
 from the code worker's existing initialized session. The message requires its

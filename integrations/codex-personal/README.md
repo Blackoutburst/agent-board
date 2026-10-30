@@ -24,14 +24,19 @@ revue ; ce parcours ne fusionne pas la PR. Le mode historique
 Le 29 octobre 2026, le pilote fini 0.44.2 a terminé le parcours réel codeur,
 tests, PR et reviewer distinct, avec nettoyage confirmé ; sa PR #74 a ensuite
 été fusionnée. Cette observation concerne cette sélection et ces sources. Le
-nouveau [parcours de continuation](CONTINUATION.md) de 0.45.1 est complet en
+nouveau [parcours de continuation](CONTINUATION.md) de 0.45.2 est complet en
 source et testé sur de vrais composants temporaires Board/Git/Runtime avec
 modèles, transport GitHub et qualifications Linux simulés. Le premier pilote
 0.45.0 #62 a confirmé sa lecture et son patch puis rencontré un refus au
 contrôle du résultat du test Linux ; sa génération est conservée et le timer
 arrêté. Le correctif 0.45.1 sépare les contrôles locaux des observations complètes
 aux frontières d’action, sans modifier la fenêtre native ni ses autorisations.
-La recette réelle à deux générations reste à valider. Les [rôles manager et rédacteur](TEAM-ROLES.md)
+Le pilote 0.45.1 a ensuite confirmé le checkpoint et une deuxième génération
+`result_ready`, puis un refus dans la finalisation ; ses douze reçus Runtime
+locaux sont nettoyés et sa claim expirée a été libérée par le contrôle serveur.
+La version 0.45.2 permet une génération finale de vérification sans nouveau
+patch, tout en conservant un delta publié non vide contre la base publique.
+La recette réelle complète, avec publication et revue, reste à valider. Les [rôles manager et rédacteur](TEAM-ROLES.md)
 produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
 l’[état des travailleurs serveur](CLOUD-WORKERS.md).
