@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.45.1
+# Reprise du travail par cycles — adaptateur 0.45.2
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
@@ -16,6 +16,20 @@ non validé et le Core historique reste en `needs_you`. La recette à deux gén�
 à valider. La version 0.45.1 sépare les contrôles locaux de Stop/identité/délai
 des observations complètes aux frontières d’action ; les autorisations natives,
 les captures SOURCE et la fenêtre de 1,5 seconde restent obligatoires.
+
+Le diagnostic du pilote 0.45.1 a ensuite confirmé deux générations, le premier
+checkpoint et sa retraite, puis un deuxième Worker `result_ready` avec un
+planificateur `review_ready`. Le Core est resté en `needs_you` à la finalisation ;
+les douze reçus Runtime locaux étaient terminés avec nettoyage confirmé, et
+le contrôle serveur a permis la libération normale de la claim expirée. Le
+timer est arrêté et ce Core historique reste conservé.
+
+La version 0.45.2 prend en charge une dernière génération qui vérifie le travail
+déjà sauvegardé sans ajouter de patch. Sa capture intermédiaire reste privée et
+vérifie les fichiers et les tests ; le delta final publié reste calculé contre
+la base publique d’origine et doit être non vide. Un scénario synthétique a
+reproduit le refus antérieur après `read → test → final` ; le parcours serveur
+complet avec publication et revue distincte reste à valider.
 
 Un cycle propre conserve le checkout, les actions confirmées, leurs reçus et
 la filiation Git dans un checkpoint privé. Le contrôleur termine et vérifie
