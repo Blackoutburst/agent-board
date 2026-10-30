@@ -35,6 +35,7 @@ from .git_workspace import LocalRepositoryGrant, LocalGitWorkspaceController
 from .linux_input_snapshot import _path
 from .linux_planner_policy import _executable_pin, linux_source_pins
 from .linux_pool_preparation import LinuxPoolJobPreparer
+from .linux_execution_qualification import qualification_diagnostic
 from .planner_policy import PlannerPolicyError
 from .pool_journal import uuid_value, PoolError
 from .private_development_checkpoint import PrivateDevelopmentCheckpointController, checkpoint_id_for
@@ -538,6 +539,9 @@ def _target_failure(error,observation):
             observation.stage in TARGET_FAILURE_STAGES else 'unknown',
             **{key:_failure_uuid(getattr(observation,key)) for key in
                ('logical_task_id','generation_id','operation_id')})
+    if type(error) is DevelopmentError:
+        qualification=qualification_diagnostic(vars(error).get('_linux_backend_qualification_diagnostic'))
+        if qualification is not None:value['qualification']=qualification
     return value
 
 

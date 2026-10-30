@@ -93,6 +93,45 @@ def test_projection_is_pure_and_malformed_correlation_is_not_exported(monkeypatc
     assert 'PRIVATE' not in json.dumps(result)
 
 
+def test_already_closed_backend_qualification_reaches_public_failure_without_io(monkeypatch):
+    from blackoutburst_agents.linux_execution_qualification import _case_observation
+    diagnostic=_case_observation('controller_loss')
+    diagnostic['stage']='fault'
+    diagnostic['scope_check']={'stage':'scope','allowed':True,'bucket':None,'code':None,'elapsed_ms':201}
+    error=module.DevelopmentError('linux_qualification_unconfirmed')
+    error._linux_backend_qualification_diagnostic=diagnostic
+    def forbidden(*args,**kwargs):raise AssertionError('Failure projection cannot perform IO')
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os,'open',forbidden)
+        patch.setattr(Path,'read_bytes',forbidden)
+        result=module._target_failure(error,observation())
+    assert result['qualification']==diagnostic
+    assert result['qualification'] is not diagnostic
+    assert result['qualification']['scope_check'] is not diagnostic['scope_check']
+
+
+@pytest.mark.parametrize('mutation',[
+    lambda d:d.update(private_path='/PRIVATE/owner/auth'),
+    lambda d:d.update(case='PRIVATE_CONTROLLER'),
+    lambda d:d.update(controller={'operation':'heartbeat_window','bucket':'development','code':'PRIVATE_CODE'}),
+    lambda d:d.update(scope_check={'stage':'scope','allowed':True,'bucket':None,'code':None,'elapsed_ms':'PRIVATE_MS'}),
+])
+def test_malformed_qualification_is_not_exported(mutation):
+    from blackoutburst_agents.linux_execution_qualification import _case_observation
+    diagnostic=_case_observation('controller_loss');mutation(diagnostic)
+    error=module.DevelopmentError('linux_qualification_unconfirmed')
+    error._linux_backend_qualification_diagnostic=diagnostic
+    result=module._target_failure(error,observation())
+    assert 'qualification' not in result and 'PRIVATE' not in json.dumps(result)
+
+
+def test_qualification_attached_to_an_unknown_exception_is_not_inspected():
+    error=UnknownError99('PRIVATE_ARGS')
+    object.__setattr__(error,'_linux_backend_qualification_diagnostic',{'PRIVATE':True})
+    result=module._target_failure(error,observation())
+    assert 'qualification' not in result and 'PRIVATE' not in json.dumps(result)
+
+
 def test_nested_and_two_thread_contexts_never_share_correlation():
     outer=observation('cursor_read');token=module._TARGET_OBSERVATION.set(outer)
     barrier=threading.Barrier(2);results={};errors=[]
