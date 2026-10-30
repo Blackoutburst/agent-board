@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.45.4
+# Reprise du travail par cycles — adaptateur 0.45.5
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
@@ -63,6 +63,30 @@ son étape et un code autorisé ; aucun texte d'exception, chemin privé, prompt
 ou résultat modèle n'est publié. Les contrôles, délais, conditions de succès,
 nettoyage et règles de non-rejeu restent identiques. Cette correction rend le
 prochain refus observable ; elle ne valide pas encore le parcours réel complet.
+
+Le pilote serveur 0.45.4 a confirmé le premier checkpoint, une seconde
+opération de développement et la publication de la PR brouillon #80. Un
+reviewer distinct a pris le ticket #64, puis le service a signalé
+`continuation_review_cleanup_unknown`. Aucun avis final n'est confirmé ;
+la PR et les états locaux sont conservés. Le contrôle normal du serveur a
+libéré le bail reviewer expiré, sans compléter le pilote ni réécrire ses reçus.
+
+Le profilage d'un scénario composé à deux générations a mesuré 533 validations
+complètes de la source publiée et 6 831 commandes Git. La version 0.45.5
+regroupe les seules lectures de publication GET/`ls-remote` d'un appel `status`
+entre deux validations complètes de cette source. Chaque commande conserve
+ses contrôles frais de permissions, de Stop, d'identité, d'arguments et
+d'outils. Le contexte est privé, lié à la source et au thread, puis révoqué
+en sortie ; aucune observation ou autorisation n'est réutilisée entre appels.
+Les lecteurs utilisés hors de ce contexte conservent la validation complète.
+
+Le même scénario profilé passe de 173,04 à 81,47 secondes, de 533 à
+148 validations complètes et de 6 831 à 3 366 commandes Git. Les 385 contrôles
+intermédiaires conservent leurs vérifications fraîches d'autorisation ; les
+55 observations de publication sont inchangées. Ce scénario utilise de vrais
+composants temporaires Board/Git/Runtime avec modèles, transport GitHub et
+qualifications natives simulés. Ces mesures ne valent pas validation du
+nouveau parcours réel sur le serveur.
 
 Un cycle propre conserve le checkout, les actions confirmées, leurs reçus et
 la filiation Git dans un checkpoint privé. Le contrôleur termine et vérifie

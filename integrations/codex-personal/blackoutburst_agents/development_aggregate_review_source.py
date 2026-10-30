@@ -6,10 +6,13 @@ owner policy and the actual PR/head/destination are checked on each read. No
 author SQLite connection is used by the review thread, and no archived result
 can recreate publication or execution authority.
 """
+from contextvars import ContextVar
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import quote
 import os
+import threading
+import weakref
 
 from .development_aggregate_delivery import (AggregateDevelopmentDeliveryController,
     AggregateDevelopmentGitPublicationAuthority, _existing_record)
@@ -27,6 +30,44 @@ from .git_workspace import _operation
 
 MAX_DOCUMENT = 8*1024*1024
 _ISSUER = object()
+_OBSERVATION_ISSUER = object()
+_OBSERVATION = ContextVar('published_aggregate_read_observation', default=None)
+_ISSUED_OBSERVATIONS = weakref.WeakSet()
+
+
+class _ReadObservation:
+    """One source-issued, thread-local read bracket; never a stored grant."""
+    __slots__ = ('source','reader','operation_id','directory','reader_root','frame_sha256',
+        'source_issuer','pid','thread','active','__weakref__')
+
+    def __init__(self, source, issuer):
+        require(issuer is _OBSERVATION_ISSUER and type(source) is PublishedAggregateReviewSource)
+        self.source,self.reader=source,source.reader
+        self.operation_id,self.directory=source.operation_id,source.directory
+        self.reader_root,self.frame_sha256=source.reader.root,source.frame_sha256
+        self.source_issuer=source._issuer
+        self.pid,self.thread=os.getpid(),threading.current_thread()
+        self.active=True
+        _ISSUED_OBSERVATIONS.add(self)
+
+    def close(self):
+        self.active=False
+        _ISSUED_OBSERVATIONS.discard(self)
+
+    def __reduce_ex__(self, protocol):raise TypeError('Read observations cannot be serialized')
+    def __copy__(self):raise TypeError('Read observations cannot be copied')
+    def __deepcopy__(self, memo):raise TypeError('Read observations cannot be copied')
+
+
+def _current_observation(source):
+    value=_OBSERVATION.get()
+    try:
+        if (type(value) is _ReadObservation and value in _ISSUED_OBSERVATIONS and value.active
+                and value.source is source and value.source_issuer is _ISSUER
+                and value.pid==os.getpid() and value.thread is threading.current_thread()):
+            return value
+    except (AttributeError,TypeError):pass
+    return None
 
 
 def require(value, code='aggregate_review_source_changed'):
@@ -53,7 +94,8 @@ class PublishedAggregateReadView:
 
     def _roots(self):
         require(type(self) is PublishedAggregateReadView and self.source._issuer is _ISSUER)
-        self.source._verify_frame()
+        if _current_observation(self.source) is None:self.source._verify_frame()
+        else:self.source._verify_observation_controls()
         require(self.pins == self._pins() and self.grant == self._grant.document()
             and self.grant == self.source.grant
             and self.authority_pin == self.source.frame['authority_pin']
@@ -236,6 +278,33 @@ class PublishedAggregateReviewSource:
         authorization._registration_identity()
         authorization._policy()
 
+    def _verify_observation_controls(self):
+        """Fresh control before each immutable GET, between full source checks."""
+        observation=_current_observation(self)
+        def binding():
+            require(observation is not None and _current_observation(self) is observation
+                and observation.reader is self.reader and observation.source_issuer is self._issuer
+                and observation.operation_id==self.operation_id and observation.directory==self.directory
+                and observation.reader_root==self.reader.root and observation.frame_sha256==self.frame_sha256,
+                'aggregate_review_source_changed')
+            require(self._issuer is _ISSUER and digest(canonical(self.frame)) == self.frame_sha256)
+            require(self.paths == self.aggregate.paths and self.workspaces is self.aggregate.original_workspaces
+                and self.grant == self.publisher.grant and self.pins == {'root': _directory_pin(self.directory),
+                    'aggregate': self.aggregate.pin, 'delivery_root': _directory_pin(self.paths['deliveries']),
+                    'review_root': _directory_pin(self.paths['reviews'])})
+        binding()
+        for path in self.frame['stop_paths']:
+            require(not os.path.lexists(path), 'aggregate_review_source_stopped')
+        authorization = DevelopmentAuthorization(self.client, scope=self.frame['scope'], manifest=self.frame['floor'],
+            registration=self.frame['registration'], stop_requested=lambda: False)
+        authorization._registration_identity()
+        authorization._policy()
+        # These callbacks perform I/O. Bind to the SAME original observation
+        # and recheck Stop before another GET can use any changed handle/frame.
+        binding()
+        for path in self.frame['stop_paths']:
+            require(not os.path.lexists(path), 'aggregate_review_source_stopped')
+
     def _published_observation(self):
         reader = self.reader
         reader._roots()
@@ -257,7 +326,12 @@ class PublishedAggregateReviewSource:
         self._verify_frame()
         with _existing_record(self.directory, 'source.lock') as private:
             require(private.read('source.json', MAX_DOCUMENT) == canonical({'receipt': self.receipt, 'frame_sha256': self.frame_sha256}))
-        self._published_observation()
+        observation=_ReadObservation(self,_OBSERVATION_ISSUER)
+        token=_OBSERVATION.set(observation)
+        try:self._published_observation()
+        finally:
+            try:observation.close()
+            finally:_OBSERVATION.reset(token)
         self._verify_frame()
         return deepcopy(self.receipt)
 
