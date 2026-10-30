@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.45.2
+# Reprise du travail par cycles — adaptateur 0.45.3
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
@@ -30,6 +30,20 @@ vérifie les fichiers et les tests ; le delta final publié reste calculé contr
 la base publique d’origine et doit être non vide. Un scénario synthétique a
 reproduit le refus antérieur après `read → test → final` ; le parcours serveur
 complet avec publication et revue distincte reste à valider.
+
+Le 30 octobre 2026, le pilote 0.45.2 a repris son checkpoint dans une seconde
+session, validé la postimage attendue et publié la PR brouillon #77. La passe
+s'est ensuite arrêtée après vingt minutes pendant la revue ; aucun avis final
+ni nettoyage final du reviewer n'est encore confirmé. Ce résultat ne valide
+pas le parcours complet et l'ancien essai n'est pas relancé.
+
+La version 0.45.3 rend linéaire l'accumulation des octets dans la lecture
+protégée des fichiers. Elle évite les copies répétées du préfixe des gros
+exécutables, tout en gardant les mêmes octets retournés, limites, descripteurs,
+observations d'identité et empreintes complètes. Les droits, contrôles de
+source, délais et règles de reprise restent identiques. La mesure locale sur
+un fichier synthétique de 64 Mio passe de 5,326 s à 0,030 s ; elle ne démontre
+pas la cause exacte de l'arrêt serveur ni une validation réelle de cette version.
 
 Un cycle propre conserve le checkout, les actions confirmées, leurs reçus et
 la filiation Git dans un checkpoint privé. Le contrôleur termine et vérifie
