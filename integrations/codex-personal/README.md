@@ -24,7 +24,7 @@ revue ; ce parcours ne fusionne pas la PR. Le mode historique
 Le 29 octobre 2026, le pilote fini 0.44.2 a terminé le parcours réel codeur,
 tests, PR et reviewer distinct, avec nettoyage confirmé ; sa PR #74 a ensuite
 été fusionnée. Cette observation concerne cette sélection et ces sources. Le
-nouveau [parcours de continuation](CONTINUATION.md) de 0.45.4 est complet en
+nouveau [parcours de continuation](CONTINUATION.md) de 0.45.5 est complet en
 source et testé sur de vrais composants temporaires Board/Git/Runtime avec
 modèles, transport GitHub et qualifications Linux simulés. Le premier pilote
 0.45.0 #62 a confirmé sa lecture et son patch puis rencontré un refus au
@@ -49,6 +49,14 @@ avec publication et revue, reste à valider. Les [rôles manager et rédacteur](
 produisent des résultats privés, mais leur attribution et leur orchestration
 hiérarchique restent à réaliser dans le contrôleur du ticket #52. Voir
 l’[état des travailleurs serveur](CLOUD-WORKERS.md).
+
+Le pilote 0.45.4 a publié la PR brouillon #80 puis passé le ticket à un reviewer
+distinct, avant un refus `continuation_review_cleanup_unknown`. Son avis final
+n'est pas confirmé. La version 0.45.5 réduit la répétition des validations
+locales pendant une même observation de publication en lecture seule, avec
+validation complète avant et après, permissions et Stop frais par commande.
+Le même scénario composé profilé passe de 173 à 81 secondes ; le nouvel essai
+réel et son nettoyage restent à valider.
 
 La version 0.42 conserve dans les notifications du board les codes publics
 connus des refus de planification, d'action et de budget. Les valeurs inconnues
