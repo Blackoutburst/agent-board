@@ -111,3 +111,5 @@ manager plans or schedule a writer. The hierarchy and assignment controller
 remain ticket #52 work.
 
 Owner Runtime capacity is shared by coding and review jobs; uncertain executions continue to count.
+
+Continuation cycles retain confirmed work and recheck permissions before resuming.
