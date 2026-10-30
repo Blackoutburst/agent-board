@@ -135,9 +135,18 @@ class DevelopmentDeliveryProof:
         documents['backend'] = backend_raw; documents['policy'] = policy_raw
         return manifest, broker, planner, policy, documents
 
-    def _snapshot(self, snapshot, manifest):
+    def _snapshot(self, snapshot, manifest, *, _aggregate=None):
+        private_source = _aggregate is not None
+        schema = 'local-captured-tree-v1'
+        if private_source:
+            from .development_aggregate_delivery import AggregateDevelopmentDeliveryController, PRIVATE_SOURCE_SCHEMA
+            if (type(_aggregate) is not AggregateDevelopmentDeliveryController
+                    or _aggregate.final_proof is not self): fail()
+            _aggregate._logical()
+            if _aggregate._source_capture() != snapshot: fail()
+            schema = PRIVATE_SOURCE_SCHEMA
         if (type(snapshot) is not dict or set(snapshot) != {'schema','request','files'}
-                or snapshot['schema'] != 'local-captured-tree-v1' or type(snapshot['files']) is not list): fail()
+                or snapshot['schema'] != schema or type(snapshot['files']) is not list): fail()
         request = snapshot['request']
         with PrivateDirectory(self.workspaces.state_root/self.operation_id) as private:
             workspace = self.workspaces._read(private)
@@ -149,7 +158,11 @@ class DevelopmentDeliveryProof:
                 or request['workspace_request_sha256'] != workspace['request_sha256']
                 or request['base_commit'] != manifest['base_sha'] or request['base_commit'] != self.workspaces.grant['base_commit']): fail()
         self.workspaces._ready(workspace)
-        changes = _changes(request['changes'])
+        if private_source:
+            if request['changes'] != []: fail()
+            changes = []
+        else:
+            changes = _changes(request['changes'])
         if any(row['path'] not in manifest['files'] or row['sha256'] is None for row in changes): fail()
         root = Path(manifest['root']); base = {}
         raw = self.workspaces._git(['ls-tree','-r','-z','--full-tree',manifest['base_sha']],cwd=root)
@@ -165,7 +178,7 @@ class DevelopmentDeliveryProof:
                     or row['mode'] != base[row['path']][0] or type(row['bytes']) is not int or row['bytes'] < 0
                     or row['payload'] != 'file-'+str(n)): fail()
             sha256(row['sha256'])
-            if row['path'] not in manifest['files'] and row['blob_oid'] != base[row['path']][1]: fail()
+            if (private_source or row['path'] not in manifest['files']) and row['blob_oid'] != base[row['path']][1]: fail()
             captured[row['path']] = row
         if set(captured) != set(base) or not set(manifest['files']) <= set(captured): fail()
         actual,_ = _inventory(root)
@@ -220,9 +233,20 @@ class DevelopmentDeliveryProof:
         return digest(canonical(sorted(hashes)))
 
     def evidence(self, snapshot):
+        return self._evidence(snapshot)
+
+    def _aggregate_source_evidence(self, snapshot, *, controller):
+        """Private whole-tree observation; never a public Delivery snapshot.
+
+        The concrete live aggregate and its recorded source bytes are required.
+        There is no serialized flag or ordinary GitDelivery empty-change mode.
+        """
+        return self._evidence(snapshot, _aggregate=controller)
+
+    def _evidence(self, snapshot, *, _aggregate=None):
         try:
             op = self._operation(); manifest,broker,planner,policy,documents = self._documents(op)
-            current,planner_hash = self._snapshot(snapshot,manifest)
+            current,planner_hash = self._snapshot(snapshot,manifest,_aggregate=_aggregate)
             review = planner['review']; required = {suite['name'] for suite in manifest['tests']}
             if (not required or type(review['tests']) is not dict or set(review['tests']) != required
                     or review['snapshot_sha256'] != planner_hash or planner['tests'] != review['tests']

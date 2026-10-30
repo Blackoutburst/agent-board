@@ -4,7 +4,7 @@ Private checkpoints are historical source lineage only. Tests and Runtime
 evidence always come from the final ordinary DevelopmentDeliveryProof. Local
 completion, publication and independent review are separate explicit steps.
 """
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from copy import deepcopy
 import fcntl
 import os
@@ -23,6 +23,7 @@ from .git_workspace import LocalGitWorkspaceController, MAX_CHECKOUT_FILE_BYTES,
 from .private_development_checkpoint import PrivateDevelopmentCheckpointController, checkpoint_id_for
 
 MAX_DOCUMENT = 8*1024*1024
+PRIVATE_SOURCE_SCHEMA = 'development-private-final-source-v1'
 
 
 def require(value, code='development_aggregate_changed'):
@@ -73,7 +74,7 @@ class AggregateDevelopmentDeliveryProof:
         controller._logical()
         lineage = controller._lineage()
         source = controller._source_capture()
-        final = controller.final_proof.evidence(source)
+        final = controller._final_evidence(source)
         results = controller._model_results()
         require(type(snapshot) is dict and snapshot.get('schema') == 'local-captured-tree-v1')
         request = snapshot['request']
@@ -93,7 +94,7 @@ class AggregateDevelopmentDeliveryProof:
                 and object_id(raw, 'blob', self.workspaces.grant['base_commit']) == row['blob_oid'],
                 'development_aggregate_tree_changed')
         require(controller._lineage() == lineage and controller._source_capture() == source)
-        require(controller.final_proof.evidence(source) == final)
+        require(controller._final_evidence(source) == final)
         require(controller._model_results() == results)
         controller._logical()
         snapshot_sha = digest(canonical(snapshot))
@@ -367,13 +368,70 @@ class AggregateDevelopmentDeliveryController:
 
     def _source_capture(self):
         self.source_deliveries._roots()
-        with _existing_record(self.paths['source-deliveries']/self.operation_id, 'delivery.lock') as private:
-            value = self.source_deliveries._read(private)
-            require(value['phase'] == 'captured')
+        with _existing_record(self.final_proof.workspaces.state_root/self.operation_id, 'workspace.lock') as workspace, \
+             _existing_record(self.paths['source-deliveries']/self.operation_id, 'delivery.lock') as private:
+            names = os.listdir(private.fd)
+            require(('delivery.json' in names) != ('private-source.json' in names),
+                'development_aggregate_source_capture_uncertain')
+            if 'private-source.json' in names:
+                raw = private.read('private-source.json', MAX_DOCUMENT)
+                value = decode(raw)
+                require(canonical(value) == raw and type(value) is dict
+                    and set(value) == {'schema','phase','snapshot','snapshot_sha256','metadata_sha256'}
+                    and value['schema'] == 'development-private-final-source-record-v1'
+                    and value['phase'] == 'captured'
+                    and value['snapshot_sha256'] == digest(canonical(value['snapshot']))
+                    and value['snapshot'].get('schema') == PRIVATE_SOURCE_SCHEMA
+                    and value['snapshot']['request']['changes'] == [],
+                    'development_aggregate_source_capture_uncertain')
+                source, root = self.source_deliveries._workspace(workspace)
+                request = value['snapshot']['request']
+                require(request == dict(operation_id=self.operation_id,scope=source['request']['scope'],changes=[],
+                    workspace_request_sha256=source['request_sha256'],checkout=str(root),
+                    base_commit=self.final_proof.workspaces.grant['base_commit'])
+                    and self.source_deliveries._metadata(root) == value['metadata_sha256']
+                    and self.source_deliveries._snapshot(root,[])[1] == value['snapshot']['files'],
+                    'development_aggregate_source_capture_changed')
+            else:
+                value = self.source_deliveries._read(private)
+                require(value['phase'] == 'captured')
             for row in value['snapshot']['files']:
                 raw = private.read(row['payload'], MAX_CHECKOUT_FILE_BYTES)
                 require(len(raw) == row['bytes'] and digest(raw) == row['sha256'])
             return _copy(value['snapshot'])
+
+    def _capture_source(self, manifest, changes):
+        if changes:
+            return self.source_deliveries.capture(operation_id=self.operation_id,scope=manifest['scope'],changes=changes)
+        # The final cycle may only read/retest prior confirmed work. Preserve a
+        # private full-tree observation, not an empty public Delivery or commit.
+        require(not os.path.lexists(self.paths['source-deliveries']/self.operation_id),
+            'development_aggregate_source_capture_uncertain')
+        with self.final_proof.workspaces._locked(self.operation_id) as (workspace,_):
+            source,root = self.source_deliveries._workspace(workspace,manifest['scope'])
+            request = dict(operation_id=self.operation_id,scope=manifest['scope'],changes=[],
+                workspace_request_sha256=source['request_sha256'],checkout=str(root),
+                base_commit=self.final_proof.workspaces.grant['base_commit'])
+            with self.source_deliveries._record(self.paths['source-deliveries'],self.operation_id,create=True) as (private,fresh):
+                require(fresh,'development_aggregate_source_capture_uncertain')
+                metadata = self.source_deliveries._metadata(root)
+                files,entries = self.source_deliveries._snapshot(root,[])
+                snapshot = dict(schema=PRIVATE_SOURCE_SCHEMA,request=request,files=entries)
+                value = dict(schema='development-private-final-source-record-v1',phase='capturing',snapshot=snapshot,
+                    snapshot_sha256=digest(canonical(snapshot)),metadata_sha256=metadata)
+                private.create('private-source.json',canonical(value))
+                for row in entries:private.create(row['payload'],files[row['path']][1])
+                require(self.source_deliveries._snapshot(root,[])[1] == entries
+                    and self.source_deliveries._metadata(root) == metadata,
+                    'development_aggregate_source_capture_changed')
+                self.source_deliveries._roots()
+                value['phase'] = 'captured';private.replace('private-source.json',canonical(value))
+                return _copy(snapshot)
+
+    def _final_evidence(self, source):
+        if source.get('schema') == PRIVATE_SOURCE_SCHEMA:
+            return self.final_proof._aggregate_source_evidence(source,controller=self)
+        return self.final_proof.evidence(source)
 
     @staticmethod
     def _changes(workspaces, root, files):
@@ -412,8 +470,8 @@ class AggregateDevelopmentDeliveryController:
             value = {'schema': 'development-aggregate-delivery-v1', 'phase': 'preparing',
                 'request': request, 'capture': None, 'seal': None, 'completion_intent': None, 'completion': None}
             private.create('aggregate.json', canonical(value))
-            source = self.source_deliveries.capture(operation_id=self.operation_id, scope=manifest['scope'], changes=changes)
-            final.evidence(source)
+            source = self._capture_source(manifest,changes)
+            self._final_evidence(source)
             self._fresh()
             self.original_workspaces.plan(operation_id=self.operation_id, scope=manifest['scope'])
             original = self.original_workspaces.materialize(self.operation_id)
@@ -422,17 +480,25 @@ class AggregateDevelopmentDeliveryController:
             target = _file_map(source)
             require(set(initial) == set(target), 'development_aggregate_tree_changed')
             selected = set(self.checkpoints.configuration['global_paths'])
+            private_source = source['schema'] == PRIVATE_SOURCE_SCHEMA
             with closing(RepositoryFiles(root)) as repository, \
-                 _existing_record(self.paths['source-deliveries']/self.operation_id, 'delivery.lock') as captured:
+                 (nullcontext() if private_source else
+                    _existing_record(self.paths['source-deliveries']/self.operation_id, 'delivery.lock')) as captured:
                 for row in source['files']:
                     mode, before = initial[row['path']]
                     require(mode == row['mode'], 'development_aggregate_mode_changed')
-                    raw = captured.read(row['payload'], MAX_CHECKOUT_FILE_BYTES)
+                    if private_source:
+                        # The private proof reopens/verifies its source record.
+                        # Do not recursively acquire that lock during evidence.
+                        with _existing_record(self.paths['source-deliveries']/self.operation_id,'delivery.lock') as payload:
+                            raw = payload.read(row['payload'],MAX_CHECKOUT_FILE_BYTES)
+                    else:
+                        raw = captured.read(row['payload'], MAX_CHECKOUT_FILE_BYTES)
                     require(digest(raw) == row['sha256'])
                     if raw == before:
                         continue
                     require(row['path'] in selected, 'development_aggregate_unselected_change')
-                    final.evidence(source)
+                    self._final_evidence(source)
                     self._fresh()
                     with repository.parent(row['path']) as (directory, name):
                         current, _ = repository.read_at(directory, name, MAX_CHECKOUT_FILE_BYTES)
@@ -450,7 +516,7 @@ class AggregateDevelopmentDeliveryController:
                         os.rename(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
                         os.fsync(directory)
                         repository.verify_parent(row['path'], directory)
-            final.evidence(source)
+            self._final_evidence(source)
             self._fresh()
             actual, _ = _inventory(root)
             require({path: (mode, digest(data)) for path, (mode, data) in actual.items()} ==
