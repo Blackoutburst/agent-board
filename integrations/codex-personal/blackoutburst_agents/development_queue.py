@@ -114,7 +114,8 @@ def _standing_plan(root,catalog,catalog_pin,workflow_file,checkpoint_after_actio
             or not 30<=provider_backoff_seconds<=3600):fail('development_queue_tick_invalid')
     for entry in catalog['entries']:
         cap=cycle_limits(entry)
-        if (not 1<=checkpoint_after_actions<=min(cap['max_actions'],cap['max_turns'])
+        # Keep the fixed test and final action together in a complete workflow.
+        if (not 2<=checkpoint_after_actions<=min(cap['max_actions'],cap['max_turns'])
                 or cap['max_wall_seconds']>catalog['timeout_seconds']):fail('development_queue_tick_invalid')
     binding=dict(catalog=catalog_pin,workflow=workflow_pin,checkpoint_after_actions=checkpoint_after_actions,
         provider_backoff_seconds=provider_backoff_seconds)

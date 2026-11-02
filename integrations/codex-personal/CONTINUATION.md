@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.48.0
+# Reprise du travail par cycles — adaptateur 0.48.1
 
 La source 0.48 ajoute `development-queue tick` : une commande ponctuelle qui
 admet au plus une tâche depuis un catalogue et un workflow opérateur approuvés,
@@ -55,7 +55,14 @@ par le client de découverte normal et un seul `tick`. La session de découverte
 est déterministe pour la configuration et le profil ; les sessions de chaque
 génération restent neuves. Le Core généré conserve l'ancien schéma, ce qui
 sépare explicitement sa reprise de la découverte et évite toute récursion.
-L'ancien schéma d'une tâche Core sélectionnée garde son comportement.
+L'ancien schéma d'une tâche Core sélectionnée garde son parcours de reprise.
+
+Pour ces workflows complets, `checkpoint_after_actions` doit être au moins 2 :
+le test nommé et l’action finale doivent pouvoir se suivre dans une génération.
+Une fenêtre de 1 céderait après chaque test, puis la génération suivante devrait
+refaire le test sans jamais atteindre la preuve finale fraîche. Les bornes
+supérieures et les budgets ne changent pas. Les checkpoints partiels génériques
+`DevelopmentCheckpointRequest(after_actions=1)` restent valides.
 
 Le 2 novembre, le pilote 0.45.5 #65 a confirmé deux générations auteur, la PR
 #82 et un avis distinct publié, avec sortie propre des opérations sélectionnées.

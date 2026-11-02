@@ -94,8 +94,10 @@ def load_continuation(path,*,root,owner_id,board_endpoint,max_seconds):
             names.add(task['name']);task_ids.add(task['logical_task_id'])
             limits[task['name']]=cycle_limits(jobs[task['name']])
             cap=limits[task['name']]
+            # A complete workflow needs a named test followed by its final action.
             require(type(task['checkpoint_after_actions']) is int
-                and 1<=task['checkpoint_after_actions']<=min(cap['max_actions'],cap['max_turns']))
+                and 2<=task['checkpoint_after_actions']<=min(cap['max_actions'],cap['max_turns']),
+                'continuation_pool_cycle_limits_invalid')
             require(cap['max_wall_seconds']<=batch['timeout_seconds'],
                 'continuation_pool_cycle_exceeds_batch_timeout')
         require(names==set(jobs))
