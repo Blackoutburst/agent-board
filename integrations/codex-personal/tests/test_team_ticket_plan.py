@@ -42,7 +42,7 @@ class BoardClient:
         self.target = dict(id='coder-profile', owner_id='owner', version=2, status='active',
                            project_ids=['project'], policy=policy)
         self.lead = dict(id='lead-profile', owner_id='owner', version=7, status='active', legacy=False,
-                         project_ids=['project'], policy={})
+                         project_ids=['project'], policy=deepcopy(policy))
         self.policy = dict(enabled=True, allow_read=True, allow_requests=True, autonomy='queue',
                            actions=['agent.profile.read'], resources=['agent-profiles:owner', 'repo:work'])
         self.calls = []; self.created = {}; self.tickets = {}; self.lose_once = False; self.wrong = False
@@ -120,6 +120,39 @@ def test_apply_creates_reused_slot_dag_with_intent_before_every_effect(case):
     assert all(row['assignee_agent_id'] == 'coder-profile' for row in tickets)
     assert all('milestone:First delivery' in row['labels'] for row in tickets)
     assert {name for name, _ in client.calls} <= {'get_project', 'get_ticket', 'get_managed_agent_profile', 'create_ticket'}
+
+
+def test_exact_registered_lead_self_slot_needs_no_profile_management_lookup(case):
+    plan, catalog, client, controller = case
+    catalog['slots'][0].update(agent_id='lead-profile', profile_version=7)
+    approved = controller.preview(plan, catalog)['approval_sha256']
+    result = controller.apply(plan, catalog, approved_sha256=approved)
+    assert len(result['tickets']) == 3
+    assert all(ticket['assignee_agent_id'] == 'lead-profile' for ticket in client.tickets.values())
+    assert not any(name == 'get_managed_agent_profile' for name, _ in client.calls)
+
+
+def test_stale_self_slot_refuses_instead_of_refreshing_profile(case):
+    plan, catalog, client, controller = case
+    catalog['slots'][0].update(agent_id='lead-profile', profile_version=6)
+    with pytest.raises(DevelopmentError, match='team_ticket_profile_changed'):
+        controller.preview(plan, catalog)
+    assert not client.created
+
+
+def test_other_manager_is_never_adopted_from_caller_registration(case):
+    plan, catalog, client, controller = case
+    catalog['slots'][0].update(agent_id='other-lead', profile_version=7)
+    original = client.call
+    def call(name, args):
+        if name == 'get_managed_agent_profile':
+            assert args == {'profile_id': 'other-lead'}
+            raise BoardReadError('tool_rejected')
+        return original(name, args)
+    client.call = call
+    with pytest.raises(BoardReadError, match='tool_rejected'):
+        controller.preview(plan, catalog)
+    assert not client.created
 
 
 def test_lost_ack_replays_exact_key_without_duplicate_or_new_approval(case):
@@ -221,6 +254,33 @@ def test_unknown_or_changed_receipt_refuses(case):
         private.replace('receipts.json', canonical(state))
     with pytest.raises(DevelopmentError, match='team_ticket_receipt_changed'):
         controller.apply(plan, catalog, approved_sha256=approved)
+
+
+@pytest.mark.parametrize('fields', [('ticket_id',), ('number',), ('thread_id',),
+                                   ('ticket_id', 'number', 'thread_id')])
+def test_alias_receipts_refuse_before_any_further_creation(case, fields):
+    plan, catalog, client, controller = case
+    for step in plan['steps']:
+        step['depends_on'] = []
+    approved = controller.preview(plan, catalog)['approval_sha256']
+    class Cut(BaseException): pass
+    def interrupt(_):
+        if len(client.tickets) == 2:
+            raise Cut()
+    client.before_create = interrupt
+    with pytest.raises(Cut):
+        controller.apply(plan, catalog, approved_sha256=approved)
+    client.before_create = None
+    with PrivateDirectory(controller.directory) as private:
+        state = decode(private.read('receipts.json', 100000))
+        for field in fields:
+            state['tickets']['b'][field] = state['tickets']['a'][field]
+        private.replace('receipts.json', canonical(state))
+    previous_creates = [row for row in client.calls if row[0] == 'create_ticket']
+    with pytest.raises(DevelopmentError, match='team_ticket_receipt_changed'):
+        controller.apply(plan, catalog, approved_sha256=approved)
+    assert [row for row in client.calls if row[0] == 'create_ticket'] == previous_creates
+    assert len(client.tickets) == 2
 
 
 def test_journal_flock_excludes_another_controller(case):

@@ -15,7 +15,11 @@ permissions for the selected project and resources.
 ## Operator documents
 
 Save a UTF-8 `catalog.json` using actual existing ordinary profile IDs and their
-current versions. Repeated profiles/resources are allowed: these are assignment
+current versions. The exact calling Lead may also assign work to itself: its
+slot must name the same ID and current version returned by this controller's
+registration. This self-slot uses only that registered profile, with the same
+owner, project, resource and policy checks. It does not grant access to any other
+manager profile. Repeated profiles/resources are allowed: these are assignment
 slots, not concurrent execution grants.
 
 ```json
@@ -114,7 +118,8 @@ pending creation before calling `create_ticket`, in deterministic topological
 order. Stable keys bind the full original payload at the Board. If a reply is
 lost, repeat the exact apply command: the same key/payload retrieves that
 ticket's current identity, including when somebody has already progressed it.
-Confirmed children are read by their recorded IDs and are never rewritten,
+Confirmed receipts must have distinct ticket IDs, numbers and discussion IDs
+before any further creation. Children are read by their recorded IDs and are never rewritten,
 reassigned or recreated. A changed plan, context, profile, policy, collision or
 damaged journal refuses with `needs_review`; do not discard its intent to retry.
 

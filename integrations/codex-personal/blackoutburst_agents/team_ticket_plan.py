@@ -178,7 +178,11 @@ class TeamTicketPlanController:
         profiles = {}
         for slot in catalog['slots']:
             if slot['agent_id'] not in profiles:
-                profiles[slot['agent_id']] = self.client.call('get_managed_agent_profile', {'profile_id': slot['agent_id']})
+                # A Lead may assign work to itself using this exact registered
+                # profile. Other managers remain outside the ordinary-profile
+                # endpoint's delegation; never fall back to this self context.
+                profiles[slot['agent_id']] = (profile if slot['agent_id'] == actor['id'] else
+                    self.client.call('get_managed_agent_profile', {'profile_id': slot['agent_id']}))
             target = profiles[slot['agent_id']]
             if type(target) is not dict:
                 fail('team_ticket_profile_changed')
@@ -288,6 +292,18 @@ class TeamTicketPlanController:
             completed = [key for key in preview['order'] if key in state['tickets']]
             if completed != preview['order'][:len(completed)]:
                 fail('team_ticket_receipt_changed')
+            identities = {key: set() for key in ('ticket_id', 'number', 'thread_id')}
+            for step_id, receipt in state['tickets'].items():
+                if (type(receipt) is not dict or set(receipt) != RECEIPT_FIELDS
+                        or receipt['step_id'] != step_id or type(receipt['created_version']) is not int
+                        or receipt['created_version'] != 1):
+                    fail('team_ticket_receipt_changed')
+                opaque(receipt['ticket_id']); opaque(receipt['thread_id'])
+                version(receipt['number']); sha256(receipt['payload_sha256'])
+                for key, seen in identities.items():
+                    if receipt[key] in seen:
+                        fail('team_ticket_receipt_changed')
+                    seen.add(receipt[key])
             pending = state['pending']
             if pending is not None and (type(pending) is not dict or set(pending) != {'step_id', 'payload_sha256'}
                     or len(completed) == len(preview['order'])
@@ -303,13 +319,8 @@ class TeamTicketPlanController:
                 payload_hash = digest(canonical(payload))
                 existing = state['tickets'].get(step_id)
                 if existing is not None:
-                    if (type(existing) is not dict or set(existing) != RECEIPT_FIELDS
-                            or existing['step_id'] != step_id or existing['payload_sha256'] != payload_hash
-                            or existing['created_version'] != 1):
+                    if existing['payload_sha256'] != payload_hash:
                         fail('team_ticket_receipt_changed')
-                    for field in ('ticket_id', 'thread_id'):
-                        opaque(existing[field])
-                    version(existing['number'])
                     response = self.client.call('get_ticket', {'ticket_id': existing['ticket_id']})
                     ticket = response.get('ticket') if type(response) is dict else None
                     if (type(ticket) is not dict or ticket.get('id') != existing['ticket_id']
@@ -353,7 +364,9 @@ class TeamTicketPlanController:
                 for field in ('id', 'thread_id'):
                     opaque(ticket.get(field))
                 version(ticket.get('number'))
-                if any(row['ticket_id'] == ticket['id'] for row in state['tickets'].values()):
+                if any(any(row[field] == ticket[key] for field, key in
+                           (('ticket_id', 'id'), ('number', 'number'), ('thread_id', 'thread_id')))
+                       for row in state['tickets'].values()):
                     fail('team_ticket_creation_unconfirmed')
                 state['tickets'][step_id] = dict(step_id=step_id, ticket_id=ticket['id'], number=ticket['number'],
                     thread_id=ticket['thread_id'], created_version=1, payload_sha256=payload_hash)

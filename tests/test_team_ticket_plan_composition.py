@@ -237,3 +237,37 @@ def test_scope_or_approval_drift_refuses_before_any_child_mutation(actual_plan,f
         controller.apply(f.plan,f.catalog,approved_sha256=sha)
     assert not children(f) and not f.wire.delivered
     no_execution(f)
+
+
+def test_exact_registered_lead_self_slot_creates_ordinary_assigned_ticket_without_managed_self_lookup(actual_plan):
+    f=actual_plan
+    step=deepcopy(f.plan['steps'][0]);step.update(step_id='lead-task',slot_id='lead',depends_on=[],milestone='')
+    f.plan['steps']=[step]
+    f.catalog['slots']=[dict(slot_id='lead',agent_id=f.lead['id'],profile_version=f.lead['version'],resource='repo:plan')]
+    controller=TeamTicketPlanController(f.client,f.journal);sha=approval(f,controller)
+    result=controller.apply(f.plan,f.catalog,approved_sha256=sha)
+    assert result['status']=='complete' and len(result['tickets'])==1
+    child=f.b.get_ticket(f.human,result['tickets'][0]['ticket_id'])['ticket']
+    assert child['assignee_agent_id']==f.lead['id'] and child['assignee_owner_id']=='alice'
+    assert child['claimant'] is None and child['status']=='todo' and child['resource']=='repo:plan'
+    assert child['depends_on']==[]
+    assert not any(call['method']=='tools/call' and call['params']['name']=='get_managed_agent_profile'
+        for call in f.wire.calls)
+    no_execution(f)
+
+
+def test_other_manager_slot_uses_normal_managed_api_refusal_before_any_ticket_create(actual_plan):
+    f=actual_plan
+    other=f.b.create_agent_profile(f.human,'Another bounded Lead',project_ids=[f.project['id']],
+        policy=ordinary_policy(autonomy='queue'))
+    other=f.b.set_agent_profile_management(f.human,other['id'],other['version'],True)
+    step=deepcopy(f.plan['steps'][0]);step.update(step_id='other-manager-task',slot_id='other-lead',depends_on=[],milestone='')
+    f.plan['steps']=[step]
+    f.catalog['slots']=[dict(slot_id='other-lead',agent_id=other['id'],profile_version=other['version'],resource='repo:plan')]
+    with pytest.raises((BoardReadError,DevelopmentError)):
+        TeamTicketPlanController(f.client,f.journal).preview(f.plan,f.catalog)
+    queries=[call['params']['arguments'] for call in f.wire.calls
+        if call['method']=='tools/call' and call['params']['name']=='get_managed_agent_profile']
+    assert queries and all(query['profile_id']==other['id'] for query in queries)
+    assert not f.wire.delivered and not children(f) and not f.journal.exists()
+    no_execution(f)
