@@ -15,7 +15,7 @@ from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import (DevelopmentError, RepositoryFiles, canonical,
     check_content, digest, opaque, relative_path, validate_manifest)
 from .dev_planner import _directory_pin
-from .finite_pool_batch import FLEXIBLE_SCHEMA, child
+from .finite_pool_batch import FLEXIBLE_SCHEMA, QUEUE_SCHEMA, child
 from .git_delivery import MAX_CHANGES, MAX_CHECKOUT_FILE_BYTES
 from .git_publication import GitHubPublicationGrant, REPOSITORY
 from .git_workspace import LocalGitWorkspaceController, LocalRepositoryGrant
@@ -41,7 +41,7 @@ def load_workflow(path, *, root, batch):
     raw,pin=file_document(child(path,root/'config'),MAX_CONFIG)
     value=decode(raw)
     if (type(value) is not dict or set(value)!={'schema','batch_id','jobs'} or value['schema']!=SCHEMA
-            or value['batch_id']!=batch['batch_id'] or batch['schema']!=FLEXIBLE_SCHEMA
+            or value['batch_id']!=batch['batch_id'] or batch['schema'] not in (FLEXIBLE_SCHEMA,QUEUE_SCHEMA)
             or type(value['jobs']) is not list or len(value['jobs'])!=len(batch['jobs'])):fail()
     uuid_value(value['batch_id']);names=set();by_name={job['name']:job for job in batch['jobs']}
     if any('review-'+name in by_name for name in by_name):fail('cloud_workflow_driver_collision')

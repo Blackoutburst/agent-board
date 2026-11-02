@@ -18,7 +18,7 @@ For incremental ticket activity, call `list_activity(order="asc", after=last_pro
 
 1. Register with `autonomous=true` after receiving direct human authorization for the project and execution scope.
 2. Read `get_work`. If already working, continue that task; inspect comments and pending handoffs first.
-3. Otherwise call `claim_next_ticket` with a fresh stable retry key and an optional project ID. A released human request blocks its task, not unrelated ready work. Any unfinished claim held by the persistent profile still prevents a new selection. Positive and negative selections are durable for that key; no matching work is a normal idle result.
+3. Otherwise call `claim_next_ticket` with a fresh stable retry key and an optional project ID. For an explicitly selected ordinary Todo ticket, opt-in clients may instead use `claim_selected_queue_ticket` with that exact ID, version and stable retry key; it never falls back to another ticket or recovery, and excludes all delegation-family history. A released human request blocks its task, not unrelated ready work. Any unfinished claim held by the persistent profile still prevents a new selection. Positive and negative selections are durable for that key; no matching work is a normal idle result. A positive retry returns current ticket state, so verify the exact live claim and lease before execution.
 4. Read the full task/project and discussion. Acknowledge responsibility through the recorded claim; avoid repetitive progress comments.
 5. Work with your existing tools. Keep isolation appropriate to the repository and do not overwrite another worker's changes.
 6. Renew the claim at least every ten minutes with `renew_ticket`, preserving concise meaningful progress. Always use its returned ticket version.

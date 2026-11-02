@@ -14,7 +14,7 @@ import time
 from .development_authorization import DevelopmentAuthorization
 from .development_client import DevelopmentBoardClient
 from .development_pool import DevelopmentPoolDriver
-from .development_pool_selection import REVISION, file_document
+from .development_pool_selection import REVISION, file_document, queue_admission as validate_queue_admission
 from .dev_journal import PrivateDirectory, DevelopmentJournal, decode
 from .dev_manifest import (ACTIONS, Budgets, DevelopmentError, NamedTest,
     RepositoryFiles, canonical, check_content, digest, identity, opaque, relative_path, sha256)
@@ -192,8 +192,9 @@ class LinuxPoolJobPreparer:
 
     @contextmanager
     def _registered(self, request, *, expected_scope=None):
+        options={'queue_admission':True} if 'queue_admission' in request else {}
         with closing(DevelopmentBoardClient.from_connection_file(self.driver.selections.connection_file,
-                session_id=request['job']['session_id'],timeout=3)) as client:
+                session_id=request['job']['session_id'],timeout=3,**options)) as client:
             if (list(client.connection_identity)!=self.connection['identity']
                     or client.endpoint!=self.fixed['board_endpoint']
                     or client.session_id!=request['job']['session_id']):fail('linux_pool_registration_changed')
@@ -206,6 +207,13 @@ class LinuxPoolJobPreparer:
         if (ticket['status']!='todo' or ticket['claimant'] is not None
                 or ticket.get('delegation') is not None or ticket.get('claim_expired') is True
                 or ticket.get('resource')!=request['resource']):fail('linux_pool_ticket_not_ready')
+        if 'queue_admission' in request:
+            admission=validate_queue_admission(request['queue_admission'])
+            if (ticket['version']!=admission['ticket_version']
+                    or authority.manifest['scope']['profile_version']!=admission['profile_version']
+                    or observed['policy'].get('autonomy')!='queue'
+                    or authority.registration['session'].get('autonomous') is not True):
+                fail('development_queue_admission_changed')
         selected={'context_sha256':observed['context']['fingerprint'],
                   'policy_sha256':digest(canonical(observed['policy']))}
         if baseline is not None and selected!=baseline:fail('linux_pool_selection_changed')
@@ -214,7 +222,7 @@ class LinuxPoolJobPreparer:
     def prepare(self, operation_id, *, project_id, ticket_id, paths, resource, actions,
                 verifier_path, verifier_sha256, test_name, test_timeout_seconds, test_max_output_bytes,
                 executable, cli_version, interpreter, unshare, instruction, model,
-                planner_budgets, broker_budgets, reasoning_effort=None):
+                planner_budgets, broker_budgets, reasoning_effort=None, queue_admission=None):
         """One explicit clone + native backend/policy qualification + binding."""
         reasoning = _reasoning_configuration(reasoning_effort)
         if type(planner_budgets) is not PlannerBudgets or type(broker_budgets) is not Budgets:
@@ -248,6 +256,7 @@ class LinuxPoolJobPreparer:
             **{key:tools[key]['path'] for key in tools},'tools':tools,'cli_version':cli_version,
             'instruction':instruction,'model':model,'planner_budgets':planner_budgets.document(),
             'broker_budgets':broker_budgets.document(),'connection':self.connection,'sources':linux_source_pins(), **reasoning}
+        if queue_admission is not None:request['queue_admission']=validate_queue_admission(queue_admission)
         raw=canonical(request)
         if len(raw)>MAX_DOCUMENT:fail('linux_pool_preparation_limit')
         request=decode(raw);request_sha=digest(raw)
@@ -354,6 +363,7 @@ class LinuxPoolJobPreparer:
                         'scope':request['scope'],'broker_directory':str(broker),'backend_directory':str(backend),
                         'planner_policy_directory':str(policy),'instruction_file':str(private.path/'instruction.txt'),
                         'model':request['model'],'budgets':request['planner_budgets'], **reasoning}
+                    if 'queue_admission' in request:selection['queue_admission']=request['queue_admission']
                     self._record(private,'selection.json',selection)
                     self._fresh(final,request,baseline);held()
                     # Dispatch and Stop share this short local metadata bracket.

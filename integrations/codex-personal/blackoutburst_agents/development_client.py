@@ -14,6 +14,10 @@ from .worker_client import WorkerBoardClient, _arguments
 FAILURE_NOTICE_CODES = frozenset({'development_run_requires_review',
     'development_cleanup_requires_review',
     'development_control_requires_review', 'development_context_changed',
+    'development_queue_admission_changed', 'development_queue_claim_intent_changed',
+    'development_queue_claim_unconfirmed', 'development_queue_unfinished_work',
+    'development_queue_no_ready_ticket', 'development_queue_not_authorized',
+    'development_queue_profile_changed',
     'development_grants_unavailable', 'development_claim_lost',
     'development_stop_requested', 'development_planner_scope_mismatch',
     'planner_control_requires_review', 'planner_runtime_stopped',
@@ -63,10 +67,10 @@ class DevelopmentBoardClient(WorkerBoardClient):
     """Only prepare may register once. Reopened sessions retain their pins."""
     development_ticket_frame = True
     @classmethod
-    def from_connection_file(cls, path, *, session_id, timeout=3):
+    def from_connection_file(cls, path, *, session_id, timeout=3, queue_admission=False):
         # A connection file must have no alias writable through a checkout.
         # Reuse the established credential parser without exposing its content.
-        if (not _text(session_id,200) or type(timeout) not in (int,float)
+        if (type(queue_admission) is not bool or not _text(session_id,200) or type(timeout) not in (int,float)
                 or not math.isfinite(timeout) or not 0<timeout<=60):
             raise BoardReadError('invalid_session_or_timeout')
         path=Path(path).absolute()
@@ -90,6 +94,7 @@ class DevelopmentBoardClient(WorkerBoardClient):
             if signature(before)!=signature(os.fstat(descriptor)) or signature(before)!=signature(current):
                 raise BoardReadError('development_connection_changed')
             value=cls(config,session_id,timeout)
+            value._queue_admission=queue_admission
             value.connection_path=str(path)
             value.connection_identity=identity(before)
             return value
@@ -102,7 +107,18 @@ class DevelopmentBoardClient(WorkerBoardClient):
     def register_initial(self):
         if self._registered:
             raise BoardReadError('development_registration_already_pinned')
-        value=super().register()
+        if getattr(self,'_queue_admission',False):
+            self._initialize()
+            value=self._tool('register_agent',dict(session_id=self.session_id,agent_kind=self._config['client'],
+                identity_key=self._config['identity_key'],name=self._config['name'],
+                label=self._config['name'][:180]+' development queue',skills=[],autonomous=True))
+            if (type(value.get('session')) is not dict or value['session'].get('id')!=self.session_id
+                    or value['session'].get('autonomous') is not True
+                    or type(value.get('policy')) is not dict or value['policy'].get('autonomy')!='queue'
+                    or any(value['policy'].get(key) is not True for key in ('enabled','allow_read','allow_requests'))):
+                raise BoardReadError('development_queue_not_authorized')
+            self._registered=True
+        else:value=super().register()
         if self.development_ticket_frame:self.require_development_ticket_frame()
         return value
 
@@ -141,6 +157,16 @@ class DevelopmentBoardClient(WorkerBoardClient):
                     or schema.get('additionalProperties') is not False
                     or any(schema['properties'][key].get('type')!='string'
                            for key in ('session_id','ticket_id'))):raise ValueError
+            if getattr(self,'_queue_admission',False):
+                matches=[tool for tool in tools if type(tool) is dict
+                         and tool.get('name')=='claim_selected_queue_ticket']
+                if len(matches)!=1:raise ValueError
+                selected=matches[0]['inputSchema'];fields={'session_id','ticket_id','expected_version','idempotency_key'}
+                if (type(selected) is not dict or set(selected['properties'])!=fields|{'view'}
+                        or set(selected['required'])!=fields or selected.get('additionalProperties') is not False
+                        or selected['properties']['expected_version'].get('type')!='integer'
+                        or any(selected['properties'][key].get('type')!='string' for key in fields-{'expected_version'})):
+                    raise ValueError
         except (KeyError,TypeError,ValueError):
             raise BoardReadError('development_ticket_frame_unavailable') from None
         self._development_ticket_frame_ready=True
@@ -223,7 +249,18 @@ class DevelopmentBoardClient(WorkerBoardClient):
     def call(self, name, args):
         if not self._registered:
             raise BoardReadError('development_registration_required')
-        if name == 'get_work':
+        if name=='claim_selected_queue_ticket':
+            if (getattr(self,'_queue_admission',False) is not True or type(args) is not dict
+                    or set(args)!={'ticket_id','expected_version','idempotency_key'}
+                    or not _text(args['ticket_id'],200) or type(args['expected_version']) is not int
+                    or not 1<=args['expected_version']<2**63 or type(args['idempotency_key']) is not str
+                    or re.fullmatch(r'development-queue-claim-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                                    args['idempotency_key']) is None):
+                raise BoardReadError('development_queue_arguments_invalid')
+            values={**args,'view':'full'}
+        elif name in ('claim_ticket','renew_ticket') and getattr(self,'_queue_admission',False):
+            raise BoardReadError('development_queue_claim_required')
+        elif name == 'get_work':
             if (type(args) is not dict or set(args) != {'project_id', 'limit'}
                     or not _text(args['project_id'],200) or args['limit'] != 1 or type(args['limit']) is not int):
                 raise BoardReadError('invalid_arguments')

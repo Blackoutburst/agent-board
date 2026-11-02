@@ -26,6 +26,18 @@ def fail(code='development_pool_selection_mismatch'):
     raise DevelopmentError(code)
 
 
+def queue_admission(value):
+    """Closed opt-in selection bounds; metadata never supplies a grant."""
+    if (type(value) is not dict or set(value) != {'schema', 'ticket_version', 'profile_version', 'catalog_sha256'}
+            or value['schema'] != 'development-queue-admission-v1'
+            or any(type(value[key]) is not int or not 1 <= value[key] < 2 ** 63
+                   for key in ('ticket_version', 'profile_version'))
+            or type(value['catalog_sha256']) is not str or len(value['catalog_sha256']) != 64
+            or any(char not in '0123456789abcdef' for char in value['catalog_sha256'])):
+        fail('development_queue_admission_invalid')
+    return decode(canonical(value))
+
+
 def file_document(path, maximum=MAX_SELECTION):
     path = Path(path)
     if not path.is_absolute(): fail('development_pool_absolute_path_required')
@@ -63,7 +75,9 @@ class DevelopmentSelections:
 
     def validate(self, selection, job, payload):
         identity = job_identity(job)
-        if (type(selection) is not dict or set(selection) not in (FIELDS, FIELDS | {'reasoning_effort'})
+        if (type(selection) is not dict or set(selection) not in
+                (FIELDS, FIELDS | {'reasoning_effort'}, FIELDS | {'queue_admission'},
+                 FIELDS | {'reasoning_effort', 'queue_admission'})
                 or type(selection['schema']) is not int or selection['schema'] != 1
                 or type(payload) is not dict or set(payload) != {'project_id', 'ticket_id'}): fail()
         if any(selection[name] != identity[key] for name, key in
@@ -71,6 +85,8 @@ class DevelopmentSelections:
         expected = {**self.fixed, **payload, 'board_session_id': identity['session_id']}
         _scope(expected)
         if selection['scope'] != expected: fail()
+        if 'queue_admission' in selection:
+            queue_admission(selection['queue_admission'])
         opaque(selection['model'], 'invalid_development_model', 128)
         if 'reasoning_effort' in selection:
             if selection['reasoning_effort'] is None: fail('invalid_planner_reasoning_effort')
@@ -98,6 +114,9 @@ class DevelopmentSelections:
         wanted = {key: expected[key] for key in ('owner_id', 'agent_id', 'project_id', 'ticket_id')}
         if (any(manifest['scope'][key] != value for key, value in wanted.items())
                 or manifest['scope']['session_id'] != identity['session_id']): fail()
+        if ('queue_admission' in selection and manifest['scope']['profile_version'] !=
+                selection['queue_admission']['profile_version']):
+            fail('development_queue_profile_changed')
         # The real worker/backend still validate every closed plan, qualification,
         # environment and current permission. Merely present JSON grants nothing.
         with PrivateDirectory(pins['broker']['path']) as private:

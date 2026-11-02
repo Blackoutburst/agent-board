@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from board import Board, BoardError
+from coordination import validate_selected_queue_claim_arguments
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
 from server_messages_append import validate_messages_append_arguments
 from profile_management import PROFILE_MANAGEMENT_TOOLS,validate_profile_management_arguments
@@ -67,12 +68,14 @@ class BoardMCP(FastMCP):
             validate_message_admission_seal_arguments(arguments)
         elif name in PROFILE_MANAGEMENT_TOOLS:
             validate_profile_management_arguments(name,arguments)
+        elif name == 'claim_selected_queue_ticket':
+            validate_selected_queue_claim_arguments(arguments)
         return await super().call_tool(name, arguments)
 
     async def list_tools(self):
         tools = await super().list_tools()
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
-                if tool.name in {'get_development_frame', 'get_development_ticket_frame', 'seal_message_execution_admission'}
+                if tool.name in {'get_development_frame', 'get_development_ticket_frame', 'seal_message_execution_admission', 'claim_selected_queue_ticket'}
                 or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS
                 or tool.name in PROFILE_MANAGEMENT_TOOLS else tool for tool in tools]
 
@@ -942,6 +945,13 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return _view(board.claim_next_ticket(session_actor(session_id), idempotency_key, project_id),view)
 
     @mcp.tool()
+    async def claim_selected_queue_ticket(session_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
+                                          expected_version: Version, idempotency_key: RuntimeOpaque,
+                                          view: Literal['compact','full'] = 'compact') -> dict:
+        """In explicitly authorized autonomous queue mode, claim only this exact fresh Todo ticket at its selected version. A profile-wide unfinished claim from any session/device/project, including expired and legacy task work, blocks new admission. Queue eligibility, automation, skills, assignments, dependencies, resource fences and delegation rules remain mandatory; family tickets and every existing claim are refused. Positive and negative selections are durable under the exact ticket/version/key. Retry returns the selected ticket's current state, not fresh authority: verify its exact live identity/lease before work. Never falls back to another ticket, manual claim or recovery; no execution, renewal or cleanup occurs."""
+        return _view(board.claim_selected_queue_ticket(session_actor(session_id),ticket_id,expected_version,idempotency_key),view)
+
+    @mcp.tool()
     async def lookup_ticket_selection(session_id: str, idempotency_key: str, project_id: str = "", view: Literal["compact", "full"] = "compact") -> dict:
         """Read this exact session/key/project selection without claiming anything. Returns found=false if absent; otherwise the stored no-selection result or the selected ticket's current state. Requires current read permission and project access, but no autonomous worker registration. A negative lookup never authorizes a new claim or proves an in-flight request cannot still complete."""
         return _view(board.lookup_ticket_selection(session_actor(session_id), idempotency_key, project_id),view)
@@ -1264,7 +1274,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.18.0", "schema_version": 18, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal", "managed_ticket_resource_routing", "ticket_resolutions"]}
+        return {"status": "ok", "version": "2.18.1", "schema_version": 18, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal", "managed_ticket_resource_routing", "ticket_resolutions", "selected_queue_admission"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
