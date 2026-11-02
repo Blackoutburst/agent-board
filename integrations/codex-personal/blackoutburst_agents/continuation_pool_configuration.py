@@ -12,18 +12,42 @@ from urllib.parse import urlsplit
 
 from .cloud_workflow import load_workflow
 from .dev_journal import decode
-from .dev_manifest import DevelopmentError
+from .dev_manifest import DevelopmentError,sha256
 from .development_pool_selection import file_document
 from .finite_pool_batch import child,load_batch,FLEXIBLE_SCHEMA,QUEUE_SCHEMA
 from .linux_input_snapshot import _path
 from .pool_journal import PoolError,identifier,uuid_value
 
 SCHEMA='linux-cloud-continuation-v1'
+QUEUE_CONTINUATION_SCHEMA='linux-cloud-queue-continuation-v1'
 MAX_CONFIGURATION=128*1024
 
 
 def require(value,code='continuation_pool_configuration_invalid'):
     if not value:raise DevelopmentError(code)
+
+
+def load_queue_continuation(path,*,root,owner_id,board_endpoint,max_seconds):
+    """Local standing selection only; no client, credentials, registration or grant."""
+    root=Path(_path(os.fspath(root)));path=child(path,root/'config')
+    raw,pin=file_document(path,MAX_CONFIGURATION);value=decode(raw)
+    if type(value) is not dict or value.get('schema')!=QUEUE_CONTINUATION_SCHEMA:return None
+    require(set(value)=={'schema','catalog_file','workflow_file','approved_sha256',
+        'checkpoint_after_actions','provider_backoff_seconds'})
+    sha256(value['approved_sha256'])
+    require(type(max_seconds) is int and 1<=max_seconds<=7200)
+    from .development_queue import queue_tick_plan
+    plan=queue_tick_plan(root,value['catalog_file'],value['workflow_file'],
+        checkpoint_after_actions=value['checkpoint_after_actions'],provider_backoff_seconds=value['provider_backoff_seconds'])
+    catalog=plan['catalog']
+    require(catalog['owner_id']==owner_id and catalog['board_endpoint']==board_endpoint
+        and catalog['timeout_seconds']<=max_seconds and plan['approval_sha256']==value['approved_sha256'],
+        'continuation_pool_configuration_changed')
+    pins={'configuration':pin,**{key:plan['binding'][key] for key in ('catalog','workflow')}}
+    require(len({p['path'] for p in pins.values()})==3)
+    for observed in pins.values():
+        require(file_document(observed['path'],MAX_CONFIGURATION)[1]==observed,'continuation_pool_configuration_changed')
+    return {'configuration':value,'plan':plan},pins
 
 
 def cycle_limits(job):
@@ -88,6 +112,15 @@ def load_continuation(path,*,root,owner_id,board_endpoint,max_seconds):
 
 def continuation_plan(path,*,root,owner_id,board_endpoint,max_seconds):
     """Closed, non-activating projection; never expose instructions or secrets."""
+    standing=load_queue_continuation(path,root=root,owner_id=owner_id,
+        board_endpoint=board_endpoint,max_seconds=max_seconds)
+    if standing is not None:
+        loaded,pins=standing;plan=loaded['plan'];catalog=plan['catalog']
+        return {'schema':QUEUE_CONTINUATION_SCHEMA,'status':'plan','configuration_sha256':pins['configuration']['sha256'],
+            'approval_sha256':plan['approval_sha256'],'catalog_sha256':pins['catalog']['sha256'],
+            'workflow_sha256':pins['workflow']['sha256'],'agent_id':catalog['agent_id'],
+            'project_id':catalog['project_id'],'entries':[e['entry_id'] for e in catalog['entries']],
+            'activated':False,'execution_qualified':False,'launchable':False}
     loaded,pins=load_continuation(path,root=root,owner_id=owner_id,
         board_endpoint=board_endpoint,max_seconds=max_seconds)
     config=loaded['configuration'];jobs={job['name']:job for job in loaded['batch']['jobs']}

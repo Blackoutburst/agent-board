@@ -69,6 +69,43 @@ def test_standing_plan_ignores_tickets_and_performs_no_rpc_or_creation(tick_case
     assert client.calls==[] and not (root/'admissions').exists()
 
 
+def standing_wrapper(t):
+    root,path,_,_,c,workflow,*_=t
+    value=dict(schema='linux-cloud-queue-continuation-v1',catalog_file=str(path),workflow_file=str(workflow),
+        approved_sha256=c.tick_plan(path,str(workflow))['approval_sha256'],checkpoint_after_actions=3,
+        provider_backoff_seconds=60)
+    wrapper=root/'config/standing-continuation.json';wrapper.write_bytes(canonical(value));wrapper.chmod(0o600)
+    return wrapper,value
+
+
+def test_pure_standing_facade_plan_matches_cli_hash_without_reading_connection_or_rpc(tick_case,monkeypatch):
+    from blackoutburst_agents import development_queue as module
+    from blackoutburst_agents.continuation_pool_configuration import continuation_plan
+    root,_,catalog,client,*_=tick_case
+    wrapper,value=standing_wrapper(tick_case);original=module.file_document
+    def no_secret(path,*args,**kwargs):
+        assert str(path)!=catalog['connection_file'],'plan must not read connection contents'
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(module,'file_document',no_secret)
+    result=continuation_plan(str(wrapper),root=root,owner_id=catalog['owner_id'],
+        board_endpoint=catalog['board_endpoint'],max_seconds=3000)
+    assert result['approval_sha256']==value['approved_sha256'] and result['schema']==value['schema']
+    assert result['status']=='plan' and result['execution_qualified'] is result['activated'] is result['launchable'] is False
+    assert client.calls==[] and not (root/'admissions').exists()
+    assert 'instruction' not in json.dumps(result) and 'connection_file' not in result
+
+
+@pytest.mark.parametrize('change',[{'allow':True},{'checkpoint_after_actions':True},{'approved_sha256':'f'*64}])
+def test_standing_wrapper_is_closed_before_client_or_execution(tick_case,change):
+    from blackoutburst_agents.continuation_pool_configuration import continuation_plan
+    root,_,catalog,client,*_=tick_case
+    wrapper,value=standing_wrapper(tick_case);replace(wrapper,{**value,**change})
+    with pytest.raises(DevelopmentError):
+        continuation_plan(str(wrapper),root=root,owner_id=catalog['owner_id'],
+            board_endpoint=catalog['board_endpoint'],max_seconds=3000)
+    assert client.calls==[] and not (root/'admissions').exists()
+
+
 def test_empty_and_external_stop_never_construct_service_or_admit(tick_case):
     root,_,_,client,_,_,_,run,calls,*_=tick_case
     assert run(should_stop=lambda:True)['phase']=='stopped'

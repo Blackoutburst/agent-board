@@ -37,6 +37,95 @@ def positive(value):
     return value
 
 
+def read_queue_catalog(root,path):
+    """Validate operator data without parsing connection credentials or RPC."""
+    root=Path(root)
+    path = child(str(Path(path).absolute()), root / 'config')
+    raw, pin = file_document(path, MAX_BATCH)
+    value = decode(raw)
+    canonical(value)  # Reject escaped invalid Unicode before any read/RPC.
+    if (type(value) is not dict or set(value) != CATALOG_FIELDS
+            or value['schema'] != 'development-queue-catalog-v1'
+            or type(value['entries']) is not list or not 1 <= len(value['entries']) <= 16):
+        fail()
+    for key in ('owner_id', 'agent_id', 'project_id'): opaque(value[key])
+    positive(value['profile_version'])
+    if type(value['timeout_seconds']) is not int or not 1 <= value['timeout_seconds'] <= 14400:
+        fail()
+    if type(value['connection_file']) is not str: fail()
+    connection = child(value['connection_file'], root / 'connections')
+    names = set(); resources = set()
+    for entry in value['entries']:
+        if type(entry) is not dict or set(entry) not in (ENTRY_FIELDS, ENTRY_FIELDS | {'reasoning_effort'}):
+            fail()
+        identifier(entry['entry_id']); opaque(entry['resource']); opaque(entry['model'], maximum=128)
+        if (entry['entry_id'] in names or entry['resource'] in resources or '*' in entry['resource']
+                or entry['resource'].startswith(('agent-profiles:', 'runtime:', 'server:', 'provider:',
+                                                 'device:', 'credential:', 'policy:'))):
+            fail()
+        names.add(entry['entry_id']); resources.add(entry['resource'])
+        if (type(entry['paths']) is not list or not 1 <= len(entry['paths']) <= 128
+                or any(type(item) is not str for item in entry['paths'])
+                or len(set(entry['paths'])) != len(entry['paths'])):
+            fail()
+        for path in entry['paths']: relative_path(path)
+        if (type(entry['actions']) is not list or any(type(item) is not str for item in entry['actions'])
+                or not {'repo.read_file', 'repo.run_test'} <= set(entry['actions']) <= ACTIONS
+                or len(set(entry['actions'])) != len(entry['actions'])):
+            fail()
+        if type(entry['verifier_path']) is not str: fail()
+        child(entry['verifier_path'], root / 'verifiers'); sha256(entry['verifier_sha256'])
+        verifier, _ = file_document(entry['verifier_path'], 65536)
+        if digest(verifier) != entry['verifier_sha256']: fail('development_queue_verifier_changed')
+        check_content(verifier)
+        NamedTest(entry['test_name'], 'queue-preview', entry['test_timeout_seconds'], entry['test_max_output_bytes']).document()
+        if entry['test_timeout_seconds'] > 60: fail()
+        if type(entry['instruction']) is not str or not entry['instruction'].strip() or len(entry['instruction'].encode()) > 16384:
+            fail()
+        check_content(entry['instruction'].encode())
+        if (type(entry['planner_budgets']) is not dict or set(entry['planner_budgets']) != set(PlannerBudgets().document())
+                or type(entry['broker_budgets']) is not dict or set(entry['broker_budgets']) != set(Budgets().document())):
+            fail()
+        PlannerBudgets(**entry['planner_budgets']).document(); Budgets(**entry['broker_budgets']).document()
+        if 'reasoning_effort' in entry:
+            if entry['reasoning_effort'] is None: fail()
+            _reasoning_configuration(entry['reasoning_effort'])
+        repository = entry['repository']
+        if type(repository) is not dict or set(repository) != {'repository_id', 'repository', 'base_commit'}:
+            fail()
+        if any(type(value) is not str for value in repository.values()): fail()
+        child(repository['repository'], root / 'repositories')
+        LocalRepositoryGrant(**repository, owner_id=value['owner_id'],
+            workspace_root=str(root / 'checkouts' / 'preview' / entry['entry_id'])).document()
+    return value, pin
+
+def _standing_plan(root,catalog,catalog_pin,workflow_file,checkpoint_after_actions,provider_backoff_seconds):
+    """Pin standing operator scope, independent of volatile ticket selection."""
+    from .cloud_workflow import load_workflow
+    from .continuation_pool_configuration import cycle_limits
+    raw,_=file_document(child(workflow_file,root/'config'),MAX_BATCH)
+    template=decode(raw)
+    if type(template) is not dict or 'batch_id' not in template:fail('development_queue_workflow_invalid')
+    jobs=[dict(name=e['entry_id'],agent_id=catalog['agent_id'],connection_file=catalog['connection_file'],
+        paths=e['paths']) for e in catalog['entries']]
+    workflow,workflow_pin=load_workflow(workflow_file,root=root,
+        batch=dict(schema=QUEUE_SCHEMA,batch_id=template['batch_id'],jobs=jobs))
+    if (type(checkpoint_after_actions) is not int or type(provider_backoff_seconds) is not int
+            or not 30<=provider_backoff_seconds<=3600):fail('development_queue_tick_invalid')
+    for entry in catalog['entries']:
+        cap=cycle_limits(entry)
+        if (not 1<=checkpoint_after_actions<=min(cap['max_actions'],cap['max_turns'])
+                or cap['max_wall_seconds']>catalog['timeout_seconds']):fail('development_queue_tick_invalid')
+    binding=dict(catalog=catalog_pin,workflow=workflow_pin,checkpoint_after_actions=checkpoint_after_actions,
+        provider_backoff_seconds=provider_backoff_seconds)
+    return dict(schema='development-queue-tick-plan-v1',approval_sha256=digest(canonical(binding)),
+        binding=binding,catalog=catalog,workflow=workflow,activated=False,launchable=False)
+
+def queue_tick_plan(root,catalog_file,workflow_file,*,checkpoint_after_actions=3,provider_backoff_seconds=60):
+    catalog,pin=read_queue_catalog(root,catalog_file)
+    return _standing_plan(Path(root),catalog,pin,workflow_file,checkpoint_after_actions,provider_backoff_seconds)
+
+
 class DevelopmentQueueAdmission:
     def __init__(self, root, client):
         self.root = Path(root).absolute()
@@ -54,68 +143,12 @@ class DevelopmentQueueAdmission:
 
     def _catalog(self, path):
         self._local()
-        path = child(str(Path(path).absolute()), self.root / 'config')
-        raw, pin = file_document(path, MAX_BATCH)
-        value = decode(raw)
-        canonical(value)  # Reject escaped invalid Unicode before any read/RPC.
-        if (type(value) is not dict or set(value) != CATALOG_FIELDS
-                or value['schema'] != 'development-queue-catalog-v1'
-                or type(value['entries']) is not list or not 1 <= len(value['entries']) <= 16):
-            fail()
-        for key in ('owner_id', 'agent_id', 'project_id'): opaque(value[key])
-        positive(value['profile_version'])
-        if type(value['timeout_seconds']) is not int or not 1 <= value['timeout_seconds'] <= 14400:
-            fail()
-        if value['board_endpoint'] != self.client.endpoint:
+        value,pin=read_queue_catalog(self.root,path)
+        connection=child(value['connection_file'],self.root/'connections')
+        if (value['board_endpoint']!=self.client.endpoint or connection!=self.client.connection_path
+                or file_document(connection)[1]!=self.client.connection_pin):
             fail('development_queue_connection_changed')
-        if type(value['connection_file']) is not str: fail()
-        connection = child(value['connection_file'], self.root / 'connections')
-        if connection != self.client.connection_path or file_document(connection)[1] != self.client.connection_pin:
-            fail('development_queue_connection_changed')
-        names = set(); resources = set()
-        for entry in value['entries']:
-            if type(entry) is not dict or set(entry) not in (ENTRY_FIELDS, ENTRY_FIELDS | {'reasoning_effort'}):
-                fail()
-            identifier(entry['entry_id']); opaque(entry['resource']); opaque(entry['model'], maximum=128)
-            if (entry['entry_id'] in names or entry['resource'] in resources or '*' in entry['resource']
-                    or entry['resource'].startswith(('agent-profiles:', 'runtime:', 'server:', 'provider:',
-                                                     'device:', 'credential:', 'policy:'))):
-                fail()
-            names.add(entry['entry_id']); resources.add(entry['resource'])
-            if (type(entry['paths']) is not list or not 1 <= len(entry['paths']) <= 128
-                    or any(type(item) is not str for item in entry['paths'])
-                    or len(set(entry['paths'])) != len(entry['paths'])):
-                fail()
-            for path in entry['paths']: relative_path(path)
-            if (type(entry['actions']) is not list or any(type(item) is not str for item in entry['actions'])
-                    or not {'repo.read_file', 'repo.run_test'} <= set(entry['actions']) <= ACTIONS
-                    or len(set(entry['actions'])) != len(entry['actions'])):
-                fail()
-            if type(entry['verifier_path']) is not str: fail()
-            child(entry['verifier_path'], self.root / 'verifiers'); sha256(entry['verifier_sha256'])
-            verifier, _ = file_document(entry['verifier_path'], 65536)
-            if digest(verifier) != entry['verifier_sha256']: fail('development_queue_verifier_changed')
-            check_content(verifier)
-            NamedTest(entry['test_name'], 'queue-preview', entry['test_timeout_seconds'], entry['test_max_output_bytes']).document()
-            if entry['test_timeout_seconds'] > 60: fail()
-            if type(entry['instruction']) is not str or not entry['instruction'].strip() or len(entry['instruction'].encode()) > 16384:
-                fail()
-            check_content(entry['instruction'].encode())
-            if (type(entry['planner_budgets']) is not dict or set(entry['planner_budgets']) != set(PlannerBudgets().document())
-                    or type(entry['broker_budgets']) is not dict or set(entry['broker_budgets']) != set(Budgets().document())):
-                fail()
-            PlannerBudgets(**entry['planner_budgets']).document(); Budgets(**entry['broker_budgets']).document()
-            if 'reasoning_effort' in entry:
-                if entry['reasoning_effort'] is None: fail()
-                _reasoning_configuration(entry['reasoning_effort'])
-            repository = entry['repository']
-            if type(repository) is not dict or set(repository) != {'repository_id', 'repository', 'base_commit'}:
-                fail()
-            if any(type(value) is not str for value in repository.values()): fail()
-            child(repository['repository'], self.root / 'repositories')
-            LocalRepositoryGrant(**repository, owner_id=value['owner_id'],
-                workspace_root=str(self.root / 'checkouts' / 'preview' / entry['entry_id'])).document()
-        return value, pin
+        return value,pin
 
     def _registration(self, catalog, *, autonomous):
         registration = self.client.registration(autonomous=autonomous)
@@ -309,27 +342,8 @@ class DevelopmentQueueAdmission:
             return {**completed, 'historical': False}
 
     def tick_plan(self,catalog_file,workflow_file,*,checkpoint_after_actions=3,provider_backoff_seconds=60):
-        """Pin standing operator scope, independent of volatile ticket selection."""
-        from .cloud_workflow import load_workflow
-        from .continuation_pool_configuration import cycle_limits
-        catalog,catalog_pin=self._catalog(catalog_file)
-        raw,_=file_document(child(workflow_file,self.root/'config'),MAX_BATCH)
-        template=decode(raw)
-        if type(template) is not dict or 'batch_id' not in template:fail('development_queue_workflow_invalid')
-        jobs=[dict(name=e['entry_id'],agent_id=catalog['agent_id'],connection_file=catalog['connection_file'],
-            paths=e['paths']) for e in catalog['entries']]
-        workflow,workflow_pin=load_workflow(workflow_file,root=self.root,
-            batch=dict(schema=QUEUE_SCHEMA,batch_id=template['batch_id'],jobs=jobs))
-        if (type(checkpoint_after_actions) is not int or type(provider_backoff_seconds) is not int
-                or not 30<=provider_backoff_seconds<=3600):fail('development_queue_tick_invalid')
-        for entry in catalog['entries']:
-            cap=cycle_limits(entry)
-            if (not 1<=checkpoint_after_actions<=min(cap['max_actions'],cap['max_turns'])
-                    or cap['max_wall_seconds']>catalog['timeout_seconds']):fail('development_queue_tick_invalid')
-        binding=dict(catalog=catalog_pin,workflow=workflow_pin,checkpoint_after_actions=checkpoint_after_actions,
-            provider_backoff_seconds=provider_backoff_seconds)
-        return dict(schema='development-queue-tick-plan-v1',approval_sha256=digest(canonical(binding)),
-            binding=binding,catalog=catalog,workflow=workflow,activated=False,launchable=False)
+        catalog,pin=self._catalog(catalog_file)
+        return _standing_plan(self.root,catalog,pin,workflow_file,checkpoint_after_actions,provider_backoff_seconds)
 
     @contextmanager
     def _tick_locked(self,catalog):

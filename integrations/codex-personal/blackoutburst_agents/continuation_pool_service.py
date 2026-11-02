@@ -16,13 +16,14 @@ import threading
 import time
 import uuid
 
-from .continuation_pool_configuration import load_continuation, MAX_CONFIGURATION
+from .continuation_pool_configuration import (load_continuation,load_queue_continuation,
+    QUEUE_CONTINUATION_SCHEMA,MAX_CONFIGURATION)
 from .continuation import ContinuationTask, ContinuationChecks, PHASES
 from .continuation_journal import ContinuationJournal, ContinuationError
 from .board_reader import BoardReadError
 from .context import ContextError
 from .dev_journal import PrivateDirectory, decode, DevelopmentJournal
-from .dev_manifest import Budgets, DevelopmentError, canonical, digest, identity, opaque, validate_manifest
+from .dev_manifest import Budgets, DevelopmentError, canonical, digest, identity, opaque, signature,validate_manifest
 from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .development_authorization import DevelopmentAuthorization
@@ -739,8 +740,11 @@ class ContinuationPoolService:
         self.root=Path(_path(os.fspath(root)));self.path=Path(configuration_path)
         self.owner_id,self.endpoint=opaque(owner_id),board_endpoint
         self.max_seconds=max_seconds;self.cli_version=cli_version
-        self.loaded,self.configuration_pins=load_continuation(configuration_path,root=self.root,
+        standing=load_queue_continuation(configuration_path,root=self.root,
             owner_id=owner_id,board_endpoint=board_endpoint,max_seconds=max_seconds)
+        self.loaded,self.configuration_pins=(standing if standing is not None else
+            load_continuation(configuration_path,root=self.root,owner_id=owner_id,
+                board_endpoint=board_endpoint,max_seconds=max_seconds))
         require(type(cli_version) is str and cli_version.startswith('codex-cli '))
         self.tools={key:_executable_pin(os.fspath(value)) for key,value in
             (('executable',executable),('interpreter',interpreter),('unshare',unshare),('gh',gh_executable))}
@@ -850,6 +854,8 @@ class ContinuationPoolService:
     def run_once(self,*,should_stop=None):
         require(self.pid==os.getpid() and self.thread is threading.current_thread())
         require(should_stop is None or callable(should_stop))
+        if self.loaded['configuration']['schema']==QUEUE_CONTINUATION_SCHEMA:
+            return self._queue_once(should_stop)
         require(self._mutex.acquire(blocking=False),'continuation_pool_owner_busy')
         try:
             require(self._retained_lease is None,'continuation_pool_cleanup_unknown')
@@ -915,6 +921,36 @@ class ContinuationPoolService:
                 status='needs_you' if control.stop_failed or any(row['phase']=='needs_you' for row in ordered) else 'stopped' if control.cancel.is_set() else 'pass_complete'
                 return {'schema':'continuation-pool-pass-v1','status':status,'tasks':ordered,
                     'activated':True,'pass_complete_is_project_completion':False}
+        finally:self._mutex.release()
+
+    def _queue_once(self,should_stop):
+        """Installed entry facade; generated Core configs select the other branch."""
+        from .development_queue import DevelopmentQueueAdmission
+        from .development_queue_client import DevelopmentQueueDiscoveryClient
+        require(self._mutex.acquire(blocking=False),'continuation_pool_owner_busy')
+        try:
+            before=signature(os.stat(self.path,follow_symlinks=False))
+            self._pins(full=True);config=self.loaded['configuration'];catalog=self.loaded['plan']['catalog']
+            require(before==signature(os.stat(self.path,follow_symlinks=False)),'continuation_pool_configuration_changed')
+            def stopping():
+                require(signature(os.stat(self.path,follow_symlinks=False))==before,'continuation_pool_configuration_changed')
+                return bool(should_stop and should_stop())
+            session='continuation-queue-'+digest(canonical({'owner_id':self.owner_id,
+                'agent_id':catalog['agent_id'],'configuration_path':str(self.path)}))
+            with DevelopmentQueueDiscoveryClient.from_connection_file(catalog['connection_file'],session_id=session) as client:
+                result=DevelopmentQueueAdmission(self.root,client).tick(config['catalog_file'],config['workflow_file'],
+                    approved_sha256=config['approved_sha256'],executable=self.tools['executable']['path'],
+                    cli_version=self.cli_version,interpreter=self.tools['interpreter']['path'],
+                    unshare=self.tools['unshare']['path'],gh_executable=self.tools['gh']['path'],
+                    max_seconds=self.max_seconds,checkpoint_after_actions=config['checkpoint_after_actions'],
+                    provider_backoff_seconds=config['provider_backoff_seconds'],should_stop=stopping)
+            self._pins(full=True)
+            service=result['service']
+            envelope=(service if service is not None else {'schema':'continuation-pool-pass-v1',
+                'status':'stopped' if result['phase']=='stopped' else 'pass_complete','tasks':[],
+                'activated':True,'pass_complete_is_project_completion':False})
+            return {**envelope,'queue':{key:result[key] for key in
+                ('schema','phase','request_id','logical_task_id','launchable')}}
         finally:self._mutex.release()
 
     def _target(self,root,target,job,control):

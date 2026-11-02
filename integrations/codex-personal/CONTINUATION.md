@@ -33,6 +33,30 @@ ambiguë ne devient jamais une reprise implicite. Les tests temporaires utilisen
 le vrai Board, Core, Worker et Runtime avec transports/qualification simulés ;
 aucun nouveau pilote réel de file persistante n'est revendiqué ici.
 
+L'unité déjà installée peut appeler cette file sans changer son point d'entrée.
+Le document sélectionné par `--continuation` utilise alors le schéma distinct
+suivant, écrit et approuvé hors du modèle :
+
+```json
+{
+  "schema": "linux-cloud-queue-continuation-v1",
+  "catalog_file": "/chemin/prive/pool/config/catalog.json",
+  "workflow_file": "/chemin/prive/pool/config/workflow-standing.json",
+  "approved_sha256": "<hash retourné par preview --workflow>",
+  "checkpoint_after_actions": 3,
+  "provider_backoff_seconds": 60
+}
+```
+
+`continuation-plan` valide les documents locaux et affiche leurs empreintes avec
+`execution_qualified=false`, sans ouvrir la connexion ni appeler le Board.
+`run-continuation-once` passe par la même façade `ContinuationPoolService`, puis
+par le client de découverte normal et un seul `tick`. La session de découverte
+est déterministe pour la configuration et le profil ; les sessions de chaque
+génération restent neuves. Le Core généré conserve l'ancien schéma, ce qui
+sépare explicitement sa reprise de la découverte et évite toute récursion.
+L'ancien schéma d'une tâche Core sélectionnée garde son comportement.
+
 Le 2 novembre, le pilote 0.45.5 #65 a confirmé deux générations auteur, la PR
 #82 et un avis distinct publié, avec sortie propre des opérations sélectionnées.
 Cet avis reste `limited` : les fichiers complets et les métadonnées détaillées
