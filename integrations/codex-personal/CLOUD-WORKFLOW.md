@@ -113,3 +113,5 @@ remain ticket #52 work.
 Owner Runtime capacity is shared by coding and review jobs; uncertain executions continue to count.
 
 Continuation cycles retain confirmed work and recheck permissions before resuming.
+
+Independent review material includes complete before/after files when they fit within 24,000 UTF-8 bytes and metadata from the controller-verified final tests. Larger file pairs are explicitly marked as omitted; private verifier code and raw output are not included.
