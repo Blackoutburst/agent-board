@@ -97,7 +97,12 @@ def main():
         # Existing service modules are already loaded. Replace files atomically and
         # restart immediately so new browser assets and backend share one release.
         for name in files:
-            atomic_copy(source/name,live/name)
+            # Identical files are left alone; this also respects directories
+            # that are intentionally owned by root (deploy/worker_pool).
+            target=live/name
+            if target.is_file() and not target.is_symlink() and target.read_bytes()==(source/name).read_bytes():
+                continue
+            atomic_copy(source/name,target)
         restarted=subprocess.run(['systemctl','--no-ask-password','restart','collaboration-board.service'],
                                  capture_output=True,text=True,timeout=15)
         if restarted.returncode:
