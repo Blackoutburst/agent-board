@@ -75,6 +75,21 @@ def main():
     if not match:
         raise RuntimeError('Could not read the source health version')
     expected_version,expected_schema=match.group(1),int(match.group(2))
+    # Fail before touching anything if a changed file can't be replaced (e.g. the
+    # root-owned deploy/worker_pool): a half-copied tree must never be restarted.
+    blocked=[]
+    for name in files:
+        target=live/name
+        if target.is_file() and not target.is_symlink() and target.read_bytes()==(source/name).read_bytes():
+            continue
+        folder=target.parent
+        while not folder.exists(): folder=folder.parent
+        if not os.access(folder,os.W_OK|os.X_OK):
+            blocked.append(name)
+    if blocked:
+        raise RuntimeError('These changed files are in folders this user cannot write; nothing was deployed. '
+                           'Copy them first, then rerun:\n'+'\n'.join(
+                               f'  sudo install -m 0644 {source/name} {live/name}' for name in blocked))
     pid=service_pid();verify_process(pid,live)
     args.backup_root.mkdir(parents=True,exist_ok=True,mode=0o700)
     args.backup_root.chmod(0o700)

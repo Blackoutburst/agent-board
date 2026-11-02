@@ -27,7 +27,7 @@
     "deploy/isolated_host/unit.service.in": "5a2af330567acf3db72458aef1d79e61d9ad19f490e6f3c637fd71178858dec0",
     "deploy/isolated_host/update.py": "5925ff5c49ccb1507ec4cd4effa17de78fc0839a83a57d9f967822ad96c13ceb",
     "deploy/nginx-location.conf": "6cb3de6cd329e7d5bc69fecd8fbc916a129fac3a3234e07c5255694b2ca05394",
-    "deploy/release.py": "6fd073471ad2299ec467e2fabd59d05a3d67a77a89403fb79dfb86d041259ec8",
+    "deploy/release.py": "a71bdd6167c22940ad10bae59b57f8ac5a8d25261cf860c4ec07620ad55ae153",
     "deploy/worker_pool/README.md": "46ac3af6b4463b1ed06d7652a4603b0ef7e9a9ce1a1af03107d7809529044c7b",
     "deploy/worker_pool/__init__.py": "3c4d4e51033e485c6f450c8666a8616213cba4d7634368bc788d301d6630d834",
     "deploy/worker_pool/continuation.service.in": "054e80e391a01a8694259d23723565c4d38312a77bfd5a7041d6070d3f412d35",
