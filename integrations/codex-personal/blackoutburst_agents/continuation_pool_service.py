@@ -1219,6 +1219,10 @@ class _Generation:
     @classmethod
     def create(cls,service,directory,target,job,generation,control,resources,*,old=None):
         result=cls();result._setup(service,directory,target,job,generation,control,resources)
+        if old is not None and 'queue_admission' in job:
+            require(old.provider.maintenance.retire_checkpoint(old.operation)['phase']=='retired')
+            result.admission=old.provider.maintenance.next_queue_admission(old.operation)
+            result.arguments['queue_admission']=deepcopy(result.admission)
         _mkdir(result.directory)
         if old is None:grant=deepcopy(job['repository'])
         else:
@@ -1237,7 +1241,8 @@ class _Generation:
         result._pool(create=True)
         with PrivateDirectory(result.directory) as private:
             _write(private,'generation.json',{'schema':'continuation-pool-generation-v1','generation':generation,
-                'grant':grant,'submitted':result.submitted,'connection':result.driver.selections.connection_pin})
+                'grant':grant,'submitted':result.submitted,'connection':result.driver.selections.connection_pin,
+                **({'queue_admission':result.admission} if result.admission is not None else {})})
         if old is not None:
             with PrivateDirectory(result.directory) as private:
                 _write(private,'parent.json',{'checkpoint_id':cp['checkpoint_id'],'checkpoint_sha256':cp['checkpoint_sha256']})
@@ -1249,8 +1254,15 @@ class _Generation:
     def open(cls,service,directory,target,job,generation,control,resources,*,candidate_for=None):
         uuid_value(generation);result=cls();result._setup(service,directory,target,job,generation,control,resources)
         with PrivateDirectory(result.directory) as private:value=_read(private,'generation.json')
-        require(type(value) is dict and set(value)=={'schema','generation','grant','submitted','connection'}
+        fields={'schema','generation','grant','submitted','connection'}
+        require(type(value) is dict and set(value)==fields|({'queue_admission'} if 'queue_admission' in job else set())
             and value['schema']=='continuation-pool-generation-v1' and value['generation']==generation)
+        if 'queue_admission' in job:
+            from .development_pool_selection import queue_admission
+            result.admission=queue_admission(value['queue_admission'])
+            require(all(result.admission[key]==job['queue_admission'][key]
+                for key in ('schema','profile_version','catalog_sha256')),'development_queue_admission_changed')
+            result.arguments['queue_admission']=deepcopy(result.admission)
         result.grant=value['grant']
         # Existing metadata is not permission: exact source identity/caps are
         # revalidated below by Git, Core, provider and real Worker paths.
@@ -1285,6 +1297,8 @@ class _Generation:
             broker_budgets=Budgets(**job['broker_budgets']),cli_version=service.cli_version,
             **{key:service.tools[key]['path'] for key in ('executable','interpreter','unshare')},
             **_reasoning_configuration(job.get('reasoning_effort')))
+        self.admission=deepcopy(job.get('queue_admission'))
+        if self.admission is not None:self.arguments['queue_admission']=deepcopy(self.admission)
     def _pool(self,*,create):
         if not create:
             for path in (self.directory/'pool'/'pool-state.json',self.directory/'pool'/'pool-owner.lock'):
@@ -1329,7 +1343,8 @@ class _Generation:
         require(not self._worker_open)
         if unprepared:
             bound={'selection':{'scope':{**self.driver.selections.fixed,
-                **{key:self.job[key] for key in ('project_id','ticket_id')},'board_session_id':self.context.session_id}},
+                **{key:self.job[key] for key in ('project_id','ticket_id')},'board_session_id':self.context.session_id},
+                **({'queue_admission':self.admission} if self.admission is not None else {})},
                 'connection':self.driver.selections.connection_pin}
         else:bound=self.driver.selections.load(self.context)
         self.worker=self.driver._open(self.resources,self.context,bound,existing=existing,observe=False)
@@ -1345,7 +1360,8 @@ class _Generation:
                 instruction=bound['instruction'],broker_directory=selection['broker_directory'],
                 backend_directory=selection['backend_directory'],planner_policy_directory=selection['planner_policy_directory'],
                 model=selection['model'],budgets=PlannerBudgets(**selection['budgets']),operation_id=self.operation,
-                **_reasoning_configuration(selection.get('reasoning_effort')))
+                **_reasoning_configuration(selection.get('reasoning_effort')),
+                **({'queue_admission':selection['queue_admission']} if 'queue_admission' in selection else {}))
     def open_task(self,*,create,old=None):
         try:from .development_provider_continuation import DevelopmentProviderContinuation
         except ImportError:fail('continuation_pool_api_unavailable')

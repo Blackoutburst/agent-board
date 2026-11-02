@@ -190,6 +190,13 @@ def _validate_next_inputs(op,parameters,observation,*,preparer=None,operation_id
     fields={'project_id','ticket_id','paths','resource','actions','verifier_path','verifier_sha256','test_name',
         'test_timeout_seconds','test_max_output_bytes','executable','cli_version','interpreter','unshare',
         'instruction','model','planner_budgets','broker_budgets'}
+    if 'queue_admission' in op['configuration']:
+        from .development_pool_selection import queue_admission
+        fields=fields|{'queue_admission'}
+        previous=queue_admission(op['configuration']['queue_admission'])
+        supplied=queue_admission(parameters.get('queue_admission'))
+        require(all(supplied[key]==previous[key] for key in ('schema','profile_version','catalog_sha256')),
+            'development_queue_admission_changed')
     require(set(parameters) in (fields,fields|{'reasoning_effort'}),'development_cycle_parameters_changed')
     raw,_=file_document(Path(op['configuration']['pins']['backend']['path'])/'execution-plan.json',512*1024)
     old=decode(raw);require(digest(canonical(old))==op['configuration']['linux_execution_plan_sha256'])
@@ -605,11 +612,25 @@ class DevelopmentCycleDriver:
             private.replace(name,canonical(value))
             return {**deepcopy(value),'historical':False,'launchable':False}
 
+    def next_queue_admission(self,operation_id):
+        """Derive a new CAS only from this exact clean retirement and fresh Board read."""
+        from .development_pool_selection import queue_admission
+        self._paused(fresh=True);op,_,_=self._operation(operation_id)
+        previous=queue_admission(op['configuration'].get('queue_admission'))
+        with PrivateDirectory(self.worker.journal.directory) as private:
+            _,value=self._retirement(private,op)
+        require(value is not None and value['phase']=='retired','development_cycle_retirement_required')
+        require(self._fresh_release(op,value['request'],allow_post=True),'development_cycle_release_uncertain')
+        return {**previous,'ticket_version':value['release']['version']}
+
     def prepare_next(self,operation_id,*,preparer,next_operation_id,parameters):
         """Prepare only; no dispatch, model, claim or old generation replay."""
         from .linux_pool_preparation import LinuxPoolJobPreparer
         require(type(preparer) is LinuxPoolJobPreparer and type(parameters) is dict,
             'development_cycle_concrete_handles_required')
+        if 'queue_admission' in self.worker.journal.get(operation_id)['configuration']:
+            require(parameters.get('queue_admission')==self.next_queue_admission(operation_id),
+                'development_queue_admission_changed')
         current=self._paused(fresh=True);op,cp,observation=self._operation(operation_id)
         require(current['state']['checkpoint']['diff_sha256']==cp['checkpoint_sha256'],
             'development_cycle_parent_changed')

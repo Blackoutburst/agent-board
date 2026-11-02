@@ -69,6 +69,38 @@ python3 -m blackoutburst_agents queue --journal /chemin/prive/file \
 
 Cette commande ne contacte pas le board et ne lance pas de modèle. Elle vérifie la sélection et la preuve enfant avant de conserver l’intention. En cas de coupure pendant sa transition, répéter exactement la même révision initiale et la même raison. Les anciennes clés restent des tombes durables, sans nouvel effet.
 
+## Admission de développement et reprise par Core (0.48)
+
+Le parcours `development-queue preview` / `admit` reste ponctuel et inerte.
+Avec `preview --workflow`, le hash retourné approuve le catalogue, le workflow
+permanent et les plafonds de cycle, indépendamment des versions des tickets.
+Le workflow est un document `linux-cloud-workflow-v1` couvrant exactement les
+`entry_id` du catalogue : son `batch_id` est un identifiant de modèle approuvé,
+copié avec le nouvel UUID d'admission dans le document d'exécution généré.
+L'identité et la connexion du reviewer doivent rester distinctes du codeur.
+
+```sh
+python3 -m blackoutburst_agents development-queue preview \
+  --root /chemin/prive/pool --catalog /chemin/prive/pool/config/catalog.json \
+  --workflow /chemin/prive/pool/config/workflow-standing.json --session queue-owner
+```
+
+Une invocation explicite de `development-queue tick` utilise les mêmes trois
+chemins/session et `--approve-sha256 <hash-standing>`, ainsi que les outils
+sélectionnés `--executable`, `--cli-version`, `--interpreter`, `--unshare` et
+`--gh-executable`. `--checkpoint-after-actions` vaut 3 et
+`--provider-backoff-seconds` vaut 60 par défaut ; ils doivent correspondre au
+preview. `--max-seconds` borne uniquement la passe. Cette commande peut lancer
+une génération autorisée ; elle n'est pas un aperçu ni un service autonome.
+
+Une tâche active est toujours reprise via le Core existant. Un catalogue vide
+ou sans ticket assigné au codeur ne lance aucun modèle. Stop domine les pauses,
+les fichiers permanents sont revérifiés et toute incertitude reste fermée.
+Les états `needs_you` et les fins de revue restent distincts d'une acceptation
+ou d'un ticket done. Voir [la continuation](CONTINUATION.md) pour les journaux,
+les générations neuves et les limites de reprise. Les batchs historiques v1/v2
+et les anciens appels sans workflow conservent leurs formats.
+
 ## Validation
 
 Les tests couvrent le serveur réel sur base temporaire, les refus de permission, la sélection atomique, les changements de profil/session, les réponses perdues, les interruptions et les journaux enfants. Les modèles sont simulés pour ce parcours. Aucune sélection réelle de file ni écoute permanente n’a été activée en production par cette livraison.

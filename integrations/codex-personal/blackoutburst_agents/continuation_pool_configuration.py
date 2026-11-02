@@ -14,7 +14,7 @@ from .cloud_workflow import load_workflow
 from .dev_journal import decode
 from .dev_manifest import DevelopmentError
 from .development_pool_selection import file_document
-from .finite_pool_batch import child,load_batch,FLEXIBLE_SCHEMA
+from .finite_pool_batch import child,load_batch,FLEXIBLE_SCHEMA,QUEUE_SCHEMA
 from .linux_input_snapshot import _path
 from .pool_journal import PoolError,identifier,uuid_value
 
@@ -55,7 +55,7 @@ def load_continuation(path,*,root,owner_id,board_endpoint,max_seconds):
         require(len({path,batch_path,workflow_path})==3)
         batch,batch_pin=load_batch(batch_path,root=root,owner_id=owner_id,
             board_endpoint=board_endpoint,max_seconds=max_seconds)
-        require(batch['schema']==FLEXIBLE_SCHEMA,'continuation_pool_explicit_batch_required')
+        require(batch['schema'] in (FLEXIBLE_SCHEMA,QUEUE_SCHEMA),'continuation_pool_explicit_batch_required')
         workflow,workflow_pin=load_workflow(workflow_path,root=root,batch=batch)
         tasks=value['tasks'];jobs={job['name']:job for job in batch['jobs']}
         require(type(tasks) is list and len(tasks)==len(jobs))

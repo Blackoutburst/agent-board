@@ -1,4 +1,37 @@
-# Reprise du travail par cycles — adaptateur 0.45.6
+# Reprise du travail par cycles — adaptateur 0.48.0
+
+La source 0.48 ajoute `development-queue tick` : une commande ponctuelle qui
+admet au plus une tâche depuis un catalogue et un workflow opérateur approuvés,
+puis appelle le service de continuation existant. L'approbation porte sur les
+fichiers et plafonds permanents, pas sur une liste volatile de tickets. Le
+catalogue doit sélectionner un ticket explicitement assigné au codeur ; aucune
+assignation ou permission n'est créée automatiquement. Aucun nouveau service,
+timer, modèle ou compte n'est installé ou activé par cette commande.
+
+Le pointeur privé `admissions/queue-<owner-agent-hash>/tick.json` conserve une
+seule admission active par profil. Les passes suivantes rouvrent le même Core,
+sans découverte supplémentaire ni appel à `FiniteLinuxPoolBatch.run`. Un état
+incertain reste attaché à sa demande ; un Core en `needs_you`, arrêté ou pending
+ne permet pas de choisir une tâche de remplacement. Après un avis indépendant
+confirmé, le reçu fermé est archivé avec création exclusive avant le retour à
+idle ; cet avis ne marque ni le ticket ni le projet acceptés. Une autre tâche
+ne peut être découverte qu'à la passe suivante.
+
+Chaque génération garde son admission de file immuable. La première utilise
+la version du batch v3 ; les suivantes utilisent uniquement la version exacte
+du reçu de retraite/libération, relue sur un ticket Todo sans claim et toujours
+assigné au codeur. Le profil, le catalogue, la base publique d'origine et les
+plafonds restent fixes. Chaque génération crée de nouveaux opération/SID/work
+et une nouvelle clé de claim sélectionnée ; un candidat `prepared_waiting`
+conserve sa version, même après redémarrage. Aucun ancien compteur, fence,
+travail ou budget n'est réinitialisé. `max-seconds` borne une passe seulement.
+
+Les pauses fournisseur conservent le checkpoint et le délai de backoff. Après
+ce délai, une disponibilité locale fraîche et les contrôles d'autorité sont
+nécessaires avant préparation, puis à nouveau avant admission. Une interruption
+ambiguë ne devient jamais une reprise implicite. Les tests temporaires utilisent
+le vrai Board, Core, Worker et Runtime avec transports/qualification simulés ;
+aucun nouveau pilote réel de file persistante n'est revendiqué ici.
 
 Le 2 novembre, le pilote 0.45.5 #65 a confirmé deux générations auteur, la PR
 #82 et un avis distinct publié, avec sortie propre des opérations sélectionnées.
