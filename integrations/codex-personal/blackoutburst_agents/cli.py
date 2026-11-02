@@ -61,6 +61,8 @@ def main(argv=None) -> int:
     configure_development(subs.add_parser('development',help='Développement borné d’un ticket explicitement choisi.'))
     from .team_ticket_cli import configure_parser as configure_team_plan, run as run_team_plan
     configure_team_plan(subs.add_parser('team-plan', help='Publier un plan approuvé en tickets, sans exécution.'))
+    from .development_queue_cli import configure_parser as configure_development_queue, run as run_development_queue
+    configure_development_queue(subs.add_parser('development-queue', help='Admettre un ticket depuis un catalogue protégé, sans dispatch.'))
     for command, help_text in (
         ("doctor", "Vérifier l’installation et le mode de connexion, sans appel de modèle."),
         ("probe", "Tester une réponse minimale ; consomme une petite part de l’abonnement."),
@@ -74,6 +76,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == 'team-plan':
         return run_team_plan(args)
+    if args.command == 'development-queue':
+        return run_development_queue(args)
     if args.command == 'family':
         return run_family(args)
     if args.command == 'development':

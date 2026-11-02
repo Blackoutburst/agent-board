@@ -16,7 +16,7 @@ from .dev_manifest import Budgets,DevelopmentError,canonical,digest,identity,opa
 from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .development_pool import DevelopmentPoolDriver
-from .development_pool_selection import file_document
+from .development_pool_selection import file_document, queue_admission
 from .git_workspace import LocalGitWorkspaceController,LocalRepositoryGrant
 from .linux_input_snapshot import _path
 from .linux_planner_policy import _executable_pin,linux_source_pins
@@ -26,6 +26,7 @@ from .worker_pool import WorkerPool
 
 SCHEMA='linux-finite-pool-batch-v1'
 FLEXIBLE_SCHEMA='linux-finite-pool-batch-v2'
+QUEUE_SCHEMA='linux-finite-pool-batch-v3'
 MAX_BATCH=128*1024
 JOB_FIELDS={'name','agent_id','connection_file','repository','project_id','ticket_id',
     'paths','resource','actions','verifier_path','verifier_sha256','test_name',
@@ -46,13 +47,15 @@ def load_batch(path,*,root,owner_id,board_endpoint,max_seconds):
     raw,pin=file_document(path,MAX_BATCH);value=decode(raw)
     if (type(value) is not dict or set(value)!={
             'schema','batch_id','owner_id','board_endpoint','timeout_seconds','jobs'}
-            or value['schema'] not in (SCHEMA,FLEXIBLE_SCHEMA) or value['owner_id']!=owner_id or value['board_endpoint']!=board_endpoint
+            or value['schema'] not in (SCHEMA,FLEXIBLE_SCHEMA,QUEUE_SCHEMA) or value['owner_id']!=owner_id or value['board_endpoint']!=board_endpoint
             or type(value['timeout_seconds']) is not int or not 1<=value['timeout_seconds']<=max_seconds
             or type(value['jobs']) is not list
             or not 1<=len(value['jobs'])<=4 or value['schema']==SCHEMA and len(value['jobs'])!=4):fail()
     uuid_value(value['batch_id']);names=set();agents=set();tickets=set();resources=set();connections=set()
     for job in value['jobs']:
-        if type(job) is not dict or set(job) not in (JOB_FIELDS,JOB_FIELDS|{'reasoning_effort'}):fail()
+        fields=JOB_FIELDS|({'queue_admission'} if value['schema']==QUEUE_SCHEMA else set())
+        if type(job) is not dict or set(job) not in (fields,fields|{'reasoning_effort'}):fail()
+        if value['schema']==QUEUE_SCHEMA:queue_admission(job['queue_admission'])
         if 'reasoning_effort' in job:
             if job['reasoning_effort'] is None:fail('invalid_planner_reasoning_effort')
             _reasoning_configuration(job['reasoning_effort'])
@@ -249,6 +252,7 @@ class FiniteLinuxPoolBatch:
                     preparer=LinuxPoolJobPreparer(private.path/('preparation-'+job['name']),pool=pool,
                         driver=drivers[job['name']],workspaces=controller,driver_id=job['name'])
                     arguments={key:deepcopy(job[key]) for key in JOB_FIELDS-{'name','agent_id','connection_file','repository'}}
+                    if 'queue_admission' in job:arguments['queue_admission']=deepcopy(job['queue_admission'])
                     arguments.update(_reasoning_configuration(job.get('reasoning_effort')))
                     arguments.update(planner_budgets=PlannerBudgets(**job['planner_budgets']),
                         broker_budgets=Budgets(**job['broker_budgets']),cli_version=self.cli_version,

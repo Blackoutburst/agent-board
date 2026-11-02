@@ -5,6 +5,10 @@ explicitly approved plan as ordinary assigned tickets and dependencies through
 the existing Lead connection. It does not start these role adapters or schedule
 their execution.
 
+The [development queue admission](DEVELOPMENT-QUEUE.md) separately compiles one
+ready ordinary ticket into a protected finite v3 batch. Its selected-queue CAS
+is performed by the existing development worker, not by a manager model.
+
 `TeamRolePoolDriver` adapts an explicitly selected manager or writer ticket to
 the existing `WorkerPool`. Each role has its own driver, profile, connection and
 session. It uses real `WorkJournal`, `RunStore`, `RuntimeJournal`, Runtime

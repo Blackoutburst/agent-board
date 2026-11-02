@@ -15,6 +15,7 @@ import uuid
 
 from .context import ContextScope, _hash
 from .development_authorization import DevelopmentAuthorization
+from .development_pool_selection import queue_admission as validate_queue_admission
 from .dev_broker import DevelopmentBroker
 from .dev_fence import DevelopmentFence, canonical_anchor
 from .dev_journal import DevelopmentJournal
@@ -219,7 +220,7 @@ class DevelopmentBoardWorker:
 
     def prepare(self, *, scope, request_id, instruction, broker_directory, backend_directory,
                 planner_policy_directory, model, budgets=None, operation_id=None, registration=None,
-                reasoning_effort=None):
+                reasoning_effort=None, queue_admission=None):
         """Pure read/plan phase; no claim, Runtime reservation, model or test."""
         reasoning = _reasoning_configuration(reasoning_effort)
         if (type(instruction) is not str or not instruction.strip()
@@ -256,6 +257,18 @@ class DevelopmentBoardWorker:
                     local_stop_requested=lambda:self._local_cancelled(prior['id'] if prior else None),
                     delegation_guard=self.delegation_guard)
                 initial=authorization.snapshot()
+            if queue_admission is not None:
+                queue_admission=validate_queue_admission(queue_admission)
+                if (getattr(self.client,'_queue_admission',False) is not True
+                        or registration['session'].get('autonomous') is not True
+                        or initial['policy'].get('autonomy')!='queue'
+                        or registration['profile_version']!=queue_admission['profile_version']
+                        or initial['ticket']['version']!=queue_admission['ticket_version']
+                        or initial['ticket']['status']!='todo' or initial['ticket']['claimant'] is not None):
+                    raise DevelopmentError('development_queue_admission_changed')
+                if any(value.get('kind')=='companion' or value.get('companion_for') is not None
+                       for value in (registration,registration['identity'],registration['profile'],registration['session'])):
+                    raise DevelopmentError('development_queue_admission_changed')
             def preflight(given,action,resource):
                 try:
                     authorization._registration()
@@ -286,6 +299,7 @@ class DevelopmentBoardWorker:
                     'pins':pins,'manifest_hash':manifest.manifest_hash,'policy_hash':policy.fingerprint,
                     'backend_hash':self._backend_pin(backend)}
                 config.update(reasoning)
+                if queue_admission is not None:config['queue_admission']=queue_admission
                 if manifest._linux_execution_profile:
                     config.update(execution_profile='linux-python-execution-v1',
                                   linux_execution_plan_sha256=backend.document['plan_hash'])
@@ -355,6 +369,16 @@ class DevelopmentBoardWorker:
 
     def _claim(self, op, authorization):
         scope=op['scope']
+        if 'queue_admission' in op['configuration']:
+            admission=validate_queue_admission(op['configuration']['queue_admission'])
+            if op['stage']!='new':
+                intent=op['payload'].get('claim_intent')
+                if (type(intent) is not dict or set(intent)!={'action','expected_version','previous_lease','idempotency_key'}
+                        or intent['action']!='claim_selected_queue_ticket'
+                        or intent['expected_version']!=admission['ticket_version']
+                        or intent['idempotency_key']!='development-queue-claim-'+op['id']
+                        or intent['previous_lease'] is not None):
+                    raise DevelopmentError('development_queue_claim_intent_changed')
         if op['stage']=='new':
             initial=authorization.snapshot()
             if initial['context']['fingerprint']!=op['payload']['initial_context']['fingerprint']:
@@ -362,9 +386,18 @@ class DevelopmentBoardWorker:
             ticket=initial['ticket']
             if ticket['claimant'] is not None and not authorization.own_claim(ticket):
                 raise DevelopmentError('development_foreign_or_expired_claim')
-            action='renew_ticket' if authorization.own_claim(ticket) else 'claim_ticket'
-            op=self._save(op,'claiming',claim_intent={'action':action,'expected_version':ticket['version'],
-                'previous_lease':ticket['lease_expires_at']})
+            if 'queue_admission' in op['configuration']:
+                admission=validate_queue_admission(op['configuration']['queue_admission'])
+                if (ticket['claimant'] is not None or ticket['status']!='todo' or ticket['lease_expires_at'] is not None
+                        or ticket['version']!=admission['ticket_version']):
+                    raise DevelopmentError('development_queue_admission_changed')
+                intent={'action':'claim_selected_queue_ticket','expected_version':ticket['version'],
+                    'previous_lease':ticket['lease_expires_at'],
+                    'idempotency_key':'development-queue-claim-'+op['id']}
+            else:
+                action='renew_ticket' if authorization.own_claim(ticket) else 'claim_ticket'
+                intent={'action':action,'expected_version':ticket['version'],'previous_lease':ticket['lease_expires_at']}
+            op=self._save(op,'claiming',claim_intent=intent)
         if op['stage']=='claiming':
             intent=op['payload']['claim_intent']
             current=authorization.snapshot()
@@ -374,17 +407,30 @@ class DevelopmentBoardWorker:
                     raise DevelopmentError('development_context_changed')
                 if intent['action']=='renew_ticket' and not authorization.own_claim(ticket):
                     raise DevelopmentError('development_claim_lost')
-                if intent['action']=='claim_ticket' and ticket['claimant'] is not None:
+                if intent['action'] in ('claim_ticket','claim_selected_queue_ticket') and ticket['claimant'] is not None:
                     raise DevelopmentError('development_foreign_or_expired_claim')
                 if self._controller_cancelled(op['id']):
                     raise DevelopmentError('development_stop_requested')
+                response=None
+                arguments={'ticket_id':scope['ticket_id'],'expected_version':intent['expected_version']}
+                if intent['action']=='claim_selected_queue_ticket':arguments['idempotency_key']=intent['idempotency_key']
                 try:
-                    self.client.call(intent['action'],{'ticket_id':scope['ticket_id'],
-                        'expected_version':intent['expected_version']})
+                    response=self.client.call(intent['action'],arguments)
                 except Exception:
                     # Read exact optimistic revision/claim; never take another
                     # key or invoke a recovery of an expired/foreign claim.
                     pass
+                if intent['action']=='claim_selected_queue_ticket' and response is not None:
+                    if (type(response) is not dict or type(response.get('claimed')) is not bool
+                            or type(response.get('retried')) is not bool
+                            or set(response)!=({'claimed','ticket','retried'} if response.get('claimed') is True
+                                               else {'claimed','reason','retried'})):
+                        raise DevelopmentError('development_queue_claim_unconfirmed')
+                    if response['claimed'] is False:
+                        reason=response.get('reason')
+                        if reason not in ('unfinished_work','no_ready_ticket'):
+                            raise DevelopmentError('development_queue_claim_unconfirmed')
+                        raise DevelopmentError('development_queue_'+reason)
                 current=authorization.snapshot(require_claim=True,remaining=10)
                 ticket=current['ticket']
             if not authorization.own_claim(ticket,remaining=10):

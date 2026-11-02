@@ -17,7 +17,7 @@ import test_development_pool_delivery as archived
 from blackoutburst_agents import cloud_workflow as module
 from blackoutburst_agents.dev_journal import PrivateDirectory
 from blackoutburst_agents.dev_manifest import DevelopmentError,canonical,digest
-from blackoutburst_agents.finite_pool_batch import FLEXIBLE_SCHEMA
+from blackoutburst_agents.finite_pool_batch import FLEXIBLE_SCHEMA, QUEUE_SCHEMA
 from test_finite_pool_batch import batch_case  # noqa: F401
 from deploy.worker_pool import entry
 
@@ -101,7 +101,7 @@ class CloudWorkflowTests(unittest.TestCase):
         with self.assertRaises(DevelopmentError):module.load_workflow(f.path,root=f.base,batch=batch)
         self.assertEqual((f.pushes,f.posts),(0,0))
 
-    def workflow_fixture(self):
+    def workflow_fixture(self, *, batch_schema=FLEXIBLE_SCHEMA):
         from test_review_lifecycle import ReviewLifecycleTests
         from blackoutburst_agents.worker_pool import WorkerPool
         helper=ReviewLifecycleTests();self.addCleanup(helper.doCleanups)
@@ -111,7 +111,7 @@ class CloudWorkflowTests(unittest.TestCase):
         with PrivateDirectory(connection.parent) as private:
             private.create(connection.name,f.review_connection.read_bytes())
         batch_id=str(uuid.uuid4())
-        f.batch=dict(schema=FLEXIBLE_SCHEMA,batch_id=batch_id,owner_id='owner',board_endpoint=f.client.endpoint,
+        f.batch=dict(schema=batch_schema,batch_id=batch_id,owner_id='owner',board_endpoint=f.client.endpoint,
             timeout_seconds=60,jobs=[dict(name='development',agent_id=f.scope['agent_id'],connection_file=str(f.driver.selections.connection_file),
                 repository=deepcopy(f.workspaces.grant),project_id=f.project['id'],ticket_id=f.ticket['id'],paths=['main.py','untouched.txt'])])
         config=dict(schema=module.SCHEMA,batch_id=batch_id,jobs=[dict(name='development',paths=['main.py'],
@@ -196,6 +196,35 @@ class CloudWorkflowTests(unittest.TestCase):
             f.workflow.verify_completed(f.base,f.batch,result,tools=f.workflow_tools,cli_version='codex-cli 0.163.0')
         self.assertFalse(missing.exists())
         self.assertEqual((len(f.lifecycle_calls),len(f.review_calls),len(f.review_turns),f.pushes,f.posts),before)
+
+    def test_v3_workflow_delivers_completed_author_to_independent_reviewer(self):
+        # Real archived author/test/Git/Board evidence exercises the complete
+        # delivery/handoff component. Queue claim admission is separately
+        # composed with the actual new Board API in test_development_queue_claim.
+        f=self.workflow_fixture(batch_schema=QUEUE_SCHEMA)
+        result=self.execute(f);ticket=f.board.get_ticket(f.human,f.ticket['id'])['ticket']
+        self.assertEqual(result['status'],'complete')
+        self.assertEqual((f.pushes,f.posts,len(f.review_turns)),(1,1,1))
+        item=result['jobs'][0]
+        self.assertEqual(item['delivery']['delivery_sha'],item['review']['delivery_sha'])
+        self.assertNotEqual(f.scope['agent_id'],f.workflow.review_drivers['development'].fixed['agent_id'])
+        self.assertEqual(ticket['status'],'review');self.assertIsNone(ticket['claimant'])
+        self.assertEqual((f.pool.status()['capacity_held'],f.pool.status()['live_threads']),(0,0))
+
+    def test_v3_workflow_still_refuses_changed_head_before_publication(self):
+        f=self.workflow_fixture(batch_schema=QUEUE_SCHEMA);(f.root/'main.py').write_text('value = 3\n')
+        with self.assertRaises(DevelopmentError):self.execute(f)
+        self.assertEqual((f.pushes,f.posts,len(f.review_turns)),(0,0,0))
+
+    def test_v3_workflow_still_requires_distinct_reviewer_and_paths(self):
+        f=self.workflow_fixture(batch_schema=QUEUE_SCHEMA)
+        config=deepcopy(f.workflow.configuration);config['jobs'][0]['reviewer']['agent_id']=f.scope['agent_id']
+        with PrivateDirectory(Path(f.workflow.path).parent) as private:private.replace(Path(f.workflow.path).name,canonical(config))
+        with self.assertRaises(DevelopmentError):module.load_workflow(f.workflow.path,root=f.base,batch=f.batch)
+        config=deepcopy(f.workflow.configuration);config['jobs'][0]['paths']=['outside.txt']
+        with PrivateDirectory(Path(f.workflow.path).parent) as private:private.replace(Path(f.workflow.path).name,canonical(config))
+        with self.assertRaises(DevelopmentError):module.load_workflow(f.workflow.path,root=f.base,batch=f.batch)
+        self.assertEqual((f.pushes,f.posts,len(f.review_turns)),(0,0,0))
 
     def test_change_after_test_cannot_be_published_by_full_workflow(self):
         f=self.workflow_fixture();(f.root/'main.py').write_text('value = 3\n')

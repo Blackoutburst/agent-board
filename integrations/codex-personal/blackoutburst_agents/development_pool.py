@@ -176,8 +176,9 @@ class DevelopmentPoolDriver:
         journal = resources.enter_context(WorkJournal(context.journals['work']))
         store = resources.enter_context(closing(RunStore(context.journals['runs'], existing_only=existing)))
         runtime = resources.enter_context(RuntimeJournal(context.journals['runtime']))
+        options={'queue_admission':True} if 'queue_admission' in bound['selection'] else {}
         client = own_client(resources, DevelopmentBoardClient.from_connection_file(
-            self.selections.connection_file, session_id=context.session_id, timeout=3))
+            self.selections.connection_file, session_id=context.session_id, timeout=3, **options))
         if (client.endpoint != bound['selection']['scope']['board_endpoint']
                 or list(client.connection_identity) != bound['connection']['identity']
                 or file_document(self.selections.connection_file)[1] != bound['connection']):
@@ -208,6 +209,10 @@ class DevelopmentPoolDriver:
                     _reasoning_configuration(bound['selection'].get('reasoning_effort'))
                 or any(config['pins'].get(name) != _directory_pin(path) for name, path in expected.items())):
             fail('development_pool_work_scope_mismatch')
+        if (config.get('queue_admission')!=bound['selection'].get('queue_admission')
+                or 'queue_admission' in config and op['payload']['initial_selected_ticket']['version']!=
+                    config['queue_admission']['ticket_version']):
+            fail('development_queue_admission_changed')
         return op
 
     def _cleanup(self, worker, context, bound, *, reconcile):
@@ -287,12 +292,13 @@ class _DevelopmentRun:
                 'operation_id': context.operation_id, 'session_id': context.session_id,
                 'selection_sha256': digest(canonical(self.bound))}))
         with standalone_fence_wait():
+            options={'queue_admission':selection['queue_admission']} if 'queue_admission' in selection else {}
             self.worker.prepare(scope=selection['scope'], request_id='pool-' + context.operation_id,
                 instruction=self.bound['instruction'], broker_directory=selection['broker_directory'],
                 backend_directory=selection['backend_directory'],
                 planner_policy_directory=selection['planner_policy_directory'], model=selection['model'],
                 **_reasoning_configuration(selection.get('reasoning_effort')),
-                budgets=PlannerBudgets(**selection['budgets']), operation_id=context.operation_id)
+                budgets=PlannerBudgets(**selection['budgets']), operation_id=context.operation_id, **options)
         self.driver._operation(self.worker, context, self.bound)
         self.companion = _StopCompanion(context)
         self.companion.start()
