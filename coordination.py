@@ -28,6 +28,28 @@ _REVIEW_REMINDER_SECONDS = 24 * 3600
 _BLOCK_ESCALATION_ATTEMPTS = 3
 
 
+def validate_selected_queue_claim_arguments(args):
+    required={'session_id','ticket_id','expected_version','idempotency_key'}
+    if type(args) is not dict or not required<=set(args) or set(args)-required-{'view'}:
+        _fail('Supply only selected queue claim fields')
+    for key in ('session_id','ticket_id','idempotency_key'):_text(args[key],key,1,200)
+    _version(args['expected_version'])
+    if 'view' in args and (type(args['view']) is not str or args['view'] not in ('compact','full')):
+        _fail('Invalid selected queue view')
+
+
+def _queue_profile_match(column):
+    # Only these two internal column names may enter this shared SQL fragment.
+    if column not in ('claimant','requested_by'):raise ValueError('Invalid queue identity column')
+    return f"""json_extract({column},'$.kind')='agent'
+        AND json_extract({column},'$.owner_id')=? AND (
+            json_extract({column},'$.agent_id')=? OR (
+                json_extract({column},'$.agent_id') IS NULL AND EXISTS (
+                    SELECT 1 FROM sessions s WHERE s.id=json_extract({column},'$.session_id')
+                    AND s.device_id=json_extract({column},'$.device_id')
+                    AND s.owner_id=json_extract({column},'$.owner_id') AND s.agent_id=?)))"""
+
+
 def strings(value, name, limit=50):
     if not isinstance(value, list) or len(value) > limit or any(
         not isinstance(item, str) or not item.strip() or len(item) > 200 for item in value
@@ -506,6 +528,8 @@ class CoordinationMixin(ProjectsMixin):
         return ticket
 
     def _claim_ticket_tx(self, db, actor, row, expected_version, recovery_evidence=''):
+        if actor.get('companion_for') is not None:
+            _fail('Companion sessions cannot claim ticket work',403)
         _version(expected_version)
         claimant = json.loads(row['claimant']) if row['claimant'] else None
         expired = bool(claimant and claimant['kind'] == 'agent' and (row['lease_expires_at'] or 0) <= time.time())
@@ -874,6 +898,54 @@ class CoordinationMixin(ProjectsMixin):
                 return {'found': False}
             return {'found': True, **self._ticket_selection_result(db, actor, previous, retried=True)}
 
+    @staticmethod
+    def _profile_has_unfinished_queue_work(db, actor, session):
+        own_profile=(actor['owner_id'],session['agent_id'],session['agent_id'])
+        return any(db.execute(f"SELECT 1 FROM {table} WHERE {_queue_profile_match('claimant')} AND status!=? LIMIT 1",
+            (*own_profile,terminal)).fetchone() for table,terminal in (('tickets','done'),('tasks','complete')))
+
+    def claim_selected_queue_ticket(self, actor, ticket_id, expected_version, idempotency_key):
+        """Claim exactly one fresh ordinary selection under the global queue fence."""
+        _text(ticket_id,'ticket_id',1,200);_version(expected_version)
+        _text(idempotency_key,'idempotency_key',1,200)
+        payload={'ticket_id':ticket_id,'expected_version':expected_version}
+        with self._tx() as db:
+            actor=self._actor(db,actor,'allow_requests')
+            if actor.get('companion_for') is not None:
+                _fail('Companion sessions cannot claim selected queue work',403)
+            if actor['kind']!='agent':_fail('Register an autonomous agent session to claim selected queue work',403)
+            session=db.execute('SELECT * FROM sessions WHERE id=?',(actor['session_id'],)).fetchone()
+            profile=self._profile_for_actor(db,actor)
+            if (not session['autonomous'] or json.loads(profile['policy'])['autonomy']!='queue'
+                    or self._effective_profile_policy(db,actor,profile)['autonomy']!='queue'):
+                _fail('Register autonomous=true after your human authorizes queue work in this chat',403)
+            row=self._ticket_member(db,actor,ticket_id)
+            previous=self._retry(db,actor,'claim_selected_queue_ticket',idempotency_key,payload)
+            if previous is not None:
+                if previous.startswith(_QUEUE_EMPTY_PREFIX):
+                    if previous[len(_QUEUE_EMPTY_PREFIX):] not in ('unfinished_work','no_ready_ticket'):
+                        _fail('Stored selected queue result is invalid; human reconciliation required',409)
+                elif previous!=ticket_id:
+                    _fail('Stored selected queue ticket changed; human reconciliation required',409)
+                # The exact positive ACK may be replayed despite the claim it
+                # created. This returns current state, never another mutation.
+                return self._ticket_selection_result(db,actor,previous,retried=True)
+            if row['version']!=expected_version:_fail('Task changed; reload before selected queue admission',409)
+            reason='unfinished_work' if self._profile_has_unfinished_queue_work(db,actor,session) else None
+            if reason is None:
+                fresh=(row['status']=='todo' and all(row[key] is None for key in
+                    ('claimant','claim_started_version','lease_expires_at'))
+                    and self._delegation_ticket_family(db,ticket_id) is None)
+                eligible=(fresh and any(ticket['id']==ticket_id for ticket in
+                    self._work_candidates(db,actor,row['project_id'],include_recovery=False)))
+                if not eligible:reason='no_ready_ticket'
+            if reason is not None:
+                self._remember(db,actor,'claim_selected_queue_ticket',idempotency_key,payload,_QUEUE_EMPTY_PREFIX+reason)
+                return {'claimed':False,'reason':reason,'retried':False}
+            ticket=self._claim_ticket_tx(db,actor,row,expected_version)
+            self._remember(db,actor,'claim_selected_queue_ticket',idempotency_key,payload,ticket_id)
+            return {'claimed':True,'ticket':ticket,'retried':False}
+
     def claim_next_ticket(self, actor, idempotency_key, project_id=''):
         _text(idempotency_key, 'idempotency_key', 1, 200)
         _text(project_id, 'project_id', 0, 200)
@@ -895,26 +967,14 @@ class CoordinationMixin(ProjectsMixin):
             # A persistent profile is one worker even after a client restart or
             # explicit binding on another device. Old authors without agent_id
             # can still be matched through their immutable registered session.
-            def same_profile(column):
-                return f"""json_extract({column},'$.kind')='agent'
-                    AND json_extract({column},'$.owner_id')=? AND (
-                        json_extract({column},'$.agent_id')=? OR (
-                            json_extract({column},'$.agent_id') IS NULL AND EXISTS (
-                                SELECT 1 FROM sessions s WHERE s.id=json_extract({column},'$.session_id')
-                                AND s.device_id=json_extract({column},'$.device_id')
-                                AND s.owner_id=json_extract({column},'$.owner_id') AND s.agent_id=?)))"""
             own_profile = (actor['owner_id'], session['agent_id'], session['agent_id'])
-            for table, terminal in (('tickets', 'done'), ('tasks', 'complete')):
-                if db.execute(f"SELECT 1 FROM {table} WHERE {same_profile('claimant')} AND status!=? LIMIT 1",
-                              (*own_profile, terminal)).fetchone():
-                    reason = 'unfinished_work'
-                    break
+            if self._profile_has_unfinished_queue_work(db,actor,session):reason='unfinished_work'
             candidate = next(self._work_candidates(db, actor, project_id), None) if reason is None else None
             if candidate is None:
                 # A released request blocks its ticket, not unrelated ready
                 # work. Keep the explanatory negative result when none is ready.
                 if reason is None and db.execute(f"""SELECT 1 FROM human_requests WHERE status='open'
-                    AND {same_profile('requested_by')} LIMIT 1""", own_profile).fetchone():
+                    AND {_queue_profile_match('requested_by')} LIMIT 1""", own_profile).fetchone():
                     reason = 'waiting_on_human'
                 reason = reason or 'no_ready_ticket'
                 self._remember(db, actor, 'claim_next_ticket', idempotency_key, payload, _QUEUE_EMPTY_PREFIX + reason)

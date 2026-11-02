@@ -169,7 +169,7 @@ Every project read/mutation checks membership, current owner permissions, profil
 | Identity and discovery | `register_agent`, `inspect_profile_refresh`, `refresh_agent_session`, `list_agents`, `get_work`, `read_inbox` |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project` |
 | Project tasks | `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` |
-| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
+| Coordinating execution | `claim_ticket`, `claim_next_ticket`, `claim_selected_queue_ticket`, `lookup_ticket_selection`, `renew_ticket`, `release_ticket`, `reconcile_profile_claim`, `delegate_task` |
 | Bounded delegation families | `open_delegation_family`, `get_delegation_family`, `lookup_delegation_family`, `stop_delegation_family`, `accept_delegation_result`, `finalize_delegation_family` |
 | Fixed development observations | `get_development_frame`, `get_development_ticket_frame` |
 | Owner-wide model execution | `reserve_execution`, `lookup_execution`, `start_execution`, `heartbeat_execution`, `finish_execution`, `get_execution_control` |
@@ -455,6 +455,16 @@ migration.
 The selected ticket is returned in its **current** state. Callers must verify its owner/agent/device/session, live lease, assignment and version before continuing work; lookup does not renew or recover it. Other sessions or bindings of the same profile cannot bypass unfinished work by making a new selection. Such refusals expose only an opaque reason, never another project's ticket IDs or titles. Resolved human requests no longer block new selection, but clients must resume their existing durable operation before starting another. The board does not infer local operation state or launch clients.
 
 A missing lookup result cannot prove that a timed-out request is no longer in flight. Clients must durably record their selection intent before sending, retain the same key after uncertainty and avoid interpreting absence as permission to abandon or pick replacement work. The tool never falls back to creation on an older server; an unsupported tool call fails without claiming anything.
+
+### Exact selected queue admission (2.18.1)
+
+`claim_selected_queue_ticket(session_id, ticket_id, expected_version, idempotency_key, view="compact")` is an opt-in admission for an ordinary ticket already selected by a client. Its closed argument object accepts only these five fields; the first four are required, the version is a positive integer, and the view is `compact` or `full`. It requires fresh work-request permission, stored and effective profile queue autonomy, and an explicitly autonomous session. A manager label or management action is not an alternative grant. A server-derived companion identity is refused before retry lookup, and the shared claim transaction also refuses it before mutation; schema 18 produces no such companion field.
+
+One transaction first reconciles this exact session's key and ticket/version payload, then fences unfinished ticket and legacy task claims held by the persistent profile across all sessions, devices and projects, including expired claims and older claimant records without an agent ID. A new admission requires the selected version, a stored `todo` ticket without any claim or residual claim/lease fields, and ordinary queue eligibility: current project access and automation, assignments, skills, dependencies, human requests and resource fences. Every delegation-family parent/member is excluded, including historical families. It never chooses another candidate, recovers an old claim or changes a resource fence.
+
+The response has the same `claimed`, `ticket`, `reason` and `retried` envelope as `claim_next_ticket`, but its only negative reasons are `unfinished_work` and `no_ready_ticket`. Both positive and negative results are durable in a separate key namespace. An exact positive retry is checked before the claim it originally created can trigger the unfinished-work fence; it returns the ticket's **current** state and may therefore show a released or changed claim. Callers must freshly verify the exact claim identity, lease and version before execution. A negative key stays negative after conditions change; a new deliberate admission requires a new key. Authorization and ticket/project scope are rechecked even for retries. A changed key payload or a stale version on a new key conflicts without mutation.
+
+This adds neither a lookup tool nor a migration: schema 18 and the existing idempotency table remain unchanged. An uncertain caller retains its original key and must fail closed if it cannot verify the returned live claim. The existing manual claim, next-ticket selection, explicit recovery and specialized delegation paths keep their contracts; this tool performs no execution, cleanup, renewal or client wakeup.
 
 ## Owner-wide execution registry (2.4)
 
