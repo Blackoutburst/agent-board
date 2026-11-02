@@ -276,6 +276,37 @@ class ProfilesMixin(ProfileRefreshMixin):
             self._audit(db, actor, 'agent_profile_bound', {'profile_id': profile_id, 'device_id': device_id, 'agent_kind': agent_kind})
             return self._profile_view(db, self._profile_owned(db, actor, profile_id))
 
+    def unbind_agent_profile(self, actor, profile_id, expected_version, device_id, identity_key, agent_kind):
+        """Remove one device/client/key connection; the device credential is kept."""
+        _version(expected_version)
+        identity_key = _text(identity_key, 'identity_key', 1, 200).strip()
+        agent_kind = self._normalize_agent_kind(agent_kind)
+        with self._tx() as db:
+            actor = self._human(db, actor)
+            profile = self._profile_owned(db, actor, profile_id)
+            binding = db.execute('''SELECT b.* FROM agent_profile_bindings b JOIN devices d ON d.id=b.device_id
+                WHERE b.profile_id=? AND b.device_id=? AND b.agent_kind=? AND b.identity_key=? AND d.owner_id=?''',
+                (profile_id, device_id, agent_kind, identity_key, actor['owner_id'])).fetchone()
+            if not binding:
+                _fail('Connection not found', 404)
+            if profile['version'] != expected_version:
+                _fail('Agent profile changed; reload before removing a connection', 409)
+            for table in ('tickets', 'tasks'):
+                active = db.execute(f'''SELECT 1 FROM {table} t JOIN sessions s
+                    ON s.id=json_extract(t.claimant,'$.session_id') AND s.device_id=json_extract(t.claimant,'$.device_id')
+                    WHERE s.agent_id=? AND s.device_id=? AND s.agent_kind=? AND t.claimant IS NOT NULL
+                    AND t.status NOT IN ('done','complete') LIMIT 1''', (profile_id, device_id, agent_kind)).fetchone()
+                if active:
+                    _fail('This connection has active work; reconcile or release it before removing the connection', 409)
+            db.execute('DELETE FROM agent_profile_bindings WHERE profile_id=? AND device_id=? AND agent_kind=? AND identity_key=?',
+                       (profile_id, device_id, agent_kind, identity_key))
+            # The version bump forces sessions on this connection to register
+            # again; the device stays profiles_managed, so that registration is
+            # refused instead of silently creating a legacy profile.
+            self._write_profile(db, profile_id, {})
+            self._audit(db, actor, 'agent_profile_unbound', {'profile_id': profile_id, 'device_id': device_id, 'agent_kind': agent_kind})
+            return self._profile_view(db, self._profile_owned(db, actor, profile_id))
+
     @staticmethod
     def _normalize_agent_kind(value):
         value = value.strip().lower().replace('_', '-') if isinstance(value, str) else value

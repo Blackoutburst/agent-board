@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import sqlite3
@@ -70,6 +71,10 @@ def main():
         path=source/name
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(source):
             raise RuntimeError('Source inventory contains a symlink or nonregular file')
+    match=re.search(r'"version": "([0-9.]+)", "schema_version"',(source/'app.py').read_text(encoding='utf-8'))
+    if not match:
+        raise RuntimeError('Could not read the source health version')
+    expected_version=match.group(1)
     pid=service_pid();verify_process(pid,live)
     args.backup_root.mkdir(parents=True,exist_ok=True,mode=0o700)
     args.backup_root.chmod(0o700)
@@ -106,7 +111,7 @@ def main():
             try:
                 with urllib.request.urlopen('http://127.0.0.1:9140/health',timeout=2) as response:
                     health=json.load(response)
-                if health.get('version')=='2.17.3' and health.get('schema_version')==17:
+                if health.get('version')==expected_version and health.get('schema_version')==17:
                     break
             except (OSError,ValueError):
                 pass

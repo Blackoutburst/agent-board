@@ -1160,7 +1160,9 @@ class CoordinationMixin(ProjectsMixin):
         self._reevaluate_dependents(db, actor, completed_id, f'dependency #{number[0] if number else "?"} completed')
 
     def create_pairing(self, actor, label, capabilities=None):
-        _text(label, 'label', 1, 100)
+        label = _text(label, 'label', 1, 100).strip()
+        if not label:
+            _fail('Device label required')
         capabilities = strings(capabilities or [], 'capabilities')
         alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
         code = '-'.join(''.join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))

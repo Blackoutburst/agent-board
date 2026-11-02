@@ -1,6 +1,14 @@
 # Operations and release procedure
 
-Current source is Board 2.17.4/schema 17 with adapter 0.45.3. Standalone Development
+## Board 2.17.5
+
+Adds owner-only device renaming (Settings → Connected devices) and removal of a
+single profile connection (Agents → Profile → Connections). Schema is unchanged
+(17). `deploy/release.py` reads the expected health version from the source
+`app.py` instead of a hard-coded value. The hosted board was released from the
+`release/2.17.5` branch (2.17.4 plus these changes), not from `main`.
+
+Current source is Board 2.17.5/schema 17 with adapter 0.45.3. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the

@@ -142,7 +142,7 @@ All arguments and responses have closed fields and bounded wire sizes. See
 
 Authenticate MCP with a revocable owner/device credential. Register each chat with a unique session ID. `register_agent` resolves an explicit `(device, client kind, installation key)` binding to a durable profile and pins its current version. It returns the compatible identity/session, bounded private profile configuration (without bindings or active work), `profile_version`, and the effective intersection of profile/owner policy. Skills are routing metadata; external execution still requires direct human authorization in the participating client.
 
-Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
+Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/renaming/revocation, connection removal, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
 ## MCP tools (64)
 
@@ -583,6 +583,8 @@ Existing `/api/projects`, `/api/projects/{id}/tickets`, `/api/tickets/{id}`, dis
 - `GET/POST /api/agent-profiles`; `GET/PATCH /api/agent-profiles/{id}`.
 - `GET /api/agent-profiles/{id}/versions/{version}` for an immutable owner-only snapshot.
 - `POST /api/agent-profiles/{id}/duplicate` and `/bindings`.
+- `POST /api/agent-profiles/{id}/bindings/remove` with `expected_version`, `device_id`, `agent_kind` and `identity_key` removes one connection. It bumps the profile version, keeps the device credential, and is refused (409) while a session on that device/client holds unfinished work. Later registration on that connection is refused because the device stays profile-managed.
+- `PATCH /api/settings/devices/{id}` with `label` renames an owned device (trimmed, 1–100 characters). The label is display text only; existing profile names are unchanged. Pairing labels are trimmed too.
 - `GET /api/work`, `/api/activity`, `/api/human-requests`.
 - `POST /api/tickets/{id}/delegate`, `/input`, `/renew`.
 - `POST /api/human-requests/{id}/resolve`.

@@ -145,6 +145,10 @@ class Device(Body):
     capabilities: list[str] = Field(default_factory=list, max_length=100)
 
 
+class DeviceRename(Body):
+    label: str = Field(min_length=1, max_length=100)
+
+
 Version = Annotated[int, Field(strict=True, ge=1)]
 TicketPriority = Literal["low", "normal", "high", "urgent"]
 TicketStatus = Literal["todo", "in_progress", "blocked", "review", "done"]
@@ -380,6 +384,13 @@ class ProfileBinding(ProjectBody):
     device_id: str = Field(min_length=1, max_length=200)
     identity_key: str = Field(min_length=1, max_length=200)
     agent_kind: str = Field(default='agent', min_length=1, max_length=100)
+
+
+class ProfileBindingRemoval(ProjectBody):
+    expected_version: Version
+    device_id: str = Field(min_length=1, max_length=200)
+    identity_key: str = Field(min_length=1, max_length=200)
+    agent_kind: str = Field(min_length=1, max_length=100)
 
 
 MessageFeedLimit = Annotated[int, Field(strict=True, ge=1, le=200)]
@@ -1249,7 +1260,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.17.4", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release"]}
+        return {"status": "ok", "version": "2.17.5", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1453,6 +1464,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post('/api/agent-profiles/{profile_id}/bindings')
     async def bind_agent_profile(profile_id: str, values: ProfileBinding, actor=Depends(human)):
         return board.bind_agent_profile(actor, profile_id, **values.model_dump())
+
+    @app.post('/api/agent-profiles/{profile_id}/bindings/remove')
+    async def unbind_agent_profile(profile_id: str, values: ProfileBindingRemoval, actor=Depends(human)):
+        return board.unbind_agent_profile(actor, profile_id, **values.model_dump())
 
     @app.get('/api/provider-onboarding')
     async def provider_onboarding(request: Request, actor=Depends(human)):
@@ -1687,6 +1702,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.post("/api/settings/devices")
     async def device(values: Device, actor=Depends(human)):
         return board.create_device(actor, **values.model_dump())
+
+    @app.patch("/api/settings/devices/{device_id}")
+    async def rename_device(device_id: str, values: DeviceRename, actor=Depends(human)):
+        return board.rename_device(actor, device_id, values.label)
 
     @app.delete("/api/settings/devices/{device_id}")
     async def revoke(device_id: str, actor=Depends(human)):

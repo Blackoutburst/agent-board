@@ -1939,9 +1939,20 @@ const Workspace = (() => {
     const [p, settings] = await Promise.all([api(`/agent-profiles/${workPath(id)}`), api("/settings")]);
     if (p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can connect this profile.");
     const devices = settings.devices.filter(device => !device.revoked);
+    const removeBinding = binding => {
+      const confirm = el("form", {}, el("p", {}, `Remove the ${binding.agent_kind} connection on ${binding.device_label} from ${p.name}?`),
+        el("p", { class: "small muted" }, "Chats using it must register again and will be refused. The device stays connected and other profiles on it are unchanged. Active work on this connection must be released first."),
+        formButtons("Remove connection"));
+      bindForm(confirm, async () => {
+        await api(`/agent-profiles/${workPath(p.id)}/bindings/remove`, { method: "POST", data: { expected_version: p.version, device_id: binding.device_id, agent_kind: binding.agent_kind, identity_key: binding.identity_key } });
+        closeModal(); notify("Connection removed."); await profileBindings(p.id);
+      });
+      openModal("Remove connection", confirm);
+    };
     const list = el("div", { class: "profile-binding-list" }, (p.bindings || []).map(binding => el("section", { class: "profile-binding" },
       el("strong", {}, binding.device_label), badge(binding.revoked ? "Device revoked" : "Linked"),
-      el("p", { class: "small muted" }, binding.agent_kind), el("code", {}, binding.identity_key))));
+      el("p", { class: "small muted" }, binding.agent_kind), el("code", {}, binding.identity_key),
+      btn("Remove", guard(async () => removeBinding(binding)), "quiet"))));
     const form = el("form", { class: "profile-binding-form" },
       el("p", {}, "Link this profile to a client on an existing connected device. Credentials remain on that device."), list);
     if (!devices.length) {
@@ -2048,11 +2059,15 @@ const Workspace = (() => {
       notify("Participation settings saved.");
     });
     const devices = el("div", { class: "panel-body" }, data.devices.length ? data.devices.map(device => el("div", { class: "device-row" },
-      el("div", { class: "device-header" }, el("strong", {}, device.label), device.revoked ? badge("Revoked") : btn("Revoke", () => {
+      el("div", { class: "device-header" }, el("strong", {}, device.label), el("span", { class: "button-row" }, btn("Rename", () => {
+        const rename = el("form", {}, field("Device name", "label", { value: device.label, required: true, hint: "Display name only. Credentials, sessions and profile names are unchanged." }), formButtons("Save name"));
+        bindForm(rename, async values => { await api(`/settings/devices/${workPath(device.id)}`, { method: "PATCH", data: { label: values.get("label").trim() } }); closeModal(); await settings(); });
+        openModal("Rename device", rename);
+      }, "quiet"), device.revoked ? badge("Revoked") : btn("Revoke", () => {
         const confirm = el("form", {}, el("p", {}, `Disconnect ${device.label}? It will need a new pairing code to reconnect.`), formButtons("Revoke device"));
         bindForm(confirm, async () => { await api(`/settings/devices/${workPath(device.id)}`, { method: "DELETE" }); closeModal(); await settings(); });
         openModal("Revoke device", confirm);
-      }, "quiet")), el("p", { class: "small muted" }, `Connected ${date(device.created_at)}`))) : el("p", { class: "muted" }, "No devices connected."));
+      }, "quiet"))), el("p", { class: "small muted" }, `Connected ${date(device.created_at)}`))) : el("p", { class: "muted" }, "No devices connected."));
     body.append(el("div", { class: "overview-grid" }, panel("Agent participation", el("div", { class: "panel-body" }, form)),
       el("aside", {}, panel("Notifications", el("div", { class: "panel-body" }, badge(notifications?.configured ? "Discord connected" : "In-app notifications", notifications?.configured ? "status-ready" : ""), el("p", { class: "small muted" }, "Human requests always appear in Needs you. Configured Discord alerts reach the requested person even when their agent is offline."), notifications?.pending ? el("p", {}, `${notifications.pending} notifications queued`) : null)))), panel("Connected devices", devices));
   }

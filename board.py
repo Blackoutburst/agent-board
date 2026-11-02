@@ -443,6 +443,20 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             result = self._device(db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone())
         return {**result, "token": token}
 
+    def rename_device(self, actor, device_id, label):
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > 100:
+            raise BoardError("Device label required (maximum 100 characters)")
+        label = label.strip()
+        with self._tx() as db:
+            actor = self._human(db, actor)
+            row = db.execute("SELECT * FROM devices WHERE id=? AND owner_id=?", (device_id, actor["owner_id"])).fetchone()
+            if not row:
+                raise BoardError("Device not found", 404)
+            if row["label"] != label:
+                db.execute("UPDATE devices SET label=? WHERE id=?", (label, device_id))
+                self._audit(db, actor, "device_renamed", {"device_id": device_id, "previous_label": row["label"], "label": label})
+            return self._device(db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone())
+
     def revoke_device(self, actor, device_id):
         with self._tx() as db:
             actor = self._human(db, actor)
