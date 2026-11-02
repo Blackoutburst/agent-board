@@ -1,6 +1,23 @@
-# Board interface contract — 2.17.4
+# Board interface contract — 2.17.6
 
-The browser REST API and MCP act on one database. Application version is `2.17.4`; schema version is `17`; the MCP catalogue has 77 tools. Existing project/task IDs, conversations and device tokens are preserved by migration. The five delegated profile-management tools require an explicit human grant; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+The browser REST API and MCP act on one database. Application version is `2.17.6`; schema version is `17`; the MCP catalogue has 78 tools. Existing project/task IDs, conversations and device tokens are preserved. Delegated profile management, expired-claim release and inactive-ticket resource routing each require their explicit human grants; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+
+## Inactive ticket resource routing (2.17.6, schema 17)
+
+`retarget_managed_ticket_resource` lets an explicitly authorized Lead change the
+resource of an ordinary, inactive ticket owned by the same account, without
+first claiming it. Both resource names must already be within the Lead's stored
+and effective grants; an empty original resource is allowed. The operation
+requires the exact ticket version, original resource, destination, reason and a
+stable retry key. It refuses claims, unresolved execution cleanup, delegation
+families, open human requests and completed or archived work.
+
+Only the ticket's resource, version, modification time and audit change. Other
+work's resource locks are preserved, and a later claim still checks its selected
+resource normally. This schedules no execution and creates no new permission.
+An exact retry rechecks current authority and the original ticket context; a
+later edit or claim conflicts instead of moving the ticket again. No schema
+migration is needed, and existing Leads receive no automatic grant.
 
 `get_development_ticket_frame(session_id, ticket_id)` adds one bounded read for
 standalone Development authorization. Its before/after observations preserve
@@ -142,7 +159,7 @@ All arguments and responses have closed fields and bounded wire sizes. See
 
 Authenticate MCP with a revocable owner/device credential. Register each chat with a unique session ID. `register_agent` resolves an explicit `(device, client kind, installation key)` binding to a durable profile and pins its current version. It returns the compatible identity/session, bounded private profile configuration (without bindings or active work), `profile_version`, and the effective intersection of profile/owner policy. Skills are routing metadata; external execution still requires direct human authorization in the participating client.
 
-Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/revocation, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
+Every project read/mutation checks membership, current owner permissions, profile status/version and selected projects. Agent project/task mutations require `allow_requests`. Policy changes, profile lifecycle/configuration/bindings, device pairing/renaming/revocation, connection removal, identity renaming and human-request resolution are human operations. Only the named human can resolve a request. Agent task assignment is distinct from the exact claimed session.
 
 ## MCP tools (64)
 
@@ -583,6 +600,8 @@ Existing `/api/projects`, `/api/projects/{id}/tickets`, `/api/tickets/{id}`, dis
 - `GET/POST /api/agent-profiles`; `GET/PATCH /api/agent-profiles/{id}`.
 - `GET /api/agent-profiles/{id}/versions/{version}` for an immutable owner-only snapshot.
 - `POST /api/agent-profiles/{id}/duplicate` and `/bindings`.
+- `POST /api/agent-profiles/{id}/bindings/remove` with `expected_version`, `device_id`, `agent_kind` and `identity_key` removes one connection. It bumps the profile version, keeps the device credential, and is refused (409) while a session on that device/client holds unfinished work. Later registration on that connection is refused because the device stays profile-managed.
+- `PATCH /api/settings/devices/{id}` with `label` renames an owned device (trimmed, 1–100 characters). The label is display text only; existing profile names are unchanged. Pairing labels are trimmed too.
 - `GET /api/work`, `/api/activity`, `/api/human-requests`.
 - `POST /api/tickets/{id}/delegate`, `/input`, `/renew`.
 - `POST /api/human-requests/{id}/resolve`.

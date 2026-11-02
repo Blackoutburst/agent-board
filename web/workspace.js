@@ -1803,18 +1803,26 @@ const Workspace = (() => {
     const managementInput = management.querySelector("input");
     const claimManagement = check("Libérer les réservations expirées des agents gérés", "manage_agent_claims", policy.actions.includes("agent.profile.release_claim"));
     const claimManagementInput = claimManagement.querySelector("input");
-    let managementTouched = false, claimManagementTouched = false;
-    const refreshClaimManagement = () => { claimManagementInput.disabled = Boolean(p?.legacy) || !managementInput.checked; };
+    const ticketResourceManagement = check("Rattacher les tickets inactifs aux espaces autorisés", "manage_ticket_resources", policy.actions.includes("agent.ticket.retarget_resource"));
+    const ticketResourceManagementInput = ticketResourceManagement.querySelector("input");
+    let managementTouched = false, claimManagementTouched = false, ticketResourceManagementTouched = false;
+    const refreshClaimManagement = () => {
+      const disabled = Boolean(p?.legacy) || !managementInput.checked;
+      claimManagementInput.disabled = disabled; ticketResourceManagementInput.disabled = disabled;
+    };
     managementInput.disabled = Boolean(p?.legacy);
     managementInput.addEventListener("change", () => { managementTouched = true; refreshClaimManagement(); });
     claimManagementInput.addEventListener("change", () => { claimManagementTouched = true; });
+    ticketResourceManagementInput.addEventListener("change", () => { ticketResourceManagementTouched = true; });
     refreshClaimManagement();
     form.append(projectPicker, permissions,
       el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
         el("p", { class: "small muted" }, "Autorise la création, la modification et l’archivage réversible des profils ordinaires de votre compte. Chaque profil doit rester dans les projets suivis et sous les plafonds effectifs de permissions, d’actions, de ressources et d’autonomie de ce Lead."),
         el("p", { class: "small muted" }, p?.legacy ? "Créez un nouveau profil à projets explicites pour cette délégation. Le nom du rôle seul ne donne aucun droit." : "Activez la lecture et les demandes de travail, choisissez des projets explicites et une sélection de travail autorisée. Les identités Management, les connexions et les limites d’exécution restent gérées par vous. Cette délégation ne démarre aucun agent."),
         claimManagement,
-        el("p", { class: "small muted" }, "Nécessite la gestion des profils. Réservé aux réservations expirées, après inspection et nettoyage ; un Runtime actif ou incertain bloque la libération. Cette permission n’arrête aucun processus.")),
+        el("p", { class: "small muted" }, "Nécessite la gestion des profils. Réservé aux réservations expirées, après inspection et nettoyage ; un Runtime actif ou incertain bloque la libération. Cette permission n’arrête aucun processus."),
+        ticketResourceManagement,
+        el("p", { class: "small muted" }, "Permission séparée : changer l’espace d’un ticket inactif dans les projets et ressources déjà autorisés au Lead. Un travail, une réservation ou une demande humaine en cours bloque ce changement. Aucun accès supplémentaire ni démarrage n’est accordé.")),
       el("p", { class: "small muted" }, p ? `Editing configuration v${p.version}. Saved preferences apply to future work; existing work keeps its captured configuration.` : "A new profile has no connection. Choose its project scope and permissions, then connect an executor."),
       ...(p?.active_work?.length ? [profileWorkNotice(p)] : []),
       formButtons(p ? "Save profile" : "Create profile"));
@@ -1839,8 +1847,14 @@ const Workspace = (() => {
       let saved = await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
       if (state.actor?.owner_id !== owner) return;
       const managementEnabled = values.has("manage_agent_profiles");
-      if (managementTouched || claimManagementTouched && managementEnabled) {
+      if (managementTouched || (claimManagementTouched || ticketResourceManagementTouched) && managementEnabled) {
+        let profileAcknowledged = false;
         try {
+          if (!saved || typeof saved.id !== "string" || !saved.id || saved.owner_id !== owner
+              || p && saved.id !== p.id || saved.version !== (p ? p.version + 1 : 1)) {
+            throw new Error("Enregistrement du profil non confirmé ; aucun droit supplémentaire n’a été demandé.");
+          }
+          profileAcknowledged = true;
           const grants = ["agent.profile.read", "agent.profile.create", "agent.profile.update", "agent.profile.archive"];
           if (managementTouched) {
             const updated = await api(`/agent-profiles/${workPath(saved.id)}/management`, { method: "PUT", data: { expected_version: saved.version, enabled: managementEnabled } });
@@ -1849,7 +1863,7 @@ const Workspace = (() => {
                 || !Array.isArray(actions) || !Array.isArray(resources)
                 || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
                 || (managementEnabled ? !grants.every(value => actions.includes(value)) || !resources.includes(`agent-profiles:${owner}`)
-                  : actions.some(value => value.startsWith("agent.profile.")) || resources.some(value => value.startsWith("agent-profiles:")))) {
+                  : actions.some(value => value.startsWith("agent.profile.") || value === "agent.ticket.retarget_resource") || resources.some(value => value.startsWith("agent-profiles:")))) {
               throw new Error("Réponse de délégation incomplète ou incohérente.");
             }
             saved = updated;
@@ -1868,12 +1882,28 @@ const Workspace = (() => {
             }
             saved = updated;
           }
+          if (state.actor?.owner_id !== owner) return;
+          if (ticketResourceManagementTouched && managementEnabled) {
+            const enabled = values.has("manage_ticket_resources");
+            const updated = await api(`/agent-profiles/${workPath(saved.id)}/ticket-resource-management`, { method: "PUT", data: { expected_version: saved.version, enabled } });
+            const actions = updated.policy?.actions, resources = updated.policy?.resources;
+            if (updated.id !== saved.id || updated.owner_id !== owner || updated.version !== saved.version + 1
+                || !Array.isArray(actions) || !Array.isArray(resources)
+                || !actions.every(value => typeof value === "string") || !resources.every(value => typeof value === "string")
+                || enabled && (!actions.includes("agent.profile.read") || !resources.includes(`agent-profiles:${owner}`))
+                || actions.includes("agent.ticket.retarget_resource") !== enabled) {
+              throw new Error("Droit de rattachement des tickets non confirmé.");
+            }
+            saved = updated;
+          }
         }
         catch (error) {
           if (state.actor?.owner_id !== owner) return;
+          const recoveryId = p?.id || (saved?.owner_id === owner && typeof saved.id === "string" ? saved.id : null);
           openModal("Délégation à vérifier", el("div", {},
-            el("p", { class: "callout", role: "alert" }, `Profil enregistré ; délégation non confirmée. Rechargez son état avant de réessayer. ${error.message}`),
-            btn("Recharger le profil", guard(() => profileEditor(saved.id)), "primary"), btn("Fermer", closeModal)));
+            el("p", { class: "callout", role: "alert" }, `${profileAcknowledged ? "Profil enregistré ; délégation non confirmée. Rechargez son état avant de réessayer." : "Enregistrement ou délégation non confirmé. Rechargez l’état avant de réessayer."} ${error.message}`),
+            recoveryId ? btn("Recharger le profil", guard(() => profileEditor(recoveryId)), "primary")
+              : btn("Voir mes profils", guard(async () => { closeModal(); agentTab = "profiles"; await agents(); }), "primary"), btn("Fermer", closeModal)));
           return;
         }
       }
@@ -1939,9 +1969,20 @@ const Workspace = (() => {
     const [p, settings] = await Promise.all([api(`/agent-profiles/${workPath(id)}`), api("/settings")]);
     if (p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can connect this profile.");
     const devices = settings.devices.filter(device => !device.revoked);
+    const removeBinding = binding => {
+      const confirm = el("form", {}, el("p", {}, `Remove the ${binding.agent_kind} connection on ${binding.device_label} from ${p.name}?`),
+        el("p", { class: "small muted" }, "Chats using it must register again and will be refused. The device stays connected and other profiles on it are unchanged. Active work on this connection must be released first."),
+        formButtons("Remove connection"));
+      bindForm(confirm, async () => {
+        await api(`/agent-profiles/${workPath(p.id)}/bindings/remove`, { method: "POST", data: { expected_version: p.version, device_id: binding.device_id, agent_kind: binding.agent_kind, identity_key: binding.identity_key } });
+        closeModal(); notify("Connection removed."); await profileBindings(p.id);
+      });
+      openModal("Remove connection", confirm);
+    };
     const list = el("div", { class: "profile-binding-list" }, (p.bindings || []).map(binding => el("section", { class: "profile-binding" },
       el("strong", {}, binding.device_label), badge(binding.revoked ? "Device revoked" : "Linked"),
-      el("p", { class: "small muted" }, binding.agent_kind), el("code", {}, binding.identity_key))));
+      el("p", { class: "small muted" }, binding.agent_kind), el("code", {}, binding.identity_key),
+      btn("Remove", guard(async () => removeBinding(binding)), "quiet"))));
     const form = el("form", { class: "profile-binding-form" },
       el("p", {}, "Link this profile to a client on an existing connected device. Credentials remain on that device."), list);
     if (!devices.length) {
@@ -1955,7 +1996,7 @@ const Workspace = (() => {
         const binding = { device_id: values.get("device_id"), agent_kind: values.get("agent_kind"), identity_key: values.get("identity_key") };
         await api(`/agent-profiles/${workPath(p.id)}/bindings`, { method: "POST", data: { expected_version: p.version, ...binding } });
         const quote = value => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
-        const command = `python3 ~/Downloads/board-connect.py --url ${shellQuote(boardUrl())} --client ${quote(binding.agent_kind)} --select-agent-key ${quote(binding.identity_key)}`;
+        const command = `python3 ~/Downloads/board-connect.py --client ${quote(binding.agent_kind)} --select-agent-key ${quote(binding.identity_key)}`;
         openModal("Executor linked", el("div", { class: "profile-binding-success" }, el("p", {}, "On the selected device, use its existing connection with this installation key:"),
           el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download current connector"),
           Markdown.codeBlock(command), el("p", { class: "small muted" }, "The connector selects this profile using the device’s existing credential. This command does not create a new provider or start work."),
@@ -1988,11 +2029,11 @@ const Workspace = (() => {
     const download = el("div", { class: "panel-body" },
       el("p", {}, "Download and inspect the connector, then run it on the computer where your agent lives."),
       el("a", { href: basePath + "connect.py", download: "board-connect.py", class: "button-link" }, "Download connector"),
-      Markdown.codeBlock(`python3 ~/Downloads/board-connect.py --url ${shellQuote(boardUrl())}`),
+      Markdown.codeBlock("python3 ~/Downloads/board-connect.py"),
       el("p", {}, "For Claude Code on the same computer:"),
-      Markdown.codeBlock(`python3 ~/Downloads/board-connect.py --client claude-code --url ${shellQuote(boardUrl())}`),
+      Markdown.codeBlock("python3 ~/Downloads/board-connect.py --client claude-code"),
       el("p", { class: "small muted" }, "Run the connector separately for each client. It keeps a stable installation ID and stores credentials in a private local file."));
-    const loopPrompt = "Start a complete autonomous loop on the agent board. Take on task and work on them. Make the loop check your personal inbox every 10 minutes. Nobody will read this conversation if you need something or help use the MCP to ask a human or other agents.";
+    const loopPrompt = "Start a complete autonomous loop on the blackoutburst board. Take on task and work on them. Make the loop check your personal inbox every 10 minutes. Nobody will read this conversation if you need something or help use the MCP to ask a human or other agents.";
     const loopText = Markdown.codeBlock(loopPrompt, "prose", "Copy loop prompt");
     loopText.querySelector("pre").setAttribute("aria-label", "Autonomous loop prompt");
     const participation = el("div", { class: "panel-body" },
@@ -2048,11 +2089,15 @@ const Workspace = (() => {
       notify("Participation settings saved.");
     });
     const devices = el("div", { class: "panel-body" }, data.devices.length ? data.devices.map(device => el("div", { class: "device-row" },
-      el("div", { class: "device-header" }, el("strong", {}, device.label), device.revoked ? badge("Revoked") : btn("Revoke", () => {
+      el("div", { class: "device-header" }, el("strong", {}, device.label), el("span", { class: "button-row" }, btn("Rename", () => {
+        const rename = el("form", {}, field("Device name", "label", { value: device.label, required: true, hint: "Display name only. Credentials, sessions and profile names are unchanged." }), formButtons("Save name"));
+        bindForm(rename, async values => { await api(`/settings/devices/${workPath(device.id)}`, { method: "PATCH", data: { label: values.get("label").trim() } }); closeModal(); await settings(); });
+        openModal("Rename device", rename);
+      }, "quiet"), device.revoked ? badge("Revoked") : btn("Revoke", () => {
         const confirm = el("form", {}, el("p", {}, `Disconnect ${device.label}? It will need a new pairing code to reconnect.`), formButtons("Revoke device"));
         bindForm(confirm, async () => { await api(`/settings/devices/${workPath(device.id)}`, { method: "DELETE" }); closeModal(); await settings(); });
         openModal("Revoke device", confirm);
-      }, "quiet")), el("p", { class: "small muted" }, `Connected ${date(device.created_at)}`))) : el("p", { class: "muted" }, "No devices connected."));
+      }, "quiet"))), el("p", { class: "small muted" }, `Connected ${date(device.created_at)}`))) : el("p", { class: "muted" }, "No devices connected."));
     body.append(el("div", { class: "overview-grid" }, panel("Agent participation", el("div", { class: "panel-body" }, form)),
       el("aside", {}, panel("Notifications", el("div", { class: "panel-body" }, badge(notifications?.configured ? "Discord connected" : "In-app notifications", notifications?.configured ? "status-ready" : ""), el("p", { class: "small muted" }, "Human requests always appear in Needs you. Configured Discord alerts reach the requested person even when their agent is offline."), notifications?.pending ? el("p", {}, `${notifications.pending} notifications queued`) : null)))), panel("Connected devices", devices));
   }

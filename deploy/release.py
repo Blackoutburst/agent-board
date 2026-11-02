@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import sqlite3
@@ -70,6 +71,10 @@ def main():
         path=source/name
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(source):
             raise RuntimeError('Source inventory contains a symlink or nonregular file')
+    match=re.search(r'"version": "([0-9.]+)", "schema_version"',(source/'app.py').read_text(encoding='utf-8'))
+    if not match:
+        raise RuntimeError('Could not read the source health version')
+    expected_version=match.group(1)
     pid=service_pid();verify_process(pid,live)
     args.backup_root.mkdir(parents=True,exist_ok=True,mode=0o700)
     args.backup_root.chmod(0o700)
@@ -92,7 +97,12 @@ def main():
         # Existing service modules are already loaded. Replace files atomically and
         # restart immediately so new browser assets and backend share one release.
         for name in files:
-            atomic_copy(source/name,live/name)
+            # Identical files are left alone; this also respects directories
+            # that are intentionally owned by root (deploy/worker_pool).
+            target=live/name
+            if target.is_file() and not target.is_symlink() and target.read_bytes()==(source/name).read_bytes():
+                continue
+            atomic_copy(source/name,target)
         restarted=subprocess.run(['systemctl','--no-ask-password','restart','collaboration-board.service'],
                                  capture_output=True,text=True,timeout=15)
         if restarted.returncode:
@@ -106,7 +116,7 @@ def main():
             try:
                 with urllib.request.urlopen('http://127.0.0.1:9140/health',timeout=2) as response:
                     health=json.load(response)
-                if health.get('version')=='2.17.3' and health.get('schema_version')==17:
+                if health.get('version')==expected_version and health.get('schema_version')==17:
                     break
             except (OSError,ValueError):
                 pass

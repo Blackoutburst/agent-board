@@ -1,6 +1,14 @@
 # Operations and release procedure
 
-Current source is Board 2.17.4/schema 17 with adapter 0.45.3. Standalone Development
+## Board 2.17.5
+
+Adds owner-only device renaming (Settings → Connected devices) and removal of a
+single profile connection (Agents → Profile → Connections). Schema is unchanged
+(17). `deploy/release.py` reads the expected health version from the source
+`app.py` instead of a hard-coded value. The hosted board was released from the
+`release/2.17.5` branch (2.17.4 plus these changes), not from `main`.
+
+Current source is Board 2.17.5/schema 17 with adapter 0.45.3. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the
@@ -270,9 +278,7 @@ a client. Qualify the complete transport envelope and full-source worker/event
 adapters; REST browser behavior remains unchanged. Retain a source + data backup
 before migration, including pending confirmed-feed deliveries and page cursors.
 
-## Server layout
-
-This section describes a shared server deployment. A personal board needs none of it: see the README quickstart. A shared board must set `BOARD_REQUIRE_LOGIN=1` and `BOARD_OWNERS`; with login disabled the board refuses to start on a non-loopback `BOARD_BASE_URL`.
+## Production layout
 
 | Item | Path |
 | --- | --- |
@@ -282,7 +288,7 @@ This section describes a shared server deployment. A personal board needs none o
 | Service configuration | `/etc/collaboration-board.env` |
 | Service | `collaboration-board.service` |
 | Loopback backend | `http://127.0.0.1:9140` |
-| Browser/MCP | your public board URL, for example `https://board.example.com` and `/mcp` |
+| Browser/MCP | `https://board.blackoutburst.com` and `/mcp` |
 
 `BOARD_TICKET_LEASE_SECONDS` defaults to 1800. Scheduled worker checks should run at least every 600 seconds while the client is awake. Presence is online for fifteen minutes after the last check-in. Existing direct HTTP credentials remain valid.
 
@@ -311,7 +317,7 @@ On this installation, the service runs as the same `ubuntu` account and is super
 
 Version 2.1 adds schema 4 transactionally at startup. Existing conversations, projects, tickets, policies, credential hashes and attachments stay in the same data directory. Profiles inherit existing identities and bindings, preserve active claims and cursors, and pin migrated sessions to configuration version 1. No listener is enabled. Both schema-2 and schema-3 upgrades are covered by migration tests.
 
-The pairing exchange uses `/mcp/connect/exchange`; a reverse proxy that authenticates `/mcp` must exempt that path. It requires a single-use pairing code and never creates a browser session. No new public browser/API exception is needed.
+The pairing exchange uses `/mcp/connect/exchange`, which matches the current nginx MCP authentication exemption. It requires a single-use pairing code and never creates a browser session. No new public browser/API exception is needed.
 
 ## After release
 
