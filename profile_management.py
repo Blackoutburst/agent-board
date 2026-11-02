@@ -4,6 +4,7 @@ Existing action/resource intersections carry this grant. A role label, legacy
 wildcard, device capability or management tool argument never grants authority.
 There is no credential, device binding, Runtime or server-management API here.
 """
+import hashlib
 import json
 import math
 import secrets
@@ -14,12 +15,14 @@ from projects import _fail,_json,_text,_version
 
 MANAGEMENT_ACTIONS=('agent.profile.read','agent.profile.create','agent.profile.update','agent.profile.archive')
 CLAIM_RELEASE_ACTION='agent.profile.release_claim'
+TICKET_RESOURCE_ACTION='agent.ticket.retarget_resource'
 MANAGEMENT_PREFIX='agent.profile.'
+TICKET_MANAGEMENT_PREFIX='agent.ticket.'
 RESOURCE_PREFIX='agent-profiles:'
 AUTONOMY={'responses':0,'requested':1,'queue':2}
 PROFILE_MANAGEMENT_TOOLS=frozenset({'list_managed_agent_profiles','get_managed_agent_profile',
     'create_managed_agent_profile','update_managed_agent_profile','archive_managed_agent_profile',
-    'release_managed_agent_claim'})
+    'release_managed_agent_claim','retarget_managed_ticket_resource'})
 
 
 def _identity(value):
@@ -38,6 +41,9 @@ def validate_profile_management_arguments(name,args):
     elif name=='release_managed_agent_claim':
         fields={'ticket_id','expected_version','idempotency_key','reason','recovery_evidence'}
         allowed|=fields;required|=fields
+    elif name=='retarget_managed_ticket_resource':
+        fields={'ticket_id','expected_version','expected_resource','new_resource','idempotency_key','reason'}
+        allowed|=fields;required|=fields
     else:_fail('Unknown management tool')
     if type(args) is not dict or set(args)-allowed or not required<=set(args):_fail('Supply only management tool fields')
     for key in ('session_id','profile_id','ticket_id','idempotency_key'):
@@ -51,13 +57,15 @@ def validate_profile_management_arguments(name,args):
     if args.get('cursor') is not None:_identity(args['cursor'])
     for key in ('reason','recovery_evidence'):
         if key in args:_text(args[key],key,1,20000)
+    for key in ('expected_resource','new_resource'):
+        if key in args:_ticket_resource(args[key],key,empty=key=='expected_resource')
 
 
 def management_resource(owner_id):return RESOURCE_PREFIX+owner_id
 
 
 def _reserved_action(value):
-    return '*' in value or value.startswith((MANAGEMENT_PREFIX,'runtime.','server.','provider.','device.','credential.','policy.'))
+    return '*' in value or value.startswith((MANAGEMENT_PREFIX,TICKET_MANAGEMENT_PREFIX,'runtime.','server.','provider.','device.','credential.','policy.'))
 
 
 def _reserved_resource(value):
@@ -66,8 +74,15 @@ def _reserved_resource(value):
 
 def _is_management(row):
     policy=json.loads(row['policy'])
-    return (any(action.startswith(MANAGEMENT_PREFIX) for action in policy['actions'])
+    return (any(action.startswith((MANAGEMENT_PREFIX,TICKET_MANAGEMENT_PREFIX)) for action in policy['actions'])
             or any(resource.startswith(RESOURCE_PREFIX) for resource in policy['resources']))
+
+
+def _ticket_resource(value,name,*,empty=False):
+    _text(value,name,0 if empty else 1,200)
+    if (value!=value.strip() or any(ord(char)<32 or ord(char)==127 for char in value)
+            or value and _reserved_resource(value)):_fail('Supply an exact ordinary ticket resource')
+    return value
 
 
 class ProfileManagementMixin:
@@ -305,6 +320,96 @@ class ProfileManagementMixin:
                 dict(profile_id=profile_id,version=expected_version+1,action=CLAIM_RELEASE_ACTION,resource=resource))
             return self._profile_view(db,self._profile_owned(db,actor,profile_id))
 
+    def retarget_managed_ticket_resource(self,actor,ticket_id,expected_version,expected_resource,
+                                         new_resource,idempotency_key,reason):
+        """Move one unclaimed ordinary ticket's metadata; never move execution."""
+        _version(expected_version);_identity(ticket_id);_identity(idempotency_key)
+        expected_resource=_ticket_resource(expected_resource,'expected_resource',empty=True)
+        new_resource=_ticket_resource(new_resource,'new_resource')
+        if expected_resource==new_resource:_fail('The ticket resource is already selected',409)
+        reason=_text(reason,'reason',1,20000)
+        payload=dict(ticket_id=ticket_id,expected_version=expected_version,
+            expected_resource=expected_resource,new_resource=new_resource,reason=reason)
+        with self._tx() as db:
+            actor,manager,ceiling=self._profile_manager(db,actor,TICKET_RESOURCE_ACTION)
+            if ceiling.get('allow_read') is not True:_fail('managed_ticket_read_permission_required',403)
+            row=self._ticket_member(db,actor,ticket_id)
+            project=self._project_member(db,actor,row['project_id'])
+            if row['assignee_owner_id']!=actor['owner_id']:_fail('managed_ticket_owner_mismatch',403)
+            if project['archived'] or row['status']=='done':_fail('managed_ticket_closed',409)
+            if self._delegation_ticket_family(db,ticket_id) is not None:_fail('managed_ticket_family_forbidden',403)
+            if any(row[key] is not None for key in ('claimant','claim_started_version','lease_expires_at')):
+                _fail('managed_ticket_claim_present',409)
+            if db.execute("SELECT 1 FROM human_requests WHERE ticket_id=? AND status='open' LIMIT 1",(ticket_id,)).fetchone():
+                _fail('managed_ticket_waiting_on_human',409)
+            if db.execute('''SELECT 1 FROM runtime_executions WHERE ticket_id=?
+                AND (state IS NOT 'finished' OR cleanup_confirmed IS NOT 1) LIMIT 1''',(ticket_id,)).fetchone():
+                _fail('managed_ticket_runtime_unresolved',409)
+            resources=[value for value in (expected_resource,new_resource) if value]
+            stored=json.loads(manager['policy'])
+            if any(value not in stored['resources'] or value not in ceiling['resources'] for value in resources):
+                _fail('managed_ticket_resource_outside_scope',403)
+            target=None
+            if row['assignee_agent_id'] not in (None,manager['id']):
+                target=self._managed_target(db,actor,manager,ceiling,row['assignee_agent_id'])
+                policy=json.loads(target['policy'])
+                if (row['project_id'] not in json.loads(target['project_ids'])
+                        or any(value not in policy['resources'] for value in resources)):
+                    _fail('managed_ticket_assignee_outside_scope',403)
+            # Ordinary row changes increment version; also pin the remaining
+            # source fields and selected profile/project versions for exact ACK
+            # replay. No historical receipt becomes fresh authority.
+            context=dict(ticket={key:row[key] for key in row.keys() if key not in ('resource','version','updated_at')},
+                manager_id=manager['id'],manager_version=manager['version'],project_version=project['version'],
+                target=None if target is None else dict(id=target['id'],version=target['version']))
+            context_sha=hashlib.sha256(_json(context).encode('utf-8')).hexdigest()
+            previous=self._retry(db,actor,'managed_ticket_resource',idempotency_key,payload)
+            if previous is not None:
+                saved=json.loads(previous)
+                if (row['version']!=expected_version+1 or row['resource']!=new_resource
+                        or saved!=dict(ticket_id=ticket_id,context_sha256=context_sha)):
+                    _fail('managed_ticket_retry_conflict',409)
+                return self._ticket(row,db)
+            if row['version']!=expected_version or row['resource']!=expected_resource:
+                _fail('managed_ticket_source_conflict',409)
+            now=time.time()
+            changed=db.execute('''UPDATE tickets SET resource=?,version=version+1,updated_at=?
+                WHERE id=? AND version=? AND resource=?''',(new_resource,now,ticket_id,expected_version,expected_resource))
+            if changed.rowcount!=1:_fail('managed_ticket_source_conflict',409)
+            db.execute('UPDATE projects SET updated_at=? WHERE id=?',(now,row['project_id']))
+            self._remember(db,actor,'managed_ticket_resource',idempotency_key,payload,
+                _json(dict(ticket_id=ticket_id,context_sha256=context_sha)))
+            self._audit(db,actor,'managed_ticket_resource_retargeted',dict(payload,
+                manager_profile_id=manager['id'],target_profile_id=row['assignee_agent_id'],version=expected_version+1))
+            return self._ticket(self._ticket_member(db,actor,ticket_id),db)
+
+    def set_agent_profile_ticket_resource_management(self,actor,profile_id,expected_version,enabled):
+        """Human-only opt-in, separate from profile and stale-claim management."""
+        _version(expected_version)
+        if type(enabled) is not bool:_fail('enabled must be a boolean')
+        with self._tx() as db:
+            actor=self._human(db,actor);row=self._profile_owned(db,actor,profile_id)
+            if row['version']!=expected_version:_fail('Agent profile changed; reload before granting ticket management',409)
+            policy=json.loads(row['policy']);owner=json.loads(self._owner(db,actor['owner_id'])['policy'])
+            resource=management_resource(actor['owner_id'])
+            if enabled:
+                if (row['legacy'] or json.loads(row['project_ids']) is None
+                        or any(owner.get(key) is not True for key in ('enabled','allow_read','allow_requests'))
+                        or not policy['allow_read'] or not policy['allow_requests'] or policy['autonomy']=='responses'
+                        or any('agent.profile.read' not in value['actions'] or resource not in value['resources']
+                            for value in (policy,owner))):
+                    _fail('Ticket management needs an explicit scoped profile-management grant',403)
+                policy['actions']=list(dict.fromkeys([*policy['actions'],TICKET_RESOURCE_ACTION]))
+                owner['actions']=list(dict.fromkeys([*owner['actions'],TICKET_RESOURCE_ACTION]))
+                if len(policy['actions'])>100 or len(owner['actions'])>100:_fail('Management grants exceed the action/resource limit')
+                owner.update(granted_by=actor['owner_id'],granted_at=time.time())
+                db.execute('UPDATE owners SET policy=? WHERE id=?',(_json(owner),actor['owner_id']))
+            else:policy['actions']=[value for value in policy['actions'] if value!=TICKET_RESOURCE_ACTION]
+            self._write_profile(db,profile_id,{'policy':policy})
+            self._audit(db,actor,'agent_ticket_resource_management_granted' if enabled else 'agent_ticket_resource_management_revoked',
+                dict(profile_id=profile_id,version=expected_version+1,action=TICKET_RESOURCE_ACTION,resource=resource))
+            return self._profile_view(db,self._profile_owned(db,actor,profile_id))
+
     def set_agent_profile_management(self,actor,profile_id,expected_version,enabled):
         """Human-only grant/revoke; never binds a device or changes identity."""
         _version(expected_version)
@@ -325,7 +430,7 @@ class ProfileManagementMixin:
                 owner.update(granted_by=actor['owner_id'],granted_at=time.time())
                 db.execute('UPDATE owners SET policy=? WHERE id=?',(_json(owner),actor['owner_id']))
             else:
-                policy['actions']=[value for value in policy['actions'] if not value.startswith(MANAGEMENT_PREFIX)]
+                policy['actions']=[value for value in policy['actions'] if not value.startswith((MANAGEMENT_PREFIX,TICKET_MANAGEMENT_PREFIX))]
                 policy['resources']=[value for value in policy['resources'] if not value.startswith(RESOURCE_PREFIX)]
             self._write_profile(db,profile_id,{'policy':policy})
             self._audit(db,actor,'agent_profile_management_granted' if enabled else 'agent_profile_management_revoked',
