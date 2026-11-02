@@ -1,6 +1,17 @@
 # Board interface contract — 2.17.6
 
-The browser REST API and MCP act on one database. Application version is `2.17.6`; schema version is `17`; the MCP catalogue has 78 tools. Existing project/task IDs, conversations and device tokens are preserved. Delegated profile management, expired-claim release and inactive-ticket resource routing each require their explicit human grants; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+The browser REST API and MCP act on one database. The companion source candidate uses schema `19` and an 81-tool MCP catalogue; check `/health` for the installed application version. Existing project/task IDs, conversations and device tokens are preserved. Delegated profile management, expired-claim release and inactive-ticket resource routing each require their explicit human grants; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+
+## Companion owner powers (schema 19)
+
+See [companion identity and migration](docs/COMPANIONS.md) and the exhaustive
+[human-gate audit](docs/COMPANION-GATE-AUDIT.md). Human-created companions retain
+their own agent transport identity and audited owner linkage. They may dispatch,
+answer their owner's requests, decide reviews and pause/resume ordinary agents or
+project automation. They never claim/work tickets or gain permission, identity,
+pairing, account or device-management powers. The two added MCP operations are
+`resolve_human_request` and `set_companion_agent_status`; ordinary agent behavior
+and browser human authentication remain enforced.
 
 ## Inactive ticket resource routing (2.17.6, schema 17)
 

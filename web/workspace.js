@@ -351,9 +351,9 @@ const Workspace = (() => {
         tagName.value = '';
       }))));
     const who = t?.assignee_agent_id ? "agent:" + t.assignee_agent_id : t?.assignee_owner_id ? "owner:" + t.assignee_owner_id : "";
-    const assignable = agentEntries.filter(a => !a.id.startsWith("device:") && (a.status === "active" || !a.status || a.id === t?.assignee_agent_id));
+    const assignable = agentEntries.filter(a => a.kind !== "companion" && !a.id.startsWith("device:") && (a.status === "active" || !a.status || a.id === t?.assignee_agent_id));
     const agentOptions = assignable.map(a => ["agent:" + a.id, `${a.name}${a.status && a.status !== "active" ? ` (${a.status})` : ""}`]);
-    if (t?.assignee_agent_id && !assignable.some(a => a.id === t.assignee_agent_id)) agentOptions.push([who, `${t.assignee_agent_name || "Currently assigned profile"} (not currently available)`]);
+    if (t?.assignee_agent_id && !agentEntries.some(a => a.id === t.assignee_agent_id && a.kind === "companion") && !assignable.some(a => a.id === t.assignee_agent_id)) agentOptions.push([who, `${t.assignee_agent_name || "Currently assigned profile"} (not currently available)`]);
     const dependencyPicker = el("fieldset", { class: "dependency-picker" }, el("legend", {}, "Blocked by"), allTasks.filter(task => task.id !== t?.id).map(task => check(`#${task.number} ${task.title}`, "depends_on", t?.depends_on?.includes(task.id), task.id)));
     if (allTasks.length <= (t ? 1 : 0)) dependencyPicker.append(el("p", { class: "small muted" }, "No other tasks in this project yet."));
     const form = el("form", { class: "work-form" }, field("Task title", "title", { value: t?.title || "", required: true, placeholder: "Describe the result you want" }), field("Description", "description", { type: "textarea", rows: 5, value: t?.description || "" }), field("Acceptance criteria", "acceptance_criteria", { type: "textarea", rows: 3, value: t?.acceptance_criteria || "", placeholder: "What needs to be true when this is complete?" }),
@@ -503,7 +503,7 @@ const Workspace = (() => {
     if (!events.length) return box("No activity yet", "Claims, progress, handoffs, and completed work will appear here.");
     const rows = events.map(event => {
       const detail = el("div", {},
-        el("p", {}, el("strong", {}, event.actor.agent_name || authorLabel(event.actor)),
+        el("p", {}, el("strong", {}, authorLabel(event.actor)), companionBadge(event.actor),
           ` ${descriptions[event.event] || event.event.replaceAll("_", " ")}`,
           workLink(` #${event.number}`, { ticket: event.ticket_id })),
         event.detail.progress ? Markdown.block(event.detail.progress, "muted") : null,
@@ -515,20 +515,22 @@ const Workspace = (() => {
 
   function agentList(entries) {
     return entries.length ? el("div", { class: "agent-list" }, entries.map(a => {
+      const companion = a.kind === "companion", actsFor = companionOwner(a, true);
+      const label = actsFor ? `${a.name} · for ${ownerName(actsFor)}` : a.name;
       if (a.owner_id !== state.actor.owner_id) {
         return el("article", { class: "agent-card shared-agent-summary" },
-          el("div", { class: "agent-heading" }, profileAvatar(a), el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, ownerName(a.owner_id))), profileStatus(a), presenceBadge(a)),
+          el("div", { class: "agent-heading" }, profileAvatar(a), el("div", {}, el("h2", {}, label), el("p", { class: "small muted" }, ownerName(a.owner_id)), companionBadge(a, true)), profileStatus(a), presenceBadge(a)),
           el("p", { class: "small muted" }, "Shared profile. Its instructions, devices, sessions and work details are private to its owner."));
       }
       const sessions = Array.isArray(a.sessions) ? a.sessions : [], tickets = Array.isArray(a.tickets) ? a.tickets : [];
       const kind = typeof a.agent_kind === "string" ? a.agent_kind : "";
       return el("article", { class: "agent-card" },
         el("div", { class: "agent-heading" }, a.avatar ? profileAvatar(a) : el("div", { class: `agent-emblem${kind.includes("claude") ? " claude-code" : ""}` }, kind.includes("claude") ? "C" : kind ? "CX" : "◇"),
-          el("div", {}, el("h2", {}, a.name), el("p", { class: "small muted" }, `${ownerName(a.owner_id)} / ${a.device_label || "No executor check-in"}`)),
+          el("div", {}, el("h2", {}, label), el("p", { class: "small muted" }, `${ownerName(a.owner_id)} / ${a.device_label || "No executor check-in"}`), companionBadge(a, true)),
           profileStatus(a), presenceBadge(a)),
         el("p", { class: "small muted" }, a.last_seen_at ? `Last seen ${date(a.last_seen_at)}` : "No executor has checked in with this profile yet."),
-        tickets.length ? tickets.map(t => el("div", { class: "agent-task" }, workLink(`#${t.number} ${t.title}`, { ticket: t.id }), status(t))) : el("p", { class: "muted" }, "No active tasks"),
-        el("details", {}, el("summary", {}, `${sessions.length} chat session${sessions.length === 1 ? "" : "s"}`), sessions.map(s => el("div", { class: "session-row" }, el("strong", {}, s.label), badge(s.autonomous ? "Worker" : "Observer"), el("span", { class: "small muted" }, (s.skills || []).join(", ") || "General")))),
+        companion ? el("p", { class: "muted" }, "Personal companion · execution tasks go to ordinary agents.") : tickets.length ? tickets.map(t => el("div", { class: "agent-task" }, workLink(`#${t.number} ${t.title}`, { ticket: t.id }), status(t))) : el("p", { class: "muted" }, "No active tasks"),
+        el("details", {}, el("summary", {}, `${sessions.length} chat session${sessions.length === 1 ? "" : "s"}`), sessions.map(s => el("div", { class: "session-row" }, el("strong", {}, s.label), badge(companion ? "Companion" : s.autonomous ? "Worker" : "Observer"), el("span", { class: "small muted" }, (s.skills || []).join(", ") || "General")))),
         !a.id.startsWith("device:") ? btn("Rename", () => renameAgent(a), "quiet") : null);
     })) : box("Connect your first agent", "Each installation gets a persistent name. Codex and Claude Code on the same machine remain separate agents.", btn("Connect agent", guard(setup), "primary"));
   }
@@ -561,10 +563,10 @@ const Workspace = (() => {
     return node;
   };
   function profileCard(p) {
-    const own = p.owner_id === state.actor.owner_id;
+    const own = p.owner_id === state.actor.owner_id, companion = p.kind === "companion", actsFor = companionOwner(p, true);
     const card = el("article", { class: "profile-card", "data-profile-id": p.id },
-      el("div", { class: "profile-heading" }, profileAvatar(p), el("div", { class: "profile-identity" }, el("h2", {}, p.name),
-        el("p", { class: "small muted" }, ownerName(p.owner_id), own ? " · Your profile" : " · Shared profile")), profileStatus(p), presenceBadge(p)));
+      el("div", { class: "profile-heading" }, profileAvatar(p), el("div", { class: "profile-identity" }, el("h2", {}, actsFor ? `${p.name} · for ${ownerName(actsFor)}` : p.name),
+        el("p", { class: "small muted" }, ownerName(p.owner_id), own ? companion ? " · Your companion" : " · Your profile" : companion ? " · Shared companion" : " · Shared profile"), companionBadge(p, true)), profileStatus(p), presenceBadge(p)));
     if (!own) {
       card.append(el("p", { class: "muted small" }, "This profile belongs to another project participant. Its configuration and connections are private."));
       return card;
@@ -572,9 +574,9 @@ const Workspace = (() => {
     card.append(el("p", { class: "profile-description" }, p.description || "Add a description to explain this agent’s focus."),
       el("div", { class: "profile-meta" }, el("span", {}, p.role || "General purpose"), el("span", {}, `Configuration v${p.version}`),
         p.legacy ? badge("Existing installation") : null),
-      el("p", { class: "small muted" }, `${p.project_ids === null ? "Existing account project scope" : `${(p.project_ids || []).length} followed project${p.project_ids?.length === 1 ? "" : "s"}`} · ${(p.bindings || []).filter(b => !b.revoked).length} connected executor${p.bindings?.filter(b => !b.revoked).length === 1 ? "" : "s"}`));
+      el("p", { class: "small muted" }, `${p.project_ids === null ? companion ? "Your account project scope" : "Existing account project scope" : `${(p.project_ids || []).length} followed project${p.project_ids?.length === 1 ? "" : "s"}`} · ${(p.bindings || []).filter(b => !b.revoked).length} connected executor${p.bindings?.filter(b => !b.revoked).length === 1 ? "" : "s"}`));
     const work = p.active_work || [];
-    card.append(el("details", { class: "profile-work", "aria-label": "Current work" }, el("summary", {}, `Current work (${work.length})`),
+    if (!companion) card.append(el("details", { class: "profile-work", "aria-label": "Current work" }, el("summary", {}, `Current work (${work.length})`),
       work.length ? work.map(item => el("div", { class: "profile-work-item" },
         item.kind === "ticket" ? workLink(item.title, { ticket: item.id }) : el("span", {}, item.title),
         el("span", { class: "small muted" }, ticketStatuses[item.status] || item.status),
@@ -585,7 +587,7 @@ const Workspace = (() => {
       btn("Edit profile", guard(() => profileEditor(p.id))),
       btn("Connections", guard(() => profileBindings(p.id))),
       btn("Version history", guard(() => profileHistory(p.id)), "quiet"),
-      btn("Duplicate", () => duplicateProfile(p), "quiet"),
+      companion ? null : btn("Duplicate", () => duplicateProfile(p), "quiet"),
       p.status !== "archived" ? btn(p.status === "paused" ? "Resume" : "Pause", () => changeProfileStatus(p, p.status === "paused" ? "active" : "paused"), "quiet") : null,
       btn(p.status === "archived" ? "Restore paused" : "Archive", () => changeProfileStatus(p, p.status === "archived" ? "paused" : "archived"), "quiet")));
     return card;
@@ -976,7 +978,7 @@ const Workspace = (() => {
   async function provisionRequestDialog(owner, host, profiles) {
     if (state.actor?.owner_id !== owner) return;
     const published = new Set(host.instances.map(instance => instance.profile_id));
-    const newProfiles = profiles.filter(p => p.owner_id === owner && p.status === "active" && !published.has(p.id));
+    const newProfiles = profiles.filter(p => p.kind !== "companion" && p.owner_id === owner && p.status === "active" && !published.has(p.id));
     const candidates = newProfiles.filter(p => serverInteger(p.version, 1)
       && Object.hasOwn(provisionProviders, p.preferred_provider) && provisionModel(p.preferred_model || null)
       && Array.isArray(p.bindings) && p.bindings.some(binding => binding.device_id === host.device_id && binding.revoked === false));
@@ -1274,7 +1276,7 @@ const Workspace = (() => {
   async function appendRequestDialog(owner, host, profiles) {
     if (state.actor?.owner_id !== owner) return;
     const published = new Set(host.instances.map(i => i.profile_id));
-    const candidates = profiles.filter(p => p.owner_id === owner && p.status === "active" && !published.has(p.id) && serverInteger(p.version, 1)
+    const candidates = profiles.filter(p => p.kind !== "companion" && p.owner_id === owner && p.status === "active" && !published.has(p.id) && serverInteger(p.version, 1)
       && p.preferred_provider === "codex_chatgpt" && provisionText(p.preferred_model)
       && Array.isArray(p.bindings) && p.bindings.some(b => b.device_id === host.device_id && b.revoked === false));
     if (!candidates.length) { serverModal("Choisir un profil déjà lié", el("div", {}, el("p", {}, "Choisissez d’abord un nouveau profil Codex actif avec un modèle demandé et liez-le explicitement à l’appareil du gestionnaire. L’ajout ne crée ni appairage ni connexion fournisseur."),
@@ -1371,15 +1373,17 @@ const Workspace = (() => {
     const locallyPending = pending && ["prepared", "uncertain", "submitted", "conflict", "refused"].includes(pending.status);
     const cleanStopped = instance.observed_state === "stopped" && instance.cleanup_confirmed === true;
     const uncertain = ["unknown", "needs_review"].includes(instance.observed_state);
-    const authorized = host.enabled === true && host.revoked_at === null && instance.active === true && instance.can_start === true && profile?.version === instance.profile_version;
+    const companion = profile?.kind === "companion", actsFor = companionOwner(profile, true);
+    const authorized = !companion && host.enabled === true && host.revoked_at === null && instance.active === true && instance.can_start === true && profile?.version === instance.profile_version;
     const canStart = authorized && cleanStopped && !activeCommand && !locallyPending;
     const canRestart = authorized && !uncertain && ["stopped", "ready", "busy"].includes(instance.observed_state)
       && (instance.observed_state !== "stopped" || cleanStopped) && !activeCommand && !locallyPending;
     const stopPending = command?.action === "stop" && ["queued", "accepted"].includes(command.status) || pending?.body.action === "stop" && locallyPending;
     const label = instance.observed_state === "stopped" && !instance.cleanup_confirmed ? "Nettoyage à confirmer" : serverStates[instance.observed_state];
     const card = el("article", { class: "server-instance", "data-server-instance": instance.id },
-      el("div", { class: "server-instance-heading" }, profileAvatar(profile || {}), el("div", {}, el("h3", {}, profile?.name || "Profil hébergé"),
+      el("div", { class: "server-instance-heading" }, profileAvatar(profile || {}), el("div", {}, el("h3", {}, actsFor ? `${profile.name} · for ${ownerName(actsFor)}` : profile?.name || "Profil hébergé"),
         el("p", { class: "small muted" }, profile?.role || (instance.mode === "messages" ? "Réponses aux messages" : "Travail sur les tickets"))),
+        companionBadge(profile, true),
         badge(label, uncertain || !cleanStopped && instance.observed_state === "stopped" ? "status-blocked" : instance.observed_state === "busy" ? "status-running" : "")),
       el("dl", { class: "server-instance-facts" }, el("dt", {}, "Profil"), el("dd", {}, `${profile?.name || instance.profile_id} · v${instance.profile_version}`),
         el("dt", {}, "Modèle préféré"), el("dd", {}, [profile?.preferred_provider, profile?.preferred_model].filter(Boolean).join(" · ") || "Selon la configuration du serveur"),
@@ -1397,10 +1401,10 @@ const Workspace = (() => {
       pending?.status === "refused" ? "La demande a été refusée. Actualisez avant une nouvelle commande." : pending?.status === "conflict" ? "L’état a changé. Actualisez avant une nouvelle commande." : pending?.status === "submitted" ? "Demande enregistrée ; l’observation du serveur reste attendue." : "La réponse reste à confirmer. Réessayez la même demande.");
     const startButton = btn("Démarrer", () => serverActionDialog(owner, instance, "start"), "primary", { disabled: !canStart });
     const restartButton = btn("Redémarrer", () => serverActionDialog(owner, instance, "restart"), "quiet", { disabled: !canRestart });
-    const actions = el("div", { class: "server-instance-actions" }, startButton,
+    const actions = el("div", { class: "server-instance-actions" }, companion ? null : startButton,
       btn(stopPending ? "Arrêt demandé" : "Arrêter", () => serverActionDialog(owner, instance, "stop"), "", { disabled: stopPending || cleanStopped && instance.desired_state !== "running" && !activeCommand && !locallyPending }),
-      restartButton);
-    if (pending && ["prepared", "uncertain"].includes(pending.status)) actions.append(btn("Réessayer la même demande", guard(() => sendServerRecord(owner, pending)), "quiet"));
+      companion ? null : restartButton);
+    if (pending && ["prepared", "uncertain"].includes(pending.status) && (!companion || pending.body?.action === "stop")) actions.append(btn("Réessayer la même demande", guard(() => sendServerRecord(owner, pending)), "quiet"));
     card.append(note, actions);
     let barrier = false, full = false;
     const update = () => { startButton.disabled = !canStart || full || barrier; restartButton.disabled = !canRestart || barrier; };
@@ -1512,10 +1516,16 @@ const Workspace = (() => {
     archived.querySelector("input").addEventListener("change", guard(async event => { includeArchivedProfiles = event.target.checked; await agents(); }));
     body.append(el("div", { class: "profile-toolbar" }, el("p", { class: "small muted" }, "Profiles do not start a background agent. Work still needs an authorized executor."), archived));
     const loading = empty("Loading profiles…"); body.append(loading);
-    const [entries, visibleAgents] = await Promise.all([api(`/agent-profiles?include_archived=${includeArchivedProfiles}`), api("/agents")]);
+    const [entries, visibleAgents] = await Promise.all([api("/agent-profiles?include_archived=true"), api("/agents")]);
     if (request !== state.request) return;
     loading.remove();
-    const mine = entries.filter(p => p.owner_id === state.actor.owner_id), shared = visibleAgents.filter(p => p.owner_id !== state.actor.owner_id && (includeArchivedProfiles || p.status !== "archived"));
+    const owned = entries.filter(p => p.owner_id === state.actor.owner_id);
+    const mine = owned.filter(p => includeArchivedProfiles || p.status !== "archived" || p.kind === "companion"), shared = visibleAgents.filter(p => p.owner_id !== state.actor.owner_id && (includeArchivedProfiles || p.status !== "archived"));
+    if (state.actor.kind === "human" && !owned.some(p => p.kind === "companion")) {
+      body.append(panel("Your companion", el("div", { class: "panel-body" },
+        el("p", {}, "Create one persistent companion to act for you within the permissions you choose. Execution tasks stay with ordinary agents."),
+        btn("Create companion", guard(() => profileEditor(null, null, "companion")), "primary"))));
+    }
     body.append(mine.length ? el("div", { class: "profile-grid" }, mine.map(profileCard)) : box("Create your first profile", "Start with a developer, reviewer, or researcher, then adjust its instructions and project scope.", btn("New profile", guard(() => profileEditor()), "primary")));
     if (shared.length) body.append(el("section", { class: "shared-profiles" }, el("h2", {}, "From your collaborators"), el("div", { class: "profile-grid" }, shared.map(profileCard))));
     body.append(el("p", { class: "small muted profile-permission-note" }, "Profile permissions can only narrow the access allowed in your account settings. Pausing blocks subsequent board calls; existing work or leases may still need reconciliation."));
@@ -1763,22 +1773,32 @@ const Workspace = (() => {
       data.host ? serverManagerSetup(data.host) : el("p", {}, "Liez un appareil à votre compte dans « Sur le serveur » pour commencer la préparation du gestionnaire."),
       btn("Voir mes instances serveur", guard(async () => { if (state.actor?.owner_id !== owner) return; closeModal(); agentTab = "hosted"; await agents(); }), "primary")));
   }
-  async function profileEditor(id = null, preparation = null) {
-    const owner = state.actor?.owner_id;
-    const [p, projects] = await Promise.all([id ? api(`/agent-profiles/${workPath(id)}`) : Promise.resolve(null), api("/projects?include_archived=true")]);
+  async function profileEditor(id = null, preparation = null, creationKind = "agent") {
+    const owner = state.actor?.owner_id, request = state.request;
+    if (!["agent", "companion"].includes(creationKind)) throw new Error("Choose a supported profile kind.");
+    const creatingCompanion = !id && creationKind === "companion";
+    const currentCreation = () => !creatingCompanion || state.actor?.owner_id === owner && state.actor?.kind === "human"
+      && request === state.request && state.view === "agents" && !$("modal").open;
+    if (!currentCreation()) return;
+    let p, projects;
+    try { [p, projects] = await Promise.all([id ? api(`/agent-profiles/${workPath(id)}`) : Promise.resolve(null), api("/projects?include_archived=true")]); }
+    catch (error) { if (!currentCreation()) return; throw error; }
     if (state.actor?.owner_id !== owner || preparation && preparation.owner_id !== owner) return;
+    if (!currentCreation()) return;
     if (p && p.owner_id !== state.actor.owner_id) throw new Error("Only the owner can edit this profile.");
+    const companion = p ? p.kind === "companion" : creationKind === "companion";
     const key = idempotencyKey();
     const policy = p?.policy || { allow_read: false, allow_messages: false, allow_requests: false, actions: [], resources: [], autonomy: "responses" };
     const form = el("form", { class: "work-form profile-form" });
     const preview = el("aside", { class: "profile-preview", "aria-label": "Profile preview" });
     const basics = el("section", { class: "profile-fields" },
-      profileField("Profile name", "name", 200, { value: p?.name || preparation?.name || "", required: true, placeholder: "Release reviewer" }),
+      profileField(companion ? "Companion name" : "Profile name", "name", 200, { value: p?.name || preparation?.name || "", required: true, placeholder: companion ? "My companion" : "Release reviewer" }),
       el("div", { class: "form-row" }, profileField("Avatar text or emoji", "avatar", 32, { value: p?.avatar || "", placeholder: "🔎", hint: "Plain text only. Images and URLs are not used." }), profileField("Role", "role", 200, { value: p?.role || "", placeholder: "Code review" })),
       profileField("Description", "description", 4000, { type: "textarea", rows: 2, value: p?.description || "", placeholder: "What should this agent focus on?" }));
     const appearance = el("div", { class: "profile-editor-top" }, basics, preview);
     const template = select("Start from a template", "template", [["", "Custom profile"], ["development", "Development"], ["review", "Review"], ["research", "Research"], ["management", "Management / Lead"]], "");
-    if (!p) form.append(template);
+    if (!p && !companion) form.append(template);
+    if (companion) form.append(el("p", { class: "callout" }, `A personal companion for ${ownerName(owner)}. It reads, discusses and requests work within your account permissions. It cannot take execution tickets or run as a pool worker.`));
     form.append(appearance,
       profileField("Instructions", "instructions", 12000, { type: "textarea", rows: 6, value: p?.instructions || "", hint: "Private to your account and authorized executor. Do not include passwords or connection keys." }),
       el("div", { class: "form-row" }, select("Response language", "language", [["auto", "Follow the task"], ["en", "English"], ["fr", "French"], ["de", "German"], ["nl", "Dutch"]], p?.language || "auto"), profileField("Response style", "response_style", 2000, { type: "textarea", rows: 2, value: p?.response_style || "", placeholder: "Concise, with concrete evidence" })),
@@ -1800,12 +1820,12 @@ const Workspace = (() => {
     createProjects.querySelector("input").addEventListener("change", () => { createProjectsTouched = true; });
     const permissions = el("details", { class: "metadata-editor profile-permissions" }, el("summary", {}, "Profile permissions"),
       el("p", { class: "small muted" }, "These limits are combined with your account and device permissions. A profile cannot grant itself additional access."),
-      check("Read selected projects and discussions", "allow_read", policy.allow_read), check("Post messages", "allow_messages", policy.allow_messages), check("Create, claim and update work", "allow_requests", policy.allow_requests),
+      check("Read selected projects and discussions", "allow_read", policy.allow_read), check("Post messages", "allow_messages", policy.allow_messages), check(companion ? "Request work" : "Create, claim and update work", "allow_requests", policy.allow_requests),
       createProjects,
       el("p", { class: "small muted" }, "Creating projects also requires account work permission. New projects are not added to followed projects. For profiles with selected projects, add each new project here separately to grant access."),
       p?.legacy && p.project_ids === null && !Object.hasOwn(policy, "allow_create_projects") ? el("p", { class: "small muted" }, "This existing account-wide profile may already create projects. Leaving this setting unchanged preserves that behavior. To explicitly deny creation, select and then clear the checkbox.") : null,
-      select("Work selection", "autonomy", [["responses", "Responses only"], ["requested", "Explicitly requested work"], ["queue", "Authorized queue work"]], policy.autonomy),
-      el("p", { class: "small muted" }, "Queue permission does not start a worker or listener. An executor must also support and be authorized for that workflow."),
+      companion ? null : select("Work selection", "autonomy", [["responses", "Responses only"], ["requested", "Explicitly requested work"], ["queue", "Authorized queue work"]], policy.autonomy),
+      el("p", { class: "small muted" }, companion ? "Execution work is assigned to ordinary agents." : "Queue permission does not start a worker or listener. An executor must also support and be authorized for that workflow."),
       el("details", { class: "profile-legacy-scopes" }, el("summary", {}, "Legacy action limits"), profileField("Allowed actions (one per line)", "actions", 25700, { type: "textarea", value: policy.actions.join("\n") }), profileField("Allowed resources (one per line)", "resources", 25700, { type: "textarea", value: policy.resources.join("\n") })));
     const managementGranted = policy.actions.some(value => value.startsWith("agent.profile.")) || policy.resources.some(value => value.startsWith("agent-profiles:"));
     const management = check("Gérer les profils d’agents ordinaires", "manage_agent_profiles", managementGranted);
@@ -1824,20 +1844,20 @@ const Workspace = (() => {
     claimManagementInput.addEventListener("change", () => { claimManagementTouched = true; });
     ticketResourceManagementInput.addEventListener("change", () => { ticketResourceManagementTouched = true; });
     refreshClaimManagement();
-    form.append(projectPicker, permissions,
-      el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
+    form.append(creatingCompanion ? null : projectPicker, creatingCompanion ? null : permissions,
+      creatingCompanion ? null : el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
         el("p", { class: "small muted" }, "Autorise la création, la modification et l’archivage réversible des profils ordinaires de votre compte. Chaque profil doit rester dans les projets suivis et sous les plafonds effectifs de permissions, d’actions, de ressources et d’autonomie de ce Lead."),
         el("p", { class: "small muted" }, p?.legacy ? "Créez un nouveau profil à projets explicites pour cette délégation. Le nom du rôle seul ne donne aucun droit." : "Activez la lecture et les demandes de travail, choisissez des projets explicites et une sélection de travail autorisée. Les identités Management, les connexions et les limites d’exécution restent gérées par vous. Cette délégation ne démarre aucun agent."),
         claimManagement,
         el("p", { class: "small muted" }, "Nécessite la gestion des profils. Réservé aux réservations expirées, après inspection et nettoyage ; un Runtime actif ou incertain bloque la libération. Cette permission n’arrête aucun processus."),
         ticketResourceManagement,
         el("p", { class: "small muted" }, "Permission séparée : changer l’espace d’un ticket inactif dans les projets et ressources déjà autorisés au Lead. Un travail, une réservation ou une demande humaine en cours bloque ce changement. Aucun accès supplémentaire ni démarrage n’est accordé.")),
-      el("p", { class: "small muted" }, p ? `Editing configuration v${p.version}. Saved preferences apply to future work; existing work keeps its captured configuration.` : "A new profile has no connection. Choose its project scope and permissions, then connect an executor."),
-      ...(p?.active_work?.length ? [profileWorkNotice(p)] : []),
-      formButtons(p ? "Save profile" : "Create profile"));
+      el("p", { class: "small muted" }, creatingCompanion ? "Your companion stays attached to your account. Creating it does not start an execution worker." : p ? `Editing configuration v${p.version}. Saved preferences apply to future work; existing work keeps its captured configuration.` : "A new profile has no connection. Choose its project scope and permissions, then connect an executor."),
+      ...(!companion && p?.active_work?.length ? [profileWorkNotice(p)] : []),
+      formButtons(p ? companion ? "Save companion" : "Save profile" : companion ? "Create companion" : "Create profile"));
     const refreshPreview = () => {
       const values = new FormData(form);
-      preview.replaceChildren(el("p", { class: "small muted" }, "Preview"), profileAvatar({ avatar: String(values.get("avatar") || "") }), el("h3", {}, String(values.get("name") || "Your agent")),
+      preview.replaceChildren(el("p", { class: "small muted" }, "Preview"), profileAvatar({ avatar: String(values.get("avatar") || "") }), el("h3", {}, String(values.get("name") || (companion ? "Your companion" : "Your agent"))),
         el("p", { class: "small muted" }, ownerName(state.actor.owner_id)), el("p", {}, String(values.get("role") || "General purpose")), el("p", { class: "small profile-description" }, String(values.get("description") || "A clear purpose helps others know when to involve this agent.")));
     };
     template.querySelector("select").addEventListener("change", event => {
@@ -1848,13 +1868,18 @@ const Workspace = (() => {
     form.addEventListener("input", refreshPreview);
     bindForm(form, async values => {
       if (state.actor?.owner_id !== owner) return;
+      if (!p && companion && state.actor?.kind !== "human") return;
       const fields = Object.fromEntries(["name", "avatar", "description", "role", "instructions", "language", "response_style", "preferred_provider", "preferred_model"].map(name => [name, String(values.get(name) || "")]));
-      if (!values.has("keep_legacy_scope")) fields.project_ids = values.getAll("project_ids");
-      fields.policy = { allow_read: values.has("allow_read"), allow_messages: values.has("allow_messages"), allow_requests: values.has("allow_requests"), autonomy: values.get("autonomy"), actions: lines(String(values.get("actions") || "")), resources: lines(String(values.get("resources") || "")) };
-      if (Object.hasOwn(policy, "allow_create_projects") || createProjectsTouched) fields.policy.allow_create_projects = values.has("allow_create_projects");
-      if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
+      if (creatingCompanion) fields.kind = "companion";
+      else {
+        if (!values.has("keep_legacy_scope")) fields.project_ids = values.getAll("project_ids");
+        fields.policy = { allow_read: values.has("allow_read"), allow_messages: values.has("allow_messages"), allow_requests: values.has("allow_requests"), autonomy: companion ? policy.autonomy : values.get("autonomy"), actions: lines(String(values.get("actions") || "")), resources: lines(String(values.get("resources") || "")) };
+        if (Object.hasOwn(policy, "allow_create_projects") || createProjectsTouched) fields.policy.allow_create_projects = values.has("allow_create_projects");
+        if (fields.policy.actions.length > 100 || fields.policy.resources.length > 100) throw new Error("Use at most 100 allowed actions and 100 allowed resources.");
+      }
       let saved = await api(p ? `/agent-profiles/${workPath(p.id)}` : "/agent-profiles", { method: p ? "PATCH" : "POST", data: { ...fields, ...(p ? { expected_version: p.version } : { idempotency_key: key }) } });
       if (state.actor?.owner_id !== owner) return;
+      if (creatingCompanion && (saved?.kind !== "companion" || saved.owner_id !== owner || saved.acts_for !== owner)) throw new Error("Companion creation is not confirmed. Reload profiles before retrying.");
       const managementEnabled = values.has("manage_agent_profiles");
       if (managementTouched || (claimManagementTouched || ticketResourceManagementTouched) && managementEnabled) {
         let profileAcknowledged = false;
@@ -1919,12 +1944,13 @@ const Workspace = (() => {
       if (state.actor?.owner_id !== owner) return;
       closeModal(); agentTab = "profiles"; await agents();
       if (state.actor?.owner_id !== owner) return;
-      notify(p ? "Profile saved for future work." : "Profile created. Connect an executor when you are ready.");
+      notify(companion ? p ? "Companion saved." : "Companion created." : p ? "Profile saved for future work." : "Profile created. Connect an executor when you are ready.");
       if (preparation) await providerPreparationSummary(saved);
     });
-    openModal(p ? "Edit agent profile" : "Create agent profile", form); refreshPreview();
+    openModal(p ? companion ? "Edit companion" : "Edit agent profile" : companion ? "Create companion" : "Create agent profile", form); refreshPreview();
   }
   function duplicateProfile(p) {
+    if (p.kind === "companion") return;
     const key = idempotencyKey();
     const form = el("form", {}, profileField("New profile name", "name", 200, { value: `${p.name.slice(0, 193)} (copy)`, required: true }),
       el("p", { class: "muted" }, "Copies the presentation, instructions and preferences. The copy starts paused, with no project scope, permissions or connected executor."), formButtons("Create copy"));
@@ -1957,7 +1983,8 @@ const Workspace = (() => {
       const current = ++sequence;
       const saved = await api(`/agent-profiles/${workPath(id)}/versions/${selected}`);
       if (current !== sequence || !form.isConnected) return;
-      content.replaceChildren(el("div", { class: "profile-heading" }, profileAvatar(saved), el("div", { class: "profile-identity" }, el("h3", {}, saved.name), el("p", { class: "small muted" }, `Version ${saved.version} · ${date(saved.updated_at)}`)), profileStatus(saved)),
+      const actsFor = companionOwner(saved, true);
+      content.replaceChildren(el("div", { class: "profile-heading" }, profileAvatar(saved), el("div", { class: "profile-identity" }, el("h3", {}, actsFor ? `${saved.name} · for ${ownerName(actsFor)}` : saved.name), el("p", { class: "small muted" }, `Version ${saved.version} · ${date(saved.updated_at)}`), companionBadge(saved, true)), profileStatus(saved)),
         Markdown.block(saved.description || "No description"),
         el("dl", { class: "profile-version-facts" }, ...[
           ["Owner", ownerName(saved.owner_id)], ["Role", saved.role || "General purpose"], ["Language", saved.language || "auto"],
@@ -2107,7 +2134,10 @@ const Workspace = (() => {
         bindForm(confirm, async () => { await api(`/settings/devices/${workPath(device.id)}`, { method: "DELETE" }); closeModal(); await settings(); });
         openModal("Revoke device", confirm);
       }, "quiet"))), el("p", { class: "small muted" }, `Connected ${date(device.created_at)}`))) : el("p", { class: "muted" }, "No devices connected."));
-    body.append(el("div", { class: "overview-grid" }, panel("Agent participation", el("div", { class: "panel-body" }, form)),
+    body.append(panel("Agents and companion", el("div", { class: "panel-body" },
+      el("p", {}, "Create your personal companion and manage ordinary agent profiles in Agents."),
+      btn("Open agents", guard(async () => { agentTab = "profiles"; await agents(); })))),
+      el("div", { class: "overview-grid" }, panel("Agent participation", el("div", { class: "panel-body" }, form)),
       el("aside", {}, panel("Notifications", el("div", { class: "panel-body" }, badge(notifications?.configured ? "Discord connected" : "In-app notifications", notifications?.configured ? "status-ready" : ""), el("p", { class: "small muted" }, "Human requests always appear in Needs you. Configured Discord alerts reach the requested person even when their agent is offline."), notifications?.pending ? el("p", {}, `${notifications.pending} notifications queued`) : null)))), panel("Connected devices", devices));
   }
   async function inbox() {

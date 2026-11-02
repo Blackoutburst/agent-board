@@ -13,6 +13,7 @@ import secrets
 import time
 
 from projects import ProjectsMixin, _fail, _json, _same_claim, _text, _version
+from owner_powers import has_owner_power
 
 
 # Successful pre-2.3 keys contain the raw ticket ID. Negative selections use a
@@ -112,7 +113,7 @@ class CoordinationMixin(ProjectsMixin):
             return None
         row = db.execute("""SELECT a.* FROM agent_profiles a JOIN project_members m ON m.owner_id=a.owner_id
             WHERE a.id=? AND m.project_id=? AND a.status='active'""", (agent_id, project_id)).fetchone()
-        if not row or (json.loads(row['project_ids']) is not None and project_id not in json.loads(row['project_ids'])):
+        if not row or row['kind'] == 'companion' or (json.loads(row['project_ids']) is not None and project_id not in json.loads(row['project_ids'])):
             _fail('Assigned agent must be an active profile with access to this project')
         return agent_id
 
@@ -414,19 +415,21 @@ class CoordinationMixin(ProjectsMixin):
     def _review_candidates(self, db, actor, project_id=''):
         """Unclaimed reviews this agent may take: never its own delivery."""
         skills, identity = [], None
-        if actor['kind'] == 'agent':
+        worker = actor['kind'] == 'agent' and actor.get('companion_for') is None
+        companion = actor.get('companion_for') is not None
+        if worker:
             session = db.execute('SELECT skills,agent_id FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()
             skills, identity = json.loads(session['skills']), session['agent_id']
         result = []
         for row in db.execute("""SELECT t.*,p.name AS project_name FROM tickets t JOIN projects p ON p.id=t.project_id
-                JOIN project_members m ON m.project_id=p.id WHERE m.owner_id=? AND p.archived=0 AND p.automation_enabled=1
-                AND t.status='review' AND t.claimant IS NULL AND (?='' OR p.id=?)
-                AND (t.assignee_owner_id IS NULL OR t.assignee_owner_id=?)""",
-                (actor['owner_id'], project_id, project_id, actor['owner_id'])):
+                JOIN project_members m ON m.project_id=p.id WHERE m.owner_id=? AND p.archived=0 AND (p.automation_enabled=1 OR ?)
+                AND t.status='review' AND (t.claimant IS NULL OR ?) AND (?='' OR p.id=?)
+                AND (t.assignee_owner_id IS NULL OR t.assignee_owner_id=? OR ?)""",
+                (actor['owner_id'], int(companion), int(companion), project_id, project_id, actor['owner_id'], int(companion))):
             if not self._profile_project_allowed(db, actor, row['project_id']):
                 continue
             origin = self._review_origin(db, row['id'])
-            if actor['kind'] == 'agent' and (origin['agent_id'] == identity
+            if worker and (origin['agent_id'] == identity
                                              or not set(json.loads(row['required_skills'])).issubset(skills)):
                 continue
             ticket = self._ticket(row, db)
@@ -592,6 +595,7 @@ class CoordinationMixin(ProjectsMixin):
             row = self._ticket_member(db, actor, ticket_id)
             if actor['kind'] != 'agent':
                 _fail('Use the human task editor instead', 403)
+            companion = has_owner_power(actor, 'dispatch')
             previous = self._retry(db, actor, 'release_ticket', idempotency_key, payload)
             if previous:
                 return self._ticket(self._ticket_member(db, actor, previous), db)
@@ -599,9 +603,12 @@ class CoordinationMixin(ProjectsMixin):
                 _fail('Task changed; reread before releasing', 409)
             identity = self._author(db, actor)['agent_id']
             claimant = json.loads(row['claimant']) if row['claimant'] else None
-            if row['assignee_owner_id'] not in (None, actor['owner_id']) or row['assignee_agent_id'] not in (None, identity):
+            if not companion and (row['assignee_owner_id'] not in (None, actor['owner_id']) or row['assignee_agent_id'] not in (None, identity)):
                 _fail('Task has been assigned elsewhere', 403)
-            if claimant:
+            if companion:
+                if status and status not in ('todo', row['status']):
+                    _fail('Companions may release work but cannot deliver it for review', 403)
+            elif claimant:
                 if not _same_claim(claimant, actor):
                     _fail('Another session owns this claim', 403)
                 if (row['lease_expires_at'] or 0) <= time.time():
@@ -623,7 +630,7 @@ class CoordinationMixin(ProjectsMixin):
                 lease_expires_at=NULL,assignee_agent_id=?,waiting_for_dependencies=?,
                 blocked_reason=?,unblock_owner=?,recheck_at=?,version=version+1,
                 updated_at=? WHERE id=? AND version=?''',
-                (next_status, None if unassign_self else identity,
+                (next_status, None if unassign_self else (row['assignee_agent_id'] if companion else identity),
                  0 if status else row['waiting_for_dependencies'],
                  reason[:2000] if explicit else (row['blocked_reason'] if next_status == 'blocked' else ''),
                  identity if explicit else (row['unblock_owner'] if next_status == 'blocked' else None),
@@ -772,10 +779,13 @@ class CoordinationMixin(ProjectsMixin):
             result = []
             for profile in db.execute('SELECT * FROM agent_profiles ORDER BY created_at,id'):
                 selected = json.loads(profile['project_ids'])
+                if profile['kind'] == 'companion':
+                    selected = None
                 projects = {row['project_id'] for row in db.execute('SELECT project_id FROM project_members WHERE owner_id=?', (profile['owner_id'],))
                             if selected is None or row['project_id'] in selected}
                 own_human = actor['kind'] == 'human' and actor['owner_id'] == profile['owner_id']
-                if not (own_human and not project_id) and not projects.intersection(visible_projects):
+                own_manager = has_owner_power(actor, 'manage_agents', profile['owner_id'])
+                if not (own_manager and not project_id) and not projects.intersection(visible_projects):
                     continue
                 item = self._profile_public(profile)
                 item.update(self._agent_presence(db, profile['id']))
@@ -811,7 +821,8 @@ class CoordinationMixin(ProjectsMixin):
         if project_id:
             self._project_member(db, actor, project_id)
         skills = []
-        if actor['kind'] == 'agent':
+        worker = actor['kind'] == 'agent' and actor.get('companion_for') is None
+        if worker:
             skills = json.loads(db.execute('SELECT skills FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()[0])
         rows = db.execute("""SELECT t.*,p.name AS project_name FROM tickets t
             JOIN projects p ON p.id=t.project_id JOIN project_members m ON m.project_id=p.id
@@ -828,11 +839,11 @@ class CoordinationMixin(ProjectsMixin):
             ticket = self._ticket(row, db)
             if ticket['blocked_by'] or ticket['waiting_on_human'] or ticket['block_reasons']:
                 continue
-            if actor['kind'] == 'agent' and row['assignee_agent_id']:
+            if worker and row['assignee_agent_id']:
                 identity_id = db.execute('SELECT agent_id FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()[0]
                 if identity_id != row['assignee_agent_id'] and not ticket['assignment_stale']:
                     continue
-            if actor['kind'] == 'agent' and not set(ticket['required_skills']).issubset(skills):
+            if worker and not set(ticket['required_skills']).issubset(skills):
                 continue
             if ticket['claimant'] and not (include_recovery and ticket['claim_expired']):
                 continue
@@ -951,7 +962,7 @@ class CoordinationMixin(ProjectsMixin):
         _text(project_id, 'project_id', 0, 200)
         with self._tx() as db:
             actor = self._actor(db, actor, 'allow_requests')
-            if actor['kind'] != 'agent':
+            if actor['kind'] != 'agent' or actor.get('companion_for') is not None:
                 _fail('Register an agent session to claim from the work queue', 403)
             session = db.execute('SELECT * FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()
             profile = self._profile_for_actor(db, actor)
@@ -1017,7 +1028,8 @@ class CoordinationMixin(ProjectsMixin):
             JOIN tickets t ON t.id=r.ticket_id JOIN project_members m ON m.project_id=t.project_id
             WHERE m.owner_id=? AND (?='' OR t.project_id=?) AND (?=1 OR r.status='open') ORDER BY r.created_at""",
             (actor['owner_id'], project_id, project_id, int(include_resolved)))
-        return [self._request(row, db) for row in rows if self._profile_project_allowed(db, actor, row['project_id'])]
+        return [self._request(row, db) for row in rows if self._profile_project_allowed(db, actor, row['project_id'])
+                and (actor.get('companion_for') is None or row['owner_id'] == actor['owner_id'])]
 
     def list_human_requests(self, actor, project_id='', include_resolved=False):
         if type(include_resolved) is not bool:
@@ -1117,22 +1129,25 @@ class CoordinationMixin(ProjectsMixin):
     def resolve_human_request(self, actor, request_id, answer):
         _text(answer, 'answer', 1, 20000)
         with self._tx() as db:
-            actor = self._human(db, actor)
+            actor = self._actor(db, actor, 'allow_requests')
+            if not has_owner_power(actor, 'answer_requests'):
+                _fail('Only the requested owner or companion can resolve this request', 403)
             request = db.execute('SELECT * FROM human_requests WHERE id=?', (request_id,)).fetchone()
             if not request:
                 _fail('Human request not found', 404)
             row = self._ticket_member(db, actor, request['ticket_id'])
-            if actor['owner_id'] != request['owner_id']:
+            if not has_owner_power(actor, 'answer_requests', request['owner_id']):
                 _fail('Only the requested human can resolve this request', 403)
             if request['status'] == 'resolved':
                 return self._request(request, db)
             now = time.time()
             db.execute("UPDATE human_requests SET status='resolved',answer=?,resolved_at=? WHERE id=?", (answer, now, request_id))
-            self._discussion_event(db, actor, row['thread_id'], 'Human response: '+answer, [])
+            label = 'Companion response: ' if actor.get('companion_for') else 'Human response: '
+            self._discussion_event(db, actor, row['thread_id'], label+answer, [])
             other = db.execute("SELECT 1 FROM human_requests WHERE ticket_id=? AND status='open'", (row['id'],)).fetchone()
-            if not other and row['status'] != 'blocked':
+            if not other and row['status'] not in ('blocked', 'done'):
                 db.execute("UPDATE tickets SET status='todo',version=version+1,updated_at=? WHERE id=?", (now, row['id']))
-            elif not other:
+            elif not other and row['status'] == 'blocked':
                 # Other verifiable reasons (dependencies, explicit block) keep it blocked.
                 self._reevaluate_blocked(db, actor, [row['id']], 'human request answered', announce=False)
             self._audit(db, actor, 'human_input_resolved', {'ticket_id': row['id'], 'request_id': request_id})

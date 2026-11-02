@@ -301,7 +301,7 @@ def test_backup_restore_keeps_scope_pause_bindings_and_non_escalation(guarded, t
     revise(s, status='paused')
     archive = tmp_path / 'profiles.zip'
     manifest = create_backup(s['board'].data_dir, archive)
-    assert manifest['schema']['user_version'] == 18
+    assert manifest['schema']['user_version'] == 19
     restore_backup(archive, tmp_path / 'restored')
     restored = Board(tmp_path / 'restored')
     profile = restored.get_agent_profile(s['alice'], s['profile']['id'])
@@ -329,10 +329,10 @@ def test_agent_directory_uses_real_shared_profile_scope_and_public_projection(gu
     directory = b.list_agents(s['actor'])
     assert hidden['id'] not in {item['id'] for item in directory}
     shared = next(item for item in directory if item['id'] == public['id'])
-    assert set(shared) == {'id', 'owner_id', 'name', 'avatar', 'status', 'presence', 'online', 'last_seen_at', 'idle_after_seconds'}
+    assert set(shared) == {'id', 'owner_id', 'name', 'avatar', 'status', 'presence', 'online', 'last_seen_at', 'idle_after_seconds', 'kind', 'acts_for', 'version'}
     assert 'Private' not in json.dumps(directory)
     human_shared = next(item for item in b.list_agents(s['alice']) if item['id'] == public['id'])
-    assert set(human_shared) == {'id', 'owner_id', 'name', 'avatar', 'status', 'presence', 'online', 'last_seen_at', 'idle_after_seconds'}
+    assert set(human_shared) == {'id', 'owner_id', 'name', 'avatar', 'status', 'presence', 'online', 'last_seen_at', 'idle_after_seconds', 'kind', 'acts_for', 'version'}
     assert b.get_agent_profile(s['bob'], public['id'])['instructions'] == 'Private shared instructions marker'
 
 
@@ -413,7 +413,7 @@ def test_schema_three_migration_keeps_claim_identity_cursor_and_effect_deduplica
     actor, human = schema_three_fixture(path)
     b = Board(path)
     with sqlite3.connect(b.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 18
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
         assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
     old = b.get_ticket(actor, 'old-ticket')['ticket']

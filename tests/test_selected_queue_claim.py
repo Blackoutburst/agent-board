@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from board import BoardError
+from test_companion_workflow import running_profile
 from test_coordination import space, new
 from test_coordination_api import browser, rpc
 from test_delegation_families import family, open_family
@@ -35,7 +36,7 @@ def test_exact_selection_never_chooses_higher_priority_work_or_launches_runtime(
     assert board.get_ticket(human,urgent['id'])['ticket']['claimant'] is None
     assert board.get_runtime(human)['executions']==[]
     with board._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==18
+        assert db.execute('PRAGMA user_version').fetchone()[0]==19
         assert db.execute("SELECT COUNT(*) FROM ticket_events WHERE event='ticket_claimed'").fetchone()[0]==1
 
 
@@ -215,6 +216,69 @@ def test_future_companion_actor_is_refused_before_key_lookup_or_any_write(space,
     with pytest.raises(BoardError) as error:select(board,first,ticket)
     assert error.value.status==403
     assert snapshot(board)==before
+
+
+def test_real_bound_companion_is_refused_before_receipt_access_even_without_incoming_marker(space,monkeypatch):
+    board,human,_,_,*_=space
+    companion=running_profile(board,human,'Selected queue companion',[],kind='companion')
+    actor={key:value for key,value in companion['actor'].items() if key!='companion_for'}
+    ticket=new(space)
+    with board._connection() as db:
+        # Queue/autonomy checks would pass: the refusal must be the resolved role.
+        session=db.execute('SELECT autonomous FROM sessions WHERE id=?',(actor['session_id'],)).fetchone()
+        assert session['autonomous']==1
+        assert board._actor(db,actor,'allow_requests')['companion_for']==human['owner_id']
+    def no_receipt(*args,**kwargs):raise AssertionError('Companion reached selected queue receipt access')
+    monkeypatch.setattr(board,'_retry',no_receipt)
+    monkeypatch.setattr(board,'_remember',no_receipt)
+    before=snapshot(board)
+    with pytest.raises(BoardError) as error:select(board,actor,ticket)
+    assert error.value.status==403
+    assert snapshot(board)==before
+    assert board.get_runtime(human)['executions']==[]
+
+
+@pytest.mark.parametrize('stored',['fresh','positive','negative'])
+def test_current_sql_companion_kind_fences_cached_actor_and_prior_selected_receipts(space,monkeypatch,stored):
+    board,human,_,project,first,*_=space
+    ticket=new(space)
+    if stored=='positive':assert select(board,first,ticket)['claimed']
+    elif stored=='negative':
+        board.update_project(human,project['id'],project['version'],automation_enabled=False)
+        assert select(board,first,ticket)['reason']=='no_ready_ticket'
+    assert 'companion_for' not in first
+    with board._tx() as db:
+        profile_id=db.execute('SELECT agent_id FROM sessions WHERE id=?',(first['session_id'],)).fetchone()[0]
+        # Simulate an authoritative role change without an unrelated version fence.
+        # The immutable public profile API cannot perform this transition.
+        db.execute("UPDATE agent_profiles SET kind='companion' WHERE id=?",(profile_id,))
+    with board._connection() as db:
+        assert board._actor(db,first,'allow_requests')['companion_for']==human['owner_id']
+        assert db.execute("SELECT COUNT(*) FROM idempotency WHERE operation='claim_selected_queue_ticket'").fetchone()[0]==(0 if stored=='fresh' else 1)
+    def no_receipt(*args,**kwargs):raise AssertionError('Current SQL companion reached receipt lookup/write')
+    monkeypatch.setattr(board,'_retry',no_receipt)
+    monkeypatch.setattr(board,'_remember',no_receipt)
+    before=snapshot(board)
+    with pytest.raises(BoardError) as error:select(board,first,ticket)
+    assert error.value.status==403
+    # Existing ACKs, negative receipts and any old claim remain for reconciliation.
+    assert snapshot(board)==before
+    assert board.get_runtime(human)['executions']==[]
+
+
+def test_caller_companion_marker_cannot_change_an_ordinary_sql_profiles_selected_queue_role(space):
+    board,human,_,_,first,*_=space
+    actor={**first,'companion_for':human['owner_id'],'acts_for':human['owner_id'],'profile_kind':'companion'}
+    ticket=new(space)
+    claimed=select(board,actor,ticket)
+    assert claimed['claimed'] and not claimed['retried']
+    claimant=claimed['ticket']['claimant']
+    assert claimant['session_id']==first['session_id']
+    assert not set(claimant)&{'companion_for','acts_for','profile_kind'}
+    before=snapshot(board)
+    assert select(board,actor,ticket)=={**claimed,'retried':True}
+    assert snapshot(board)==before
+    assert board.get_runtime(human)['executions']==[]
 
 
 def test_claim_transaction_also_refuses_future_companion_marker_without_changing_manual_claim(space):

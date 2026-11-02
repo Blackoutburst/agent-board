@@ -289,6 +289,8 @@ class ServerInstancesMixin:
             (instance['profile_id'], host['owner_id'])).fetchone()
         if profile is None or profile['status'] != 'active' or profile['version'] != instance['profile_version']:
             return 'configuration_changed'
+        if profile['kind'] == 'companion':
+            return 'authorization_changed'
         if db.execute('SELECT 1 FROM agent_profile_bindings WHERE profile_id=? AND device_id=?',
                 (profile['id'], host['device_id'])).fetchone() is None:
             return 'authorization_changed'

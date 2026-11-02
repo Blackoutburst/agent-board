@@ -167,10 +167,13 @@ def test_real16_migration_keeps_existing_A_projection_and_adds_empty_optional_st
     with b._tx() as db:
         for name in reversed(tuple(SQL)):
             db.execute(('DROP INDEX ' if name.endswith('one_active') else 'DROP TABLE ')+name)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=16')
     before=snapshot(b);reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:5])==before
+    assert snapshot(reopened,exclude=tuple(SQL)[:5])=={**before,
+        'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
     assert reopened.get_server_provisioning_request(h,host['id'],r['request_id'])==r
     with reopened._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==18
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 19
         assert db.execute('SELECT COUNT(*) FROM server_messages_append_statuses').fetchone()[0]==0

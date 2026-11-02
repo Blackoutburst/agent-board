@@ -12,6 +12,7 @@ import time
 
 from profiles import DEFAULT_POLICY,_insert_profile
 from projects import _fail,_json,_text,_version
+from owner_powers import has_owner_power
 
 MANAGEMENT_ACTIONS=('agent.profile.read','agent.profile.create','agent.profile.update','agent.profile.archive')
 CLAIM_RELEASE_ACTION='agent.profile.release_claim'
@@ -90,6 +91,7 @@ class ProfileManagementMixin:
         actor=self._actor(db,actor,'allow_read' if read else 'allow_requests')
         if actor['kind']!='agent':_fail('Use the human agent profile editor',403)
         profile=self._profile_for_actor(db,actor);stored=json.loads(profile['policy'])
+        if profile['kind']=='companion':_fail('Companions use bounded owner profile controls',403)
         effective=self._effective_profile_policy(db,actor,profile);resource=management_resource(actor['owner_id'])
         # The stored explicit grant is essential: legacy wildcard expansion must
         # not turn an owner-level grant into implicit management for old agents.
@@ -112,7 +114,7 @@ class ProfileManagementMixin:
 
     def _managed_target(self,db,actor,manager,ceiling,profile_id):
         row=self._profile_owned(db,actor,profile_id)
-        if row['id']==manager['id'] or row['legacy'] or _is_management(row):
+        if row['kind']=='companion' or row['id']==manager['id'] or row['legacy'] or _is_management(row):
             _fail('Management identities and policies remain human-owned',403)
         self._managed_bounds(db,actor,manager,ceiling,json.loads(row['policy']),json.loads(row['project_ids']))
         return row
@@ -123,6 +125,26 @@ class ProfileManagementMixin:
         # claims from an unrelated/revoked project are returned to this channel.
         return {**{key:row[key] for key in ('id','owner_id','status','version','created_at','updated_at')},
                 **json.loads(row['fields']),'project_ids':json.loads(row['project_ids']),'policy':json.loads(row['policy'])}
+
+    def set_companion_agent_status(self,actor,profile_id,expected_version,status,idempotency_key):
+        """Pause/resume an owned ordinary agent without editing its other fields."""
+        _version(expected_version);_identity(profile_id);_identity(idempotency_key)
+        if status not in ('active','paused'):_fail('Use active or paused for an ordinary agent',400)
+        payload=dict(profile_id=profile_id,expected_version=expected_version,status=status)
+        with self._tx() as db:
+            actor=self._actor(db,actor,'allow_requests')
+            if not has_owner_power(actor,'manage_agents'):_fail('Companion owner profile control is required',403)
+            row=self._profile_owned(db,actor,profile_id)
+            if row['kind']!='agent':_fail('Only an owned ordinary agent can be paused or resumed',403)
+            previous=self._retry(db,actor,'companion_agent_status',idempotency_key,payload)
+            if previous is not None:return json.loads(previous)
+            if row['version']!=expected_version:_fail('Agent profile changed; reload before saving',409)
+            if row['status']=='archived':_fail('Only a human can restore an archived profile',403)
+            self._write_profile(db,profile_id,{'status':status})
+            result=self._profile_public(self._profile_owned(db,actor,profile_id))
+            self._remember(db,actor,'companion_agent_status',idempotency_key,payload,_json(result))
+            self._audit(db,actor,'companion_agent_status_changed',dict(profile_id=profile_id,status=status,version=expected_version+1))
+            return result
 
     def _managed_retry(self,db,actor,manager,ceiling,operation,key,payload):
         _identity(key)

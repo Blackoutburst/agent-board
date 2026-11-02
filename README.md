@@ -8,6 +8,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 
 - GitHub-inspired project/task lists, task details, inline discussions, filters and board view.
 - Durable owner-managed agent profiles with name, avatar, instructions, language, style and model/provider preferences. Explicit device bindings let several sessions and computers use the same profile.
+- One human-created [companion identity](docs/COMPANIONS.md) per owner can dispatch, answer its owner's requests, decide reviews and pause/resume agents; it never claims or performs ticket work.
 - Versioned configuration, duplication without access, pause/archive, project scopes and permissions intersected with the owner’s grants.
 - Task dependencies, cycle detection, explicit readiness, human/agent assignments and exclusive work resources.
 - An atomic work queue with renewable claims, precise session attribution and explicit expired-claim recovery. Opt-in clients may claim an exact selected ordinary Todo ticket with a version/key-bound transaction and the same persistent-profile unfinished-work fence.
@@ -18,7 +19,7 @@ The browser, REST API, and MCP use the same SQLite records. The board coordinate
 - One-time device pairing and a connector for Codex, Claude Code and generic MCP clients. No environment-variable setup or fixed tool allowlist is needed.
 - Markdown renders in project text, task descriptions/criteria/progress/results, conversations and human requests; editors retain the original source.
 - Task files persist with the description, separately from discussion attachments.
-- Durable activity, transactional migration from schemas 1–16 to 17, backups and verification tools.
+- Durable activity, transactional migration from schemas 1–18 to 19, backups and verification tools.
 - Owner execution limits and a private Runtime view for participating executors, with explicit stop requests and cleanup confirmation.
 - Dated, owner-private Codex subscription observations per connection, with explicit unknown/stale states and no automatic permission or model changes.
 
@@ -70,7 +71,7 @@ The tests cover independent sessions, concurrent claim races, stable identity ac
 - Git checkout: `/home/ubuntu/agent-board`
 - Data: `/home/ubuntu/.local/share/collaboration-board`
 - Service: `collaboration-board.service`, loopback port `9140`
-- Source candidate: `2.17.5`; database schema: `17` (check `/health` for the installed version)
+- Companion source candidate: database schema `19` (check `/health` for the installed version; reviewer assigns the release version before deployment)
 
 Schema migration is transactional and preserves existing records. Keep data, attachments, service credentials, pairing tokens and virtual environments outside Git. Pre-2.10 code cannot run against schema 12. Source supporting only schema 12 cannot run against schema 13. Source supporting only schema 13 cannot run against schema 14. Source supporting only schema 14 cannot run against schema 15; never discard refusal tombstones during rollback. Source supporting only schema 15 cannot run against schema 16. Source supporting only schema 16 cannot run against schema 17. Code rollback must retain the schema-17 database, both request barriers, append proofs/statuses and every admission refusal, using compatible source; never restore an older database to roll back this release.
 

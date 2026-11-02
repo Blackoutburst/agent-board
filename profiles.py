@@ -7,6 +7,7 @@ import time
 
 from projects import _fail, _json, _text, _version
 from profile_refresh import ProfileRefreshMixin
+from owner_powers import has_owner_power
 
 TEXT_LIMITS = {'name': 200, 'avatar': 32, 'description': 4000, 'role': 200,
                'instructions': 12000, 'language': 32, 'response_style': 2000,
@@ -17,14 +18,18 @@ DEFAULT_POLICY = {'allow_read': False, 'allow_messages': False, 'allow_requests'
                   'actions': [], 'resources': [], 'autonomy': 'responses'}
 LEGACY_POLICY = {'allow_read': True, 'allow_messages': True, 'allow_requests': True,
                  'actions': ['*'], 'resources': ['*'], 'autonomy': 'queue'}
+COMPANION_POLICY = {'allow_read': True, 'allow_messages': True, 'allow_requests': True,
+                    'actions': [], 'resources': [], 'autonomy': 'requested', 'allow_create_projects': False}
 
 
-def _insert_profile(db, identifier, owner_id, name, *, legacy=False, now=None):
+def _insert_profile(db, identifier, owner_id, name, *, legacy=False, now=None, kind='agent'):
     now = now or time.time()
     values = {**DEFAULT_FIELDS, 'name': name}
     db.execute('''INSERT INTO agent_profiles(id,owner_id,fields,policy,project_ids,status,version,legacy,created_at,updated_at)
         VALUES(?,?,?,?,?,'active',1,?,?,?)''', (identifier, owner_id, _json(values),
         _json(LEGACY_POLICY if legacy else DEFAULT_POLICY), 'null' if legacy else '[]', int(legacy), now, now))
+    if kind == 'companion':
+        db.execute("UPDATE agent_profiles SET kind='companion' WHERE id=?", (identifier,))
     _record_version(db, identifier)
 
 
@@ -33,6 +38,12 @@ def _record_version(db, identifier, *, replace_initial=False):
     snapshot = {**dict(row), **json.loads(row['fields']), 'policy': json.loads(row['policy']),
                 'project_ids': json.loads(row['project_ids']), 'legacy': bool(row['legacy'])}
     snapshot.pop('fields')
+    # Schema19 must not turn an ordinary profile's next cosmetic edit into an
+    # incompatible refresh merely by adding default identity metadata.
+    if snapshot.get('kind', 'agent') == 'agent':
+        snapshot.pop('kind', None)
+    else:
+        snapshot['acts_for'] = row['owner_id']
     verb = 'INSERT OR REPLACE' if replace_initial else 'INSERT'
     db.execute(f'{verb} INTO agent_profile_versions VALUES(?,?,?)', (identifier, row['version'], _json(snapshot)))
 
@@ -87,7 +98,8 @@ class ProfilesMixin(ProfileRefreshMixin):
     def _profile_public(self, row):
         fields = json.loads(row['fields'])
         return {'id': row['id'], 'owner_id': row['owner_id'], 'name': fields['name'],
-                'avatar': fields['avatar'], 'status': row['status']}
+                'avatar': fields['avatar'], 'status': row['status'], 'version': row['version'],
+                'kind': row['kind'], 'acts_for': row['owner_id'] if row['kind'] == 'companion' else None}
 
     def _profile(self, db, row):
         bindings = [dict(item) for item in db.execute('''SELECT b.device_id,d.label AS device_label,b.identity_key,
@@ -102,7 +114,8 @@ class ProfilesMixin(ProfileRefreshMixin):
                 ON s.id=json_extract(t.claimant,'$.session_id') AND s.device_id=json_extract(t.claimant,'$.device_id')
                 WHERE s.agent_id=? AND t.claimant IS NOT NULL AND t.status NOT IN ('done','complete')''', (row['id'],)):
                 active.append({'kind': kind, **dict(item)})
-        return {**dict(row), **json.loads(row['fields']), 'policy': json.loads(row['policy']),
+        return {**dict(row), **json.loads(row['fields']), 'acts_for': row['owner_id'] if row['kind'] == 'companion' else None,
+                'policy': json.loads(row['policy']),
                 'project_ids': json.loads(row['project_ids']), 'legacy': bool(row['legacy']),
                 'bindings': bindings, 'active_work': active,
                 **self._agent_presence(db, row['id'])}
@@ -115,7 +128,8 @@ class ProfilesMixin(ProfileRefreshMixin):
     def _profile_agent_view(self, row):
         # Runtime configuration only. Human connection/claim management can
         # contain work from a scope that was revoked after an earlier run.
-        result = {**dict(row), **json.loads(row['fields']), 'policy': json.loads(row['policy']),
+        result = {**dict(row), **json.loads(row['fields']), 'acts_for': row['owner_id'] if row['kind'] == 'companion' else None,
+                  'policy': json.loads(row['policy']),
                   'project_ids': json.loads(row['project_ids']), 'legacy': bool(row['legacy'])}
         result.pop('fields')
         return result
@@ -186,17 +200,29 @@ class ProfilesMixin(ProfileRefreshMixin):
                 _fail('Agent profile version not found', 404)
             return json.loads(row['snapshot'])
 
-    def create_agent_profile(self, actor, name, idempotency_key='', **fields):
+    def create_agent_profile(self, actor, name, idempotency_key='', kind='agent', **fields):
+        if kind not in ('agent', 'companion'):
+            _fail('Invalid agent profile kind')
         with self._tx() as db:
             actor = self._human(db, actor)
             values = self._profile_values(db, actor, {'name': name, **fields})
-            previous = self._retry(db, actor, 'create_agent_profile', idempotency_key, values)
+            if kind == 'companion':
+                values.setdefault('project_ids', None)
+                values['policy'] = dict(values.get('policy', COMPANION_POLICY))
+                if values['policy'].get('allow_create_projects') is True:
+                    _fail('Companions cannot create projects', 403)
+                values['policy']['allow_create_projects'] = False
+            payload = values | ({'kind': kind} if kind == 'companion' else {})
+            previous = self._retry(db, actor, 'create_agent_profile', idempotency_key, payload)
             if previous:
                 return self._profile_view(db, self._profile_owned(db, actor, previous))
+            if kind == 'companion' and db.execute("SELECT 1 FROM agent_profiles WHERE owner_id=? AND kind='companion'",
+                                                (actor['owner_id'],)).fetchone():
+                _fail('This owner already has a companion; resume its existing identity', 409)
             identifier = secrets.token_hex(16)
-            _insert_profile(db, identifier, actor['owner_id'], values['name'])
+            _insert_profile(db, identifier, actor['owner_id'], values['name'], kind=kind)
             self._write_profile(db, identifier, values, increment=False)
-            self._remember(db, actor, 'create_agent_profile', idempotency_key, values, identifier)
+            self._remember(db, actor, 'create_agent_profile', idempotency_key, payload, identifier)
             self._audit(db, actor, 'agent_profile_created', {'profile_id': identifier})
             return self._profile_view(db, self._profile_owned(db, actor, identifier))
 
@@ -320,7 +346,9 @@ class ProfilesMixin(ProfileRefreshMixin):
         if binding:
             return self._profile_owned(db, actor, binding['profile_id'])
         device = db.execute('SELECT * FROM devices WHERE id=?', (actor['device_id'],)).fetchone()
-        if device['profiles_managed']:
+        if device['profiles_managed'] or db.execute("""SELECT 1 FROM agent_profile_bindings b
+                JOIN agent_profiles p ON p.id=b.profile_id WHERE b.device_id=? AND p.kind='companion'""",
+                (actor['device_id'],)).fetchone():
             _fail('This device identity is not bound to a profile; ask its owner to create an explicit binding', 403)
         identifier = secrets.token_hex(16)
         titles = {'codex': 'Codex', 'claude-code': 'Claude Code', 'agent': 'Agent'}
@@ -344,6 +372,11 @@ class ProfilesMixin(ProfileRefreshMixin):
         session = db.execute('SELECT profile_version FROM sessions WHERE id=?', (actor['session_id'],)).fetchone()
         if session['profile_version'] != profile['version']:
             _fail('Agent profile changed; explicitly register again before continuing', 409)
+        if profile['kind'] == 'companion' and not db.execute("""SELECT 1 FROM agent_profile_bindings b
+                JOIN sessions s ON s.agent_id=b.profile_id AND s.device_id=b.device_id AND s.agent_kind=b.agent_kind
+                WHERE s.id=? AND b.profile_id=? AND b.device_id=?""",
+                (actor['session_id'], profile['id'], actor['device_id'])).fetchone():
+            _fail('Companion profile binding is unavailable', 403)
         policy = json.loads(profile['policy'])
         mapped = 'allow_messages' if permission == 'allow_reply' else permission
         if mapped and (not policy.get(mapped) or (mapped == 'allow_requests' and policy['autonomy'] == 'responses')):
@@ -351,7 +384,7 @@ class ProfilesMixin(ProfileRefreshMixin):
         return profile
 
     def _profile_project_allowed(self, db, actor, project_id):
-        if actor['kind'] == 'human':
+        if actor['kind'] == 'human' or has_owner_power(actor, 'dispatch'):
             return True
         profile = self._profile_for_actor(db, actor)
         if not profile:
@@ -360,7 +393,7 @@ class ProfilesMixin(ProfileRefreshMixin):
         return project_ids is None or project_id in project_ids
 
     def _profile_thread_allowed(self, db, actor, thread_id):
-        if actor['kind'] == 'human':
+        if actor['kind'] == 'human' or has_owner_power(actor, 'dispatch'):
             return True
         profile = self._profile_for_actor(db, actor)
         if not profile:

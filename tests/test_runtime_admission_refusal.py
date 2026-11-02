@@ -61,7 +61,7 @@ def test_true_mcp_sdk_confirms_closed_bound_denial_and_no_execution(browser):
     assert 'execution' not in result and 'cleanup' not in json.dumps(result)
     assert not any(word in json.dumps(result) for word in ('SYNTHETIC_PRIVATE_HUMAN','Bearer','token'))
     with browser[1]._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]== 18
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 19
         denied=db.execute('SELECT * FROM runtime_admission_refusals').fetchall()
         assert len(denied)==1 and json.loads(denied[0]['response'])==result
         assert tuple(db.execute('SELECT * FROM runtime_executions').fetchone())==old
@@ -220,12 +220,14 @@ def test_schema14_upgrade_preserves_all_existing_execution_bytes_and_ids(browser
     occupy(browser);board=browser[1]
     with board._tx() as db:
         remove_provisioning_schema16_tables(db)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('DROP TABLE runtime_admission_refusals');db.execute('PRAGMA user_version=14')
         executions=[tuple(row) for row in db.execute('SELECT * FROM runtime_executions')]
         claims=[tuple(row) for row in db.execute('SELECT * FROM tickets')]
     upgraded=Board(board.data_dir)
     with upgraded._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]== 18
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 19
         assert [tuple(row) for row in db.execute('SELECT * FROM runtime_executions')]==executions
         assert [tuple(row) for row in db.execute('SELECT * FROM tickets')]==claims
         assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0]==0

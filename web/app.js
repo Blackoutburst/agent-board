@@ -224,13 +224,24 @@ function renderThread() {
   const messageId = params.get("message");
   if (messageId) document.getElementById(`message-${messageId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
+function companionOwner(value = {}, profile = false) {
+  const owner = value?.owner_id;
+  return typeof owner === "string" && owner.length > 0 && value.acts_for === owner
+    && (profile ? value.kind === "companion" : value.kind === "agent"
+      && value.profile_kind === "companion" && value.companion_for === owner) ? owner : null;
+}
+function companionBadge(value, profile = false) {
+  return companionOwner(value, profile) ? el("span", { class: "badge companion-badge" }, "COMPANION") : null;
+}
 function authorLabel(author = {}) {
   if (author.kind === "system") return "Board";
   const name = author.display_name || ownerName(author.owner_id);
-  return author.kind === "agent" ? author.agent_name || `${name} · Agent` : name;
+  const label = author.kind === "agent" ? author.agent_name || `${name} · Agent` : name;
+  const owner = companionOwner(author);
+  return owner ? `${label} · for ${ownerName(owner)}` : label;
 }
 function authorMeta(author = {}, createdAt) {
-  return el("div", { class: "message-meta" }, el("strong", {}, authorLabel(author)), el("span", { class: "badge" }, author.kind === "agent" ? "AGENT" : "HUMAN"), author.device_label ? el("span", { class: "muted" }, author.device_label) : null, author.session_label ? el("span", { class: "muted" }, `· ${author.session_label}`) : null, el("time", { class: "message-time", title: date(createdAt) }, date(createdAt)));
+  return el("div", { class: "message-meta" }, el("strong", {}, authorLabel(author)), companionBadge(author) || el("span", { class: "badge" }, author.kind === "agent" ? "AGENT" : "HUMAN"), author.device_label ? el("span", { class: "muted" }, author.device_label) : null, author.session_label ? el("span", { class: "muted" }, `· ${author.session_label}`) : null, el("time", { class: "message-time", title: date(createdAt) }, date(createdAt)));
 }
 function renderMessages() {
   const data = state.threadData;
