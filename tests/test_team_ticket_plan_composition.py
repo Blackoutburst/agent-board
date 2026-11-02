@@ -14,6 +14,7 @@ from blackoutburst_agents.board_reader import BoardReadError
 from blackoutburst_agents.dev_manifest import DevelopmentError, canonical
 from blackoutburst_agents.team_ticket_client import TeamTicketBoardClient
 from blackoutburst_agents.team_ticket_plan import TeamTicketPlanController
+from test_queue_selection import snapshot
 
 
 class AsgiResponse:
@@ -56,7 +57,7 @@ def ordinary_policy(**changes):
 
 
 @pytest.fixture
-def actual_plan(tmp_path):
+def actual_plan(tmp_path,request):
     application=create_app(tmp_path/'data',base_url='http://localhost',filebrowser_url='',
         allow_local_passwords=True,root_path='')
     b=application.state.board;b.ensure_owner('alice','Alice');b.ensure_owner('bob','Bob')
@@ -67,6 +68,8 @@ def actual_plan(tmp_path):
     hidden=b.create_project(human,'Outside Lead scope',['alice'],idempotency_key='hidden')
     lead=b.create_agent_profile(human,'Lead',project_ids=[project['id']],policy=ordinary_policy(autonomy='queue'))
     lead=b.set_agent_profile_management(human,lead['id'],lead['version'],True)
+    if getattr(request,'param',True):
+        lead=b.set_agent_profile_ticket_creation_management(human,lead['id'],lead['version'],True)
     device=b.create_device(human,'Synthetic Lead device',[])
     lead=b.bind_agent_profile(human,lead['id'],lead['version'],device['id'],'lead','codex')
     coder=b.create_agent_profile(human,'Ordinary coder',project_ids=[project['id']],policy=ordinary_policy())
@@ -270,4 +273,22 @@ def test_other_manager_slot_uses_normal_managed_api_refusal_before_any_ticket_cr
         if call['method']=='tools/call' and call['params']['name']=='get_managed_agent_profile']
     assert queries and all(query['profile_id']==other['id'] for query in queries)
     assert not f.wire.delivered and not children(f) and not f.journal.exists()
+    no_execution(f)
+
+
+@pytest.mark.parametrize('actual_plan',[False],indirect=True)
+def test_profile_management_without_separate_creation_grant_refuses_real_sdk_publication_without_effects(actual_plan):
+    f=actual_plan;controller=TeamTicketPlanController(f.client,f.journal);sha=approval(f,controller)
+    # Re-registering the same SDK identity may update presence, never work or grants.
+    durable=lambda:[line for line in snapshot(f.b) if not line.startswith('INSERT INTO "sessions"')]
+    before=durable()
+    with pytest.raises((BoardReadError,DevelopmentError)):
+        controller.apply(f.plan,f.catalog,approved_sha256=sha)
+    assert durable()==before
+    assert not children(f)
+    with f.b._connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM audit WHERE event='ticket_created'").fetchone()[0]==1  # the existing parent only
+        assert db.execute("SELECT COUNT(*) FROM idempotency WHERE operation='create_ticket'").fetchone()[0]==0
+    receipts=f.journal/'receipts.json'
+    assert receipts.is_file() and json.loads(receipts.read_bytes())['tickets']=={}
     no_execution(f)

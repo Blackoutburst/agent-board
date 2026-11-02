@@ -305,7 +305,7 @@ class ProjectsMixin:
             self._project_agent(db, project_id, assignee_agent_id)
             self._check_assignment(db, assignee_owner_id, assignee_agent_id)
             if assignee_agent_id is not None and not has_owner_power(actor, 'dispatch'):
-                _fail("Only an owner or companion can assign a specific agent identity", 403)
+                self._managed_ticket_creation(db, actor, project_id, assignee_owner_id, assignee_agent_id, coordination['resource'])
             payload = {**values, "project_id": project_id, "priority": priority, "assignee_owner_id": assignee_owner_id, **coordination, "depends_on": depends_on or [], "assignee_agent_id": assignee_agent_id}
             previous = self._retry(db, actor, "create_ticket", idempotency_key, payload)
             if previous:

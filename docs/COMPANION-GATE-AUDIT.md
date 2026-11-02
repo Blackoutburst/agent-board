@@ -228,3 +228,26 @@ Every route below retains `Depends(human)` and browser CSRF/origin checks. Compa
 | `POST /api/threads/{thread_id}/attachments` | `upload` at `app.py:1729` |
 
 Total: 77 browser handlers/routes with explicit human dependency. Public login/pairing exchange and static resources are separate transport flows, not companion authority; bearer attachment routes retain actor-session validation.
+
+## Current queue and separately delegated creation
+
+The schema19 integration on Board main069b609 retains the selected-queue claim
+guard immediately after live SQL actor resolution, before receipt lookup or
+write, and the shared manual/queue claim guard before same-claim replay. Added
+regressions use real bound companion profiles and current SQL-kind changes over
+fresh, positive and negative receipts; forged caller markers grant no authority.
+
+Assigned creation has one separately human-granted manager exception,
+`agent.ticket.create_assigned`. It is not bundled with profile management and
+never inferred from a role, wildcard, local SDK approval or successful old retry.
+The human-only ticket-creation-management REST route uses the existing strict
+CAS body, human cookie/Origin/CSRF controls and owner scope. It adds no MCP tool,
+device binding or execution. Enabling requires an ordinary nonlegacy scoped
+manager with explicit profile-read delegation; ordinary workers still get403.
+The creation helper checks stored/effective grants, current project scope and
+exact ordinary resource ceilings, and permits only bounded same-owner ordinary
+workers or the exact authenticated manager self-slot. Other manager profiles and
+companions cannot be assigned through it. Checks precede the creation receipt.
+Clearing base management removes this action; revocation does not activate or
+restore a profile. Human/companion dispatch powers retain their existing scope.
+The new REST route remains human-only and is additional to the baseline table.

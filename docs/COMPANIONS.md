@@ -58,3 +58,22 @@ This source change neither deploys nor creates/pairs a live companion.
 The exhaustive baseline human-gate decisions are in
 [COMPANION-GATE-AUDIT.md](COMPANION-GATE-AUDIT.md). Browser human authentication and
 CSRF routes stay human-only; the bounded companion operations use agent MCP.
+
+## Separately delegated assigned-ticket creation
+
+Ordinary workers still cannot create tickets assigned to a specific profile.
+A human can separately enable `agent.ticket.create_assigned` for an explicit,
+scoped Management/Lead profile in its editor. Profile management, a role label,
+legacy wildcard or an existing SDK plan approval does not grant this action.
+It requires the exact action and owner management resource in both stored and
+effective policy, plus current profile-read delegation. Existing Leads receive
+no automatic grant.
+
+The manager may create only same-owner assigned work in its current projects,
+with an exact nonempty ordinary resource already allowed to both manager and
+destination. Targets are bounded ordinary managed workers, or the exact current
+manager itself; other managers, companions, legacy and inactive profiles are
+refused. A self-slot transfers no profile-management grants. The permission
+changes no reassign/release, identity, pairing, policy, Runtime or deployment
+rights. Current authorization is checked before any creation receipt replay.
+Human/companion owner dispatch keeps its existing scope.

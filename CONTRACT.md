@@ -13,6 +13,17 @@ pairing, account or device-management powers. The two added MCP operations are
 `resolve_human_request` and `set_companion_agent_status`; ordinary agent behavior
 and browser human authentication remain enforced.
 
+Specific-agent ticket creation is separately delegable with the explicit
+`agent.ticket.create_assigned` capability. Human-only
+`PUT /api/agent-profiles/{profile_id}/ticket-creation-management` accepts the
+strict `expected_version`/`enabled` body. Profile management alone does not grant
+it. The scoped Lead must retain stored/effective action, profile-read and exact
+owner management resource grants. Only bounded same-owner ordinary workers or
+the exact authenticated self-slot are permitted, with a nonempty exact task
+resource in both manager and destination ceilings. Other managers, companions,
+legacy/inactive/out-of-scope destinations are refused before receipt replay.
+No reassign, release, pairing, policy or execution rights are added.
+
 ## Inactive ticket resource routing (2.17.6, schema 17)
 
 `retarget_managed_ticket_resource` lets an explicitly authorized Lead change the

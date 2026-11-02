@@ -17,6 +17,7 @@ from owner_powers import has_owner_power
 MANAGEMENT_ACTIONS=('agent.profile.read','agent.profile.create','agent.profile.update','agent.profile.archive')
 CLAIM_RELEASE_ACTION='agent.profile.release_claim'
 TICKET_RESOURCE_ACTION='agent.ticket.retarget_resource'
+TICKET_CREATION_ACTION='agent.ticket.create_assigned'
 MANAGEMENT_PREFIX='agent.profile.'
 TICKET_MANAGEMENT_PREFIX='agent.ticket.'
 RESOURCE_PREFIX='agent-profiles:'
@@ -118,6 +119,41 @@ class ProfileManagementMixin:
             _fail('Management identities and policies remain human-owned',403)
         self._managed_bounds(db,actor,manager,ceiling,json.loads(row['policy']),json.loads(row['project_ids']))
         return row
+
+    def _managed_ticket_creation(self,db,actor,project_id,assignee_owner_id,assignee_agent_id,resource):
+        """Authorize only creation-time assignment; never reuse a receipt as a grant."""
+        actor,manager,ceiling=self._profile_manager(db,actor,TICKET_CREATION_ACTION)
+        stored=json.loads(manager['policy']);management=management_resource(actor['owner_id'])
+        if (ceiling.get('allow_read') is not True
+                or any('agent.profile.read' not in value['actions'] or management not in value['resources']
+                    for value in (stored,ceiling))):
+            _fail('Assigned ticket creation needs current explicit profile-read delegation',403)
+        if assignee_owner_id not in (None,actor['owner_id']):
+            _fail('Assigned ticket creation is limited to the delegated owner',403)
+        self._project_member(db,actor,project_id)
+        if project_id not in json.loads(manager['project_ids']):
+            _fail('Assigned ticket creation is outside delegated project scope',403)
+        resource=_ticket_resource(resource,'resource')
+        if resource not in stored['resources'] or resource not in ceiling['resources']:
+            _fail('Assigned ticket creation is outside delegated resource scope',403)
+        if assignee_agent_id==manager['id']:
+            # The exact authenticated manager may select itself. Its management
+            # grants remain human-owned; no profile mutation or grant transfer occurs.
+            target=manager;policy=stored
+            if (policy.get('allow_create_projects') is True
+                    or any(policy[target_key] and not ceiling[source_key] for target_key,source_key in
+                        (('allow_read','allow_read'),('allow_messages','allow_reply'),('allow_requests','allow_requests')))
+                    or AUTONOMY[policy['autonomy']]>AUTONOMY[ceiling['autonomy']]
+                    or any(value not in ceiling[name] for name in ('actions','resources') for value in policy[name])):
+                _fail('Assigned self work exceeds the management ceiling',403)
+        else:
+            target=self._managed_target(db,actor,manager,ceiling,assignee_agent_id)
+            policy=json.loads(target['policy'])
+        if (target['kind']!='agent' or target['legacy'] or target['status']!='active'
+                or project_id not in json.loads(target['project_ids'])
+                or not policy['allow_read'] or not policy['allow_requests'] or policy['autonomy']=='responses'
+                or resource not in policy['resources']):
+            _fail('Assigned ticket destination is outside delegated worker scope',403)
 
     @staticmethod
     def _managed_view(row):
@@ -430,6 +466,35 @@ class ProfileManagementMixin:
             self._write_profile(db,profile_id,{'policy':policy})
             self._audit(db,actor,'agent_ticket_resource_management_granted' if enabled else 'agent_ticket_resource_management_revoked',
                 dict(profile_id=profile_id,version=expected_version+1,action=TICKET_RESOURCE_ACTION,resource=resource))
+            return self._profile_view(db,self._profile_owned(db,actor,profile_id))
+
+    def set_agent_profile_ticket_creation_management(self,actor,profile_id,expected_version,enabled):
+        """Human-only opt-in; profile management never implies ticket assignment."""
+        _version(expected_version)
+        if type(enabled) is not bool:_fail('enabled must be a boolean')
+        with self._tx() as db:
+            actor=self._human(db,actor);row=self._profile_owned(db,actor,profile_id)
+            if row['version']!=expected_version:_fail('Agent profile changed; reload before granting assigned ticket creation',409)
+            if row['kind']!='agent' or row['legacy'] or (enabled and row['status']=='archived'):
+                _fail('Assigned ticket creation needs an ordinary scoped agent profile',403)
+            policy=json.loads(row['policy']);owner=json.loads(self._owner(db,actor['owner_id'])['policy'])
+            resource=management_resource(actor['owner_id'])
+            if enabled:
+                if (json.loads(row['project_ids']) is None
+                        or any(owner.get(key) is not True for key in ('enabled','allow_read','allow_requests'))
+                        or not policy['allow_read'] or not policy['allow_requests'] or policy['autonomy']=='responses'
+                        or any('agent.profile.read' not in value['actions'] or resource not in value['resources']
+                            for value in (policy,owner))):
+                    _fail('Assigned ticket creation needs an explicit scoped profile-management grant',403)
+                policy['actions']=list(dict.fromkeys([*policy['actions'],TICKET_CREATION_ACTION]))
+                owner['actions']=list(dict.fromkeys([*owner['actions'],TICKET_CREATION_ACTION]))
+                if len(policy['actions'])>100 or len(owner['actions'])>100:_fail('Management grants exceed the action/resource limit')
+                owner.update(granted_by=actor['owner_id'],granted_at=time.time())
+                db.execute('UPDATE owners SET policy=? WHERE id=?',(_json(owner),actor['owner_id']))
+            else:policy['actions']=[value for value in policy['actions'] if value!=TICKET_CREATION_ACTION]
+            self._write_profile(db,profile_id,{'policy':policy})
+            self._audit(db,actor,'agent_ticket_creation_management_granted' if enabled else 'agent_ticket_creation_management_revoked',
+                dict(profile_id=profile_id,version=expected_version+1,action=TICKET_CREATION_ACTION,resource=resource))
             return self._profile_view(db,self._profile_owned(db,actor,profile_id))
 
     def set_agent_profile_management(self,actor,profile_id,expected_version,enabled):

@@ -864,7 +864,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                             priority: TicketPriority = "normal", assignee_owner_id: str | None = None,
                             depends_on: list[str] | None = None, labels: list[str] | None = None,
                             required_skills: list[str] | None = None, resource: str = "", assignee_agent_id: str | None = None, view: Literal["compact", "full"] = "compact") -> dict:
-        """Create an explicitly requested ticket and its discussion for the project's fixed participants. Requires work-request permission. Assignment does not start work or grant deployment/shell authorization; preserve a stable retry key."""
+        """Create an explicitly requested ticket and its discussion for the project's fixed participants. Requires work-request permission. Specific-agent assignment requires a human/companion, or the separate explicit human-granted agent.ticket.create_assigned permission for a scoped delegated manager. Managers can target only their bounded ordinary workers or exact self, with an explicit authorized resource; profile management alone grants no assignment right. Current permissions are checked before retry receipts. Assignment does not start work or grant deployment/shell authorization; preserve a stable retry key."""
         values = validated(NewTicket, dict(title=title, idempotency_key=idempotency_key,
             description=description, acceptance_criteria=acceptance_criteria,
             priority=priority, assignee_owner_id=assignee_owner_id, depends_on=depends_on or [],
@@ -1513,6 +1513,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.put('/api/agent-profiles/{profile_id}/ticket-resource-management')
     async def grant_profile_ticket_resource_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
         return board.set_agent_profile_ticket_resource_management(actor,profile_id,**values.model_dump())
+
+    @app.put('/api/agent-profiles/{profile_id}/ticket-creation-management')
+    async def grant_profile_ticket_creation_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
+        return board.set_agent_profile_ticket_creation_management(actor,profile_id,**values.model_dump())
 
     @app.get('/api/agent-profiles/{profile_id}/versions/{version}')
     async def agent_profile_version(profile_id: str, version: int, actor=Depends(human)):
