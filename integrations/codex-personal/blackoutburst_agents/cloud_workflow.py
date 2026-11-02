@@ -4,12 +4,12 @@ This is local operator configuration, never a queue listener or model-selected
 authority. The existing concrete components own each mutation protocol.
 """
 from copy import deepcopy
-import difflib
 from pathlib import Path
 import threading
 import time
 
 from .development_pool_delivery import DevelopmentPoolResultDelivery
+from .delivery_review_material import render_review_material
 from .development_pool_selection import file_document
 from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import (DevelopmentError, RepositoryFiles, canonical,
@@ -160,22 +160,37 @@ class CloudLinuxWorkflow:
         return changes
 
     def _material(self,source,operation_id,changes):
-        """Bounded exact diff from sealed source, inspected again by review guard."""
+        """Project only verified sealed bytes and test facts into bounded review data."""
         receipt=source.status(operation_id)
-        record=decode(file_document(source.paths['deliveries']/operation_id/'delivery.json',8*1024*1024)[0])
-        if record['seal']['delivery_sha']!=receipt['delivery_sha']:fail()
-        entries={row['path']:row for row in record['snapshot']['files']}
-        base=source.workspaces.grant['base_commit'];chunks=['Delivery '+receipt['delivery_sha']+'\nSnapshot '+receipt['snapshot_sha256']+'\n']
-        for change in changes:
+        record_path=source.paths['deliveries']/operation_id/'delivery.json'
+        record_raw,record_pin=file_document(record_path,8*1024*1024)
+        record=decode(record_raw)
+        snapshot=record['snapshot'];seal=record['seal'];base=source.workspaces.grant['base_commit']
+        if (record['phase']!='sealed' or seal['delivery_sha']!=receipt['delivery_sha']
+                or seal['tree_sha']!=receipt['tree_sha'] or seal['base_commit']!=base
+                or seal['snapshot_sha256']!=receipt['snapshot_sha256']
+                or digest(canonical(snapshot))!=receipt['snapshot_sha256']
+                or sorted(changes,key=lambda row:row['path'])!=snapshot['request']['changes']):fail()
+        entries={row['path']:row for row in snapshot['files']};files=[]
+        for change in snapshot['request']['changes']:
             path=change['path'];row=entries[path]
             after=file_document(source.paths['deliveries']/operation_id/row['payload'],MAX_CHECKOUT_FILE_BYTES)[0]
             before=source.workspaces._git(['show',base+':'+path],cwd=source.workspaces.repository)
-            if digest(after)!=change['sha256'] or row['mode']!=change['mode']:fail()
-            chunks.append(''.join(difflib.unified_diff(check_content(before).splitlines(keepends=True),
-                check_content(after).splitlines(keepends=True),fromfile='a/'+path,tofile='b/'+path)))
-        material='\n'.join(chunks)
-        if len(material.encode())>24000:fail('cloud_workflow_review_material_too_large')
+            if (digest(after)!=change['sha256'] or row['sha256']!=change['sha256']
+                    or row['bytes']!=len(after) or row['mode']!=change['mode']):fail()
+            files.append(dict(path=path,mode=row['mode'],before=before,after=after))
+        try:
+            material=render_review_material(operation_id=operation_id,base_commit=base,
+                delivery_sha=receipt['delivery_sha'],tree_sha=receipt['tree_sha'],
+                snapshot_sha256=receipt['snapshot_sha256'],test_evidence=seal['test_evidence'],
+                files=files,pull_request=receipt['pull_request'])
+        except DevelopmentError as error:
+            if error.code=='delivery_review_material_too_large':fail('cloud_workflow_review_material_too_large')
+            raise
         if source.status(operation_id)!=receipt:fail()
+        # Bind the projected bytes to the same record checked by the source.
+        # A transient forged read restored before status must not enter a prompt.
+        if file_document(record_path,8*1024*1024)!=(record_raw,record_pin):fail()
         return material
 
     def verify_completed(self,batch_directory,batch,result,*,tools,cli_version):

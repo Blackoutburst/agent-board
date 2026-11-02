@@ -1,5 +1,24 @@
 # Operations and release procedure
 
+Current source is Board 2.17.6/schema 17 with adapter 0.45.6.
+
+The hosted board's scoped Lead can retarget inactive tickets between explicitly
+authorized resources after its owner enables the separate permission. PR #83
+was deployed with a private server-side backup; the new grant and ticket #61
+retarget were verified through the normal MCP identity.
+
+Adapter 0.45.6 adds bounded review material with complete selected file pairs
+when they fit, explicit omissions otherwise, and metadata from the final
+controller-verified tests. Verifier source, output and credentials are excluded.
+Old v1 test seals retain their original meaning. This source change requires a
+new selected pilot; installation does not rerun an old generation or opinion.
+
+The 2 November 0.45.5 pilot #65 completed two author generations, published
+PR #82 and a distinct review opinion with clean selected-operation completion.
+The review was `limited` because it lacked full files and detailed test facts;
+that gap is tracked in #61. This does not prove actual quota exhaustion,
+multi-job parallelism or the general management hierarchy.
+
 ## Board 2.17.5
 
 Adds owner-only device renaming (Settings → Connected devices) and removal of a
@@ -8,7 +27,7 @@ single profile connection (Agents → Profile → Connections). Schema is unchan
 `app.py` instead of a hard-coded value. The hosted board was released from the
 `release/2.17.5` branch (2.17.4 plus these changes), not from `main`.
 
-Current source is Board 2.17.5/schema 17 with adapter 0.45.3. Standalone Development
+The earlier 2.17.5 source used adapter 0.45.3. Standalone Development
 authorization uses the bounded `get_development_ticket_frame` read; the native
 1.5-second control window and SOURCE checks are unchanged. See
 [DEVELOPMENT-TICKET-FRAME.md](DEVELOPMENT-TICKET-FRAME.md) and the

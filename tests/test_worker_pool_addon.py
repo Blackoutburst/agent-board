@@ -109,6 +109,33 @@ def test_public_git_preparation_and_isolated_standalone_plan(tmp_path):
     assert plan['execution_qualified'] is False
 
 
+def test_review_material_bundle_upgrade_preserves_old_inventory_and_requires_new_module(bundle):
+    directory,value,_=bundle
+    value['adapter_version']='0.45.5'
+    for module in p.required_sdk_modules('0.45.5'):
+        name='source/blackoutburst_agents/'+module+'.py'
+        if name not in value['files']:
+            raw=b'# synthetic public module\n'
+            (directory/name).write_bytes(raw)
+            value['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    for name in ('continuation.service.in','continuation.timer.in'):
+        raw=Path('deploy/worker_pool',name).read_bytes()
+        (directory/name).write_bytes(raw)
+        value['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    assert p.load_bundle(directory)==value
+    value['adapter_version']='0.45.6'
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    with pytest.raises(p.PackageError,match='pool_inventory_invalid'):
+        p.load_bundle(directory)
+    name='source/blackoutburst_agents/delivery_review_material.py'
+    raw=b'# synthetic review material projection\n'
+    (directory/name).write_bytes(raw)
+    value['files'][name]={'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
+    (directory/'manifest.json').write_bytes(p.encoded(value))
+    assert p.load_bundle(directory)==value
+
+
 @pytest.mark.parametrize('change',['unknown_tool','missing_gh','wrong_hash','symlink','hardlink','extra','bad_limits'])
 def test_public_bundle_fraud_refuses_before_install(bundle,change,tmp_path):
     directory,value,_=bundle

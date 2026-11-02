@@ -1,11 +1,19 @@
-# Reprise du travail par cycles — adaptateur 0.45.5
+# Reprise du travail par cycles — adaptateur 0.45.6
+
+Le 2 novembre, le pilote 0.45.5 #65 a confirmé deux générations auteur, la PR
+#82 et un avis distinct publié, avec sortie propre des opérations sélectionnées.
+Cet avis reste `limited` : les fichiers complets et les métadonnées détaillées
+des tests manquaient au reviewer. La source 0.45.6 complète ce matériau borné
+et conserve les seals historiques ; sa recette réelle exige un nouvel essai.
+Ce résultat ne valide pas une panne de quota réelle, le parallélisme #51 ou
+la hiérarchie #52.
 
 Le ticket #60 ajoute une tâche logique durable, séparée des générations de
 travail. La tâche n'a aucun plafond de cycles ou de durée totale. Chaque
 génération garde les plafonds approuvés du planificateur, du broker, des tests
 et de l'unité serveur. La source 0.45 compose les frontières de cycle,
 l'indisponibilité fournisseur, l'agrégat final, la revue distincte et le service
-borné. Elle n'a pas encore été validée par un parcours réel sur le serveur.
+borné. Le récit ci-dessous conserve les étapes et refus des anciens essais.
 Le pilote fini 0.44.2 a réussi avec nettoyage confirmé le 29 octobre 2026 et sa
 PR #74 a été fusionnée. Le premier pilote de continuation #62 a confirmé sa
 lecture et son patch, puis s’est arrêté au contrôle du résultat du test Linux

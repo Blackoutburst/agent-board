@@ -63,7 +63,9 @@ class DevelopmentDeliveryTests(unittest.TestCase):
             manifest=decode(private.read('manifest.json',128*1024));broker=decode(private.read('state.json',2*1024*1024))
             planner=decode(private.read('planner.json',2*1024*1024))
         plan=dict(schema='blackoutburst-linux-execution-plan-v1',root=str(self.root),root_identity=manifest['root_identity'],
-            sources={},environment={'synthetic_document_fixture':True},bootstrap_sha256=digest(b'synthetic-bootstrap'))
+            sources={},environment={'synthetic_document_fixture':True},bootstrap_sha256=digest(b'synthetic-bootstrap'),
+            input_plan={'scripts':{'unit':dict(sha256=digest(b'synthetic-script'),
+                timeout_seconds=manifest['tests'][0]['timeout_seconds'],max_output_bytes=manifest['tests'][0]['max_output_bytes'])}})
         plan_hash=digest(canonical(plan));backend_id=linux_execution_backend_id(plan_hash)
         manifest['tests'][0]['backend_id']=backend_id;manifest_hash=digest(canonical(manifest))
         config.update(execution_profile=KIND,linux_execution_plan_sha256=plan_hash,manifest_hash=manifest_hash)

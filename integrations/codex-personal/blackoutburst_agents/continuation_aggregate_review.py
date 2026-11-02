@@ -5,7 +5,6 @@ have finished. A pending registry is uncertainty, never permission to retry work
 """
 from contextlib import ExitStack
 from copy import deepcopy
-import difflib
 import math
 import os
 from pathlib import Path
@@ -15,9 +14,10 @@ import time
 
 from .continuation_pool_configuration import load_continuation
 from .development_aggregate_review_source import PublishedAggregateReviewSource
+from .delivery_review_material import render_review_material
 from .development_pool_selection import file_document
 from .dev_journal import PrivateDirectory,decode
-from .dev_manifest import DevelopmentError,canonical,digest,check_content
+from .dev_manifest import DevelopmentError,canonical,digest
 from .dev_planner import _directory_pin,_reasoning_configuration
 from .git_workspace import MAX_CHECKOUT_FILE_BYTES
 from .git_publication import REPOSITORY,HOST
@@ -122,17 +122,32 @@ class ContinuationAggregateReviewer:
 
     def _material(self,receipt):
         source=self.source;record=source.frame['delivery'];snapshot=source.frame['capture']
-        require(record['phase']=='sealed' and record['seal']['delivery_sha']==receipt['delivery_sha'])
-        entries={row['path']:row for row in snapshot['files']}
-        chunks=['Delivery '+receipt['delivery_sha']+'\nSnapshot '+receipt['snapshot_sha256']+'\n']
+        require(source.status(source.operation_id)==receipt)
+        seal=record['seal'];base=source.grant['base_commit']
+        require(record['phase']=='sealed' and seal['delivery_sha']==receipt['delivery_sha']
+            and seal['tree_sha']==receipt['tree_sha'] and seal['base_commit']==base
+            and receipt['original_public_base']==base and record['snapshot']==snapshot
+            and seal['snapshot_sha256']==receipt['snapshot_sha256']
+            and digest(canonical(snapshot))==receipt['snapshot_sha256']
+            and seal['test_evidence']==source.frame['evidence']
+            and digest(canonical(seal['test_evidence']))==receipt['test_evidence_sha256'])
+        entries={row['path']:row for row in snapshot['files']};files=[]
         for change in snapshot['request']['changes']:
             row=entries[change['path']]
             after=file_document(source.paths['deliveries']/source.operation_id/row['payload'],MAX_CHECKOUT_FILE_BYTES)[0]
-            before=source.workspaces._git(['show',source.grant['base_commit']+':'+change['path']],cwd=source.workspaces.repository)
-            require(digest(after)==change['sha256'] and row['mode']==change['mode'])
-            chunks.append(''.join(difflib.unified_diff(check_content(before).splitlines(keepends=True),
-                check_content(after).splitlines(keepends=True),fromfile='a/'+change['path'],tofile='b/'+change['path'])))
-        material='\n'.join(chunks);require(len(material.encode())<=24000,'continuation_review_material_too_large')
+            before=source.workspaces._git(['show',base+':'+change['path']],cwd=source.workspaces.repository)
+            require(digest(after)==change['sha256'] and row['sha256']==change['sha256']
+                and row['bytes']==len(after) and row['mode']==change['mode'])
+            files.append(dict(path=change['path'],mode=row['mode'],before=before,after=after))
+        try:
+            material=render_review_material(operation_id=source.operation_id,base_commit=base,
+                delivery_sha=receipt['delivery_sha'],tree_sha=receipt['tree_sha'],
+                snapshot_sha256=receipt['snapshot_sha256'],test_evidence=seal['test_evidence'],
+                files=files,pull_request=receipt['pull_request'])
+        except DevelopmentError as error:
+            if error.code=='delivery_review_material_too_large':
+                raise DevelopmentError('continuation_review_material_too_large') from None
+            raise
         require(source.status(source.operation_id)==receipt)
         return material
 
