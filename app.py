@@ -880,6 +880,18 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
                                                       idempotency_key,reason,recovery_evidence),view)
 
     @mcp.tool()
+    async def retarget_managed_ticket_resource(session_id: RuntimeOpaque, ticket_id: RuntimeOpaque,
+                                                expected_version: Version,
+                                                expected_resource: Annotated[str, Field(strict=True, max_length=200)],
+                                                new_resource: Annotated[str, Field(strict=True, min_length=1, max_length=200)],
+                                                idempotency_key: RuntimeOpaque,
+                                                reason: Annotated[str, Field(strict=True, min_length=1, max_length=20000)],
+                                                view: Literal['compact','full'] = 'compact') -> dict:
+        """Retarget an inactive ticket to an explicitly authorized workspace resource. Requires the separate human-delegated agent.ticket.retarget_resource action and owner management resource in stored and effective policy, exact ticket version/current resource, reason and a stable retry key. Refuses active or uncertain claims, Runtime and delegation work, human waits, and targets outside the Lead's owner/project/resource scope. Preserves ticket history and never grants resource access, stops work or starts execution. An exact retry succeeds only while the resulting ticket and scope remain unchanged; reread any conflict."""
+        return _view(board.retarget_managed_ticket_resource(session_actor(session_id),ticket_id,expected_version,
+                                                            expected_resource,new_resource,idempotency_key,reason),view)
+
+    @mcp.tool()
     async def register_agent(session_id: str, label: str, agent_kind: str, identity_key: str = "default",
                              name: str = "", skills: list[str] | None = None, autonomous: bool = False, view: Literal["compact", "full"] = "compact") -> dict:
         """Register this chat under a persistent installation identity. Keep agent_kind/identity_key stable across chats (codex and claude-code are different agents); use a unique session_id for each chat. name is used only when creating the identity. autonomous=true declares human-authorized worker participation; it grants no shell access."""
@@ -1249,7 +1261,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.17.5", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal"]}
+        return {"status": "ok", "version": "2.17.6", "schema_version": 17, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal", "managed_ticket_resource_routing"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):
@@ -1447,6 +1459,10 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @app.put('/api/agent-profiles/{profile_id}/claim-management')
     async def grant_profile_claim_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
         return board.set_agent_profile_claim_management(actor,profile_id,**values.model_dump())
+
+    @app.put('/api/agent-profiles/{profile_id}/ticket-resource-management')
+    async def grant_profile_ticket_resource_management(profile_id: str, values: ProfileManagementGrant, actor=Depends(human)):
+        return board.set_agent_profile_ticket_resource_management(actor,profile_id,**values.model_dump())
 
     @app.get('/api/agent-profiles/{profile_id}/versions/{version}')
     async def agent_profile_version(profile_id: str, version: int, actor=Depends(human)):

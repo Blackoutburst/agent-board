@@ -47,6 +47,14 @@ to this profile and the account ceiling; existing Leads receive nothing
 automatically. Clearing the base Management checkbox also removes this grant.
 An agent cannot use a profile create/update operation to delegate it onwards.
 
+Inactive-ticket resource routing has its own optional human grant, also disabled
+by default. In the same editor, enable **Rattacher les tickets inactifs aux
+espaces autorisés**. The human-only endpoint
+`PUT /api/agent-profiles/{profile_id}/ticket-resource-management` accepts the
+same `expected_version`/`enabled` body. It grants only
+`agent.ticket.retarget_resource` to the selected profile and account ceiling.
+Clearing base Management removes this permission from the profile as well.
+
 ## MCP tools
 
 All calls require the registered `session_id`; the server derives the owner,
@@ -62,6 +70,7 @@ Claim release returns the normal compact ticket view unless `view=full` is chose
 | `update_managed_agent_profile` | `profile_id`, integer `expected_version`, `idempotency_key`, `changes` JSON object |
 | `archive_managed_agent_profile` | `profile_id`, integer `expected_version`, `idempotency_key` |
 | `release_managed_agent_claim` | `ticket_id`, integer `expected_version`, `idempotency_key`, nonempty `reason` and `recovery_evidence` |
+| `retarget_managed_ticket_resource` | `ticket_id`, integer `expected_version`, `expected_resource`, `new_resource`, `idempotency_key`, nonempty `reason` |
 
 Creation produces an **unbound ordinary profile**. Text, project scope, preferences,
 permission switches and literal actions/resources use the existing profile
@@ -111,6 +120,34 @@ It records the manager, source session/profile version, reason and evidence in
 the audit. After a lost response, retry the exact key and payload: it returns the
 current permitted ticket without clearing any newer claim. Read again before
 requesting a different effect.
+
+## Inactive ticket resource routing
+
+`retarget_managed_ticket_resource` requires current read/work permissions,
+`agent.ticket.retarget_resource` explicitly stored and effective, and the exact
+owner management resource. The ticket must belong to the same owner and a
+followed project. Its assignee must be unset, the Lead itself, or an ordinary
+profile inside the Lead's delegated bounds. Both the original nonempty resource
+and destination must already be authorized for the Lead and any managed
+assignee. Reserved management, Runtime and credential resources cannot be used
+as workspaces. Resource names are exact strings of at most 200 characters.
+
+The tool refuses completed tickets, archived projects, delegation-family
+tickets, any claim or retained lease, open human requests, and any unfinished or
+uncertain Runtime cleanup on this ticket. An expired claim must first use its
+normal recovery path. The operation changes only resource/version/time plus
+audit and retry records; it keeps assignment, status, dependencies, questions,
+results and evidence intact. It never stops or resumes a process, clears an old
+family's fence, claims the ticket, or moves files.
+
+An occupied destination can be selected for future work, but the normal claim
+still refuses until that resource is free. Thus a Lead can move an inactive
+ordinary ticket away from an old locked workspace without releasing that lock.
+The caller must supply the exact `expected_version` and `expected_resource`, a
+different nonempty `new_resource`, a reason and a stable retry key. Retrying the
+same key rechecks current grants and requires the exact resulting ticket version,
+destination and unchanged ticket/profile/project context. A later edit or claim
+conflicts; a saved result never authorizes another move or an execution.
 
 ## Archive and cleanup
 
