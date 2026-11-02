@@ -37,7 +37,9 @@ def required_sdk_modules(version):
         tuple(int(part) for part in version.split('.')) >= (0,35,0) else ()) + (
         CONTINUATION_SDK_MODULES if continuation_supported(version) else ()) + (
         ('delivery_review_material',) if
-        tuple(int(part) for part in version.split('.')) >= (0,45,6) else ())
+        tuple(int(part) for part in version.split('.')) >= (0,45,6) else ()) + (
+        ('team_ticket_cli','team_ticket_client','team_ticket_plan') if
+        tuple(int(part) for part in version.split('.')) >= (0,46,0) else ())
 
 
 class PackageError(Exception):

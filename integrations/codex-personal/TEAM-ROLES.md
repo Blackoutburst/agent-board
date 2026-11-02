@@ -1,5 +1,10 @@
 # Private manager and writer Pool roles
 
+The separate [team ticket projection](TEAM-TICKETS.md) can now publish an
+explicitly approved plan as ordinary assigned tickets and dependencies through
+the existing Lead connection. It does not start these role adapters or schedule
+their execution.
+
 `TeamRolePoolDriver` adapts an explicitly selected manager or writer ticket to
 the existing `WorkerPool`. Each role has its own driver, profile, connection and
 session. It uses real `WorkJournal`, `RunStore`, `RuntimeJournal`, Runtime
