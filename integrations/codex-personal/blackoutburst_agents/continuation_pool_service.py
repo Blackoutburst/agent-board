@@ -493,8 +493,24 @@ TARGET_FAILURE_CODES=frozenset({
     'work_locked', 'work_not_found', 'worker_not_found', 'worker_not_resolved', 'worker_not_successful',
     'worker_proof_mismatch', 'worker_proof_required', 'workspace_identity_changed',
     'workspace_not_exclusive', 'write_set',
+    'development_queue_admission_invalid', 'development_queue_admission_pending',
+    'development_queue_approval_changed', 'development_queue_arguments_invalid',
+    'development_queue_batch_changed', 'development_queue_busy',
+    'development_queue_candidate_changed', 'development_queue_candidates_invalid',
+    'development_queue_claim_required', 'development_queue_connection_changed',
+    'development_queue_intent_conflict', 'development_queue_invalid',
+    'development_queue_project_changed', 'development_queue_receipt_changed',
+    'development_queue_registration_required', 'development_queue_root_changed',
+    'development_queue_tick_busy', 'development_queue_tick_changed', 'development_queue_tick_invalid',
+    'development_queue_verifier_changed', 'development_queue_workflow_invalid',
+    'team_ticket_approval_changed', 'team_ticket_creation_unconfirmed',
+    'team_ticket_document_changed', 'team_ticket_document_invalid', 'team_ticket_document_unavailable',
+    'team_ticket_journal_busy', 'team_ticket_journal_changed', 'team_ticket_journal_conflict',
+    'team_ticket_journal_required', 'team_ticket_lead_unavailable', 'team_ticket_parent_changed',
+    'team_ticket_plan_cycle', 'team_ticket_plan_invalid', 'team_ticket_profile_changed',
+    'team_ticket_project_changed', 'team_ticket_receipt_changed', 'team_ticket_registration_required',
 })|FAILURE_NOTICE_CODES
-TARGET_FAILURE_STAGES=frozenset({'unknown','target_entry','target_binding','cursor_read',
+TARGET_FAILURE_STAGES=frozenset({'unknown','queue_tick','target_entry','target_binding','cursor_read',
     'historical_review','previous_generation_open','previous_state_check','provider_availability',
     'next_generation_intent','next_generation_create','initial_preparation','previous_retirement',
     'next_preparation','worker_open','task_open','cycle_run','provider_wake','cycle_retirement',
@@ -855,7 +871,14 @@ class ContinuationPoolService:
         require(self.pid==os.getpid() and self.thread is threading.current_thread())
         require(should_stop is None or callable(should_stop))
         if self.loaded['configuration']['schema']==QUEUE_CONTINUATION_SCHEMA:
-            return self._queue_once(should_stop)
+            try:return self._queue_once(should_stop)
+            except Exception as error:
+                # The pass may already have effects. Correlation is unknown;
+                # neither cleanup nor absence of execution can be inferred.
+                observation=_TargetObservation(None);observation.stage='queue_tick'
+                return {'schema':'continuation-pool-pass-v1','status':'needs_you','tasks':[],
+                    'activated':True,'pass_complete_is_project_completion':False,
+                    'failure':_target_failure(error,observation)}
         require(self._mutex.acquire(blocking=False),'continuation_pool_owner_busy')
         try:
             require(self._retained_lease is None,'continuation_pool_cleanup_unknown')

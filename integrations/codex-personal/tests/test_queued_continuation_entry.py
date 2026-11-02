@@ -19,7 +19,8 @@ from deploy.worker_pool import entry
 from blackoutburst_agents import continuation_pool_service, development_queue
 from blackoutburst_agents.continuation_journal import ContinuationJournal
 from blackoutburst_agents.dev_journal import decode
-from blackoutburst_agents.dev_manifest import canonical, digest
+from blackoutburst_agents.dev_manifest import canonical, digest,DevelopmentError
+from blackoutburst_agents.development_queue import DevelopmentQueueAdmission
 from blackoutburst_agents.development_pool_selection import file_document
 from blackoutburst_agents.development_queue import queue_tick_plan
 from blackoutburst_agents.development_queue_client import DevelopmentQueueDiscoveryClient
@@ -99,7 +100,8 @@ def queued_entry(queued_service, monkeypatch):
         return entry.continuation_entry(args, manifest, release, account)
     return SimpleNamespace(f=f, root=root, task_id=task_id, ticket=ticket, calls=calls, sequence=sequence,
         catalog=catalog_path, workflow=workflow_path, wrapper=wrapper, invoke=invoke, unit_checks=unit_checks,
-        request=request, next_request=next_request, next_logical=next_logical)
+        request=request, next_request=next_request, next_logical=next_logical,
+        release=release,manifest=manifest,account=account)
 
 
 def test_installed_queue_plan_is_pure_and_never_reads_a_connection_or_constructs_client(queued_entry, monkeypatch):
@@ -117,6 +119,34 @@ def test_installed_queue_plan_is_pure_and_never_reads_a_connection_or_constructs
     assert result['activated'] is False and result['execution_qualified'] is False and result['launchable'] is False
     assert not case.unit_checks and not case.f.discovery_calls and not case.f.queue_clients
     assert before == {str(path): digest(path.read_bytes()) for path in case.root.rglob('*') if path.is_file()}
+
+
+@pytest.mark.parametrize('known',[True,False])
+def test_installed_queue_runtime_refusal_is_closed_without_inventing_cleanup(queued_entry,monkeypatch,capsys,known):
+    class PrivateError(Exception):
+        def __str__(self):raise AssertionError('Do not stringify private exceptions')
+        def __repr__(self):raise AssertionError('Do not repr private exceptions')
+        def __getattribute__(self,key):
+            if key in ('code','args','__dict__'):raise AssertionError('Do not inspect private exception fields')
+            return super().__getattribute__(key)
+    error=DevelopmentError('development_queue_approval_changed') if known else PrivateError('PRIVATE_BODY')
+    attempts=[]
+    def refused(*args,**kwargs):
+        attempts.append(True);raise error
+    monkeypatch.setattr(DevelopmentQueueAdmission,'tick',refused)
+    monkeypatch.setattr(entry.p,'verify_release',lambda *_:queued_entry.manifest)
+    monkeypatch.setattr(entry,'owner_context',lambda *_:queued_entry.account)
+    assert entry.main(['--release',str(queued_entry.release),'--owner','fixture-worker',
+        'run-continuation-once','--continuation',str(queued_entry.wrapper)])==3
+    result=json.loads(capsys.readouterr().out)
+    assert result['status']=='needs_you' and result['activated'] is True and result['tasks']==[]
+    assert result['pass_complete_is_project_completion'] is False
+    failure=result['failure']
+    assert failure['stage']=='queue_tick' and failure['code']==('development_queue_approval_changed' if known else 'unrecognized_code')
+    assert failure['category']==('development_error' if known else 'unknown_error')
+    assert failure['logical_task_id'] is failure['operation_id'] is failure['generation_id'] is None
+    assert 'cleanup' not in json.dumps(result) and 'model_calls' not in result and 'PRIVATE' not in json.dumps(result)
+    assert attempts==[True] and not queued_entry.calls.exists()
 
 
 def test_installed_entry_completes_two_generations_then_discovers_next_assigned_ticket(queued_entry, monkeypatch):
