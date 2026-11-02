@@ -160,3 +160,4 @@
 
 .server-request-note{border:1px solid var(--line);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;color:var(--muted)}
 .server-capacity{margin:0 0 24px;max-width:95ch;overflow-wrap:anywhere}.server-capacity h3{margin:0 0 10px}.server-capacity-count{font-size:18px;font-weight:600}.server-capacity p{line-height:1.6}.server-capacity-full{color:#d29922;line-height:1.5}
+.status-closed{color:var(--muted);border-color:var(--line);background:transparent}.issue-icon.closed{color:var(--muted)}

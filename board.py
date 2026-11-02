@@ -68,7 +68,7 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 17:
+            if version > 18:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -188,6 +188,13 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             if version < 17:
                 migrate_server_messages_append(db)
                 db.execute("PRAGMA user_version=17")
+            if version < 18:
+                # How a ticket was closed: completed (verified work), superseded or wont_do.
+                # Existing done tickets were all closed as completed.
+                if "resolution" not in {row[1] for row in db.execute("PRAGMA table_info(tickets)")}:
+                    db.execute("ALTER TABLE tickets ADD COLUMN resolution TEXT NOT NULL DEFAULT ''")
+                db.execute("UPDATE tickets SET resolution='completed' WHERE status='done' AND resolution=''")
+                db.execute("PRAGMA user_version=18")
             self._provisioning_schema(db)
             self._messages_append_schema(db)
 

@@ -16,6 +16,9 @@ from urllib.parse import urlsplit
 
 STATUSES = ("todo", "in_progress", "blocked", "review", "done")
 PRIORITIES = ("low", "normal", "high", "urgent")
+# How a done ticket was closed. Only "completed" claims delivered, verified work.
+RESOLUTIONS = ("completed", "superseded", "wont_do")
+UNWORKED_RESOLUTIONS = ("superseded", "wont_do")
 _PROJECT_TEXT = {"name": (1, 120), "description": (0, 4000), "context": (0, 30000),
                  "repository_url": (0, 2000), "environment": (0, 4000)}
 _DEFAULT_BLOCK_RECHECK = 24 * 3600
@@ -171,6 +174,7 @@ class ProjectsMixin:
         result = {name: row[name] for name in ("id", "project_id", "number", "thread_id", "title", "description",
                     "acceptance_criteria", "priority", "status", "assignee_owner_id", "version", "outcome", "evidence",
                     "created_at", "updated_at")}
+        result["resolution"] = (row["resolution"] or "completed") if row["status"] == "done" else ""
         result["claimant"] = json.loads(row["claimant"]) if row["claimant"] else None
         result["attachments"] = [self._attachment(item) for item in db.execute(
             """SELECT a.* FROM ticket_attachments ta JOIN attachments a ON a.id=ta.attachment_id
@@ -338,11 +342,11 @@ class ProjectsMixin:
     def update_ticket(self, actor, ticket_id, expected_version, **changes):
         _version(expected_version)
         allowed = set(_TICKET_TEXT) | {"priority", "assignee_owner_id", "status", "release_claim", "depends_on", "labels", "required_skills", "resource", "progress", "assignee_agent_id", "attachment_ids",
-                                       "blocked_reason", "recheck_after_seconds", "unblock_owner"}
+                                       "blocked_reason", "recheck_after_seconds", "unblock_owner", "resolution"}
         if not changes or set(changes) - allowed:
             _fail("Supply only editable ticket fields")
         values = {key: _text(value, key, *_TICKET_TEXT[key]) for key, value in changes.items() if key in _TICKET_TEXT}
-        for key, choices in (("priority", PRIORITIES), ("status", STATUSES)):
+        for key, choices in (("priority", PRIORITIES), ("status", STATUSES), ("resolution", RESOLUTIONS)):
             if key in changes:
                 values[key] = _choice(changes[key], key, choices)
         values.update(self._coordination_values(changes))
@@ -399,11 +403,27 @@ class ProjectsMixin:
                 if row["status"] == "in_progress":
                     values.setdefault("status", "todo")
             status = values.get("status", row["status"])
+            if "resolution" in values and status != "done":
+                _fail("resolution only applies when closing a ticket (status done)")
             if row["status"] == "done" and status != "done":
                 values.setdefault("outcome", "")
                 values.setdefault("evidence", "")
+                values["resolution"] = ""
                 values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
-            if status == "done" and (not values.get("outcome", row["outcome"]).strip() or not values.get("evidence", row["evidence"]).strip()):
+            resolution = ""
+            if status == "done":
+                resolution = values.get("resolution") or (row["resolution"] if row["status"] == "done" else "") or "completed"
+                values["resolution"] = resolution
+            # Superseded / won't-do closes record a decision, not delivered work: they need
+            # a reason, skip prerequisite and review checks, and never claim verification.
+            unworked = resolution in UNWORKED_RESOLUTIONS
+            if unworked:
+                if not values.get("outcome", row["outcome"]).strip():
+                    _fail("Closing as superseded or won't do requires a reason (outcome)")
+                if not values.get("evidence", row["evidence"]).strip():
+                    label = "superseded" if resolution == "superseded" else "won't do"
+                    values["evidence"] = f"No verification: closed as {label} by {self._author(db, actor)['display_name']}."
+            elif status == "done" and (not values.get("outcome", row["outcome"]).strip() or not values.get("evidence", row["evidence"]).strip()):
                 _fail("A completed ticket requires an outcome and verification evidence")
             if actor["kind"] == "agent" and self._project_member(db, actor, row["project_id"])["archived"] and not release:
                 _fail("Project is archived; release the claim instead", 409)
@@ -412,9 +432,9 @@ class ProjectsMixin:
                               (values["resource"], ticket_id)).fetchone():
                     _fail("This work resource is already reserved by another task", 409)
             detail = self._ticket(self._ticket_member(db, actor, ticket_id), db)
-            if status in {"in_progress", "review", "done"} and (detail["blocked_by"] or detail["waiting_on_human"]):
+            if status in {"in_progress", "review", "done"} and not unworked and (detail["blocked_by"] or detail["waiting_on_human"]):
                 _fail("Resolve prerequisite tasks and human requests first", 409)
-            if status == "done" and detail["delivered_dependencies"]:
+            if status == "done" and not unworked and detail["delivered_dependencies"]:
                 _fail("Accept or complete delivered prerequisite tasks before completing this one", 409)
             now = time.time()
             if status == "blocked":

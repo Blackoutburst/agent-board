@@ -172,5 +172,5 @@ def test_real16_migration_keeps_existing_A_projection_and_adds_empty_optional_st
     assert snapshot(reopened,exclude=tuple(SQL)[:5])==before
     assert reopened.get_server_provisioning_request(h,host['id'],r['request_id'])==r
     with reopened._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==17
+        assert db.execute('PRAGMA user_version').fetchone()[0]==18
         assert db.execute('SELECT COUNT(*) FROM server_messages_append_statuses').fetchone()[0]==0

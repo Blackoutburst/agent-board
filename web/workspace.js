@@ -3,6 +3,7 @@
 // Work management is kept separate from authentication and conversation transport.
 const Workspace = (() => {
   Object.assign(ticketStatuses, { todo: "To do", in_progress: "In progress", blocked: "Blocked", review: "In review", done: "Done" });
+  Object.assign(ticketResolutions, { completed: "Done", superseded: "Superseded", wont_do: "Won't do" });
   Object.assign(ticketPriorities, { low: "Low", normal: "Normal", high: "High", urgent: "Urgent" });
   const workStates = { ready: "Ready", running: "In progress", blocked: "Blocked", waiting_on_human: "Needs human input", recovery: "Needs recovery", review: "In review", done: "Done" };
   let projectTab = "tasks";
@@ -11,7 +12,9 @@ const Workspace = (() => {
   let includeArchivedProfiles = false;
   const guard = (action) => (...args) => Promise.resolve().then(() => action(...args)).catch(workError);
   const badge = (label, kind = "") => el("span", { class: `badge ${kind}` }, label);
-  const status = (task) => task.blocked_by?.length && task.status !== "blocked"
+  const status = (task) => task.status === "done"
+    ? badge(ticketResolutions[task.resolution] || ticketStatuses.done, unworked(task) ? "status-closed" : "status-done")
+    : task.blocked_by?.length && task.status !== "blocked"
     ? badge(`${ticketStatuses[task.status]} · waiting for ${task.blocked_by.map(t => "#" + t.number).join(", ")}`, "status-blocked")
     : badge(workStates[task.work_state] || ticketStatuses[task.status], `status-${task.work_state || task.status}`);
   const tabs = (items, active, change) => el("nav", { class: "tabs", "aria-label": "Project sections" }, items.map(([key, label]) => btn(label, () => change(key), key === active ? "selected" : "", { "aria-current": key === active ? "page" : null })));
@@ -160,7 +163,7 @@ const Workspace = (() => {
   }
   function taskRow(t) {
     const assignee = t.claimant?.agent_name || t.assignee_agent_name || (t.assignee_owner_id ? ownerName(t.assignee_owner_id) : "Anyone");
-    return el("article", { class: "issue-row" }, el("span", { class: `issue-icon ${t.status === "done" ? "done" : ""}`, "aria-label": ticketStatuses[t.status] }, t.status === "done" ? "✓" : "◉"),
+    return el("article", { class: "issue-row" }, el("span", { class: `issue-icon ${unworked(t) ? "closed" : t.status === "done" ? "done" : ""}`, "aria-label": t.status === "done" ? ticketResolutions[t.resolution] || ticketStatuses.done : ticketStatuses[t.status] }, unworked(t) ? "⊘" : t.status === "done" ? "✓" : "◉"),
       el("div", { class: "issue-content" }, el("div", { class: "issue-title" }, workLink(t.title, { ticket: t.id }), t.labels.map(label => badge(label, "label-badge"))),
         el("div", { class: "issue-meta" }, t.project_name ? workLink(t.project_name, { project: t.project_id }) : null, `#${t.number}`, el("span", {}, `opened ${date(t.created_at)}`), t.blocked_by.length ? el("span", { class: "blocked-label" }, `Blocked by ${t.blocked_by.map(d => "#" + d.number).join(", ")}`) : null, blockLabel(t), t.progress ? el("span", { class: "progress-preview" }, t.progress) : null)),
       el("div", { class: "issue-trailing" }, status(t), t.priority !== "normal" ? badge(ticketPriorities[t.priority], `priority-${t.priority}`) : null, el("span", { class: "assigned-label", title: assignee }, assignee)));
@@ -278,7 +281,7 @@ const Workspace = (() => {
         el("p", { class: "small muted" }, t.recheck_at ? `The board rechecks this block ${date(t.recheck_at)}.` : "Automatic retries stopped; a human decides.")) : null,
       t.progress ? el("div", { class: "callout" }, el("strong", {}, "Latest progress"), Markdown.block(t.progress)) : null,
       t.human_requests.filter(r => r.status === "open").map(r => requestCard(r, t)),
-      t.outcome || t.evidence ? panel("Outcome & verification", el("div", { class: "panel-body" }, Markdown.block(t.outcome), Markdown.block(t.evidence, "muted"))) : null,
+      t.outcome || t.evidence ? panel(unworked(t) ? `${ticketResolutions[t.resolution]} — reason` : "Outcome & verification", el("div", { class: "panel-body" }, Markdown.block(t.outcome), Markdown.block(t.evidence, "muted"))) : null,
       discussion, el("details", { class: "activity-details" }, el("summary", {}, "Task activity"), activityList(events)));
     const coordinated = delegationCard(t); if (coordinated) body.append(coordinated);
     body.append(el("div", { class: "task-detail-layout" }, main, sidebar));
@@ -312,7 +315,7 @@ const Workspace = (() => {
       const buttons = [...form.querySelectorAll('button[type="submit"]')]; buttons.forEach(b => b.disabled = true);
       error.hidden = true;
       try { await action(new FormData(form)); }
-      catch (failure) { error.hidden = false; error.textContent = failure.status === 409 ? "This item changed while you were editing. Your draft is still here. Open the current item in another tab to compare, then reopen the editor before saving." : failure.message; }
+      catch (failure) { error.hidden = false; error.textContent = failure.status === 409 && /changed|reload/i.test(failure.message || "") ? "This item changed while you were editing. Your draft is still here. Open the current item in another tab to compare, then reopen the editor before saving." : failure.message; }
       finally { buttons.forEach(b => b.disabled = false); }
     });
   }
@@ -355,18 +358,24 @@ const Workspace = (() => {
     if (allTasks.length <= (t ? 1 : 0)) dependencyPicker.append(el("p", { class: "small muted" }, "No other tasks in this project yet."));
     const form = el("form", { class: "work-form" }, field("Task title", "title", { value: t?.title || "", required: true, placeholder: "Describe the result you want" }), field("Description", "description", { type: "textarea", rows: 5, value: t?.description || "" }), field("Acceptance criteria", "acceptance_criteria", { type: "textarea", rows: 3, value: t?.acceptance_criteria || "", placeholder: "What needs to be true when this is complete?" }),
       el("div", { class: "form-row" }, select("Priority", "priority", Object.entries(ticketPriorities), t?.priority || "normal"), select("Assigned to", "assignee", [["", "Any available agent"], ...p.participants.map(id => ["owner:" + id, ownerName(id)]), ...agentOptions], who)),
-      t ? select("Status", "status", Object.entries(ticketStatuses), t.status) : null,
+      t ? select("Status", "status", [...Object.entries(ticketStatuses), ["done:superseded", "Closed — superseded"], ["done:wont_do", "Closed — won't do"]], unworked(t) ? "done:" + t.resolution : t.status) : null,
       tags, el('label',{},'Task attachments',file,el('span',{class:'field-hint'},'Any file · Up to 10 MB each · Included in the task description')),
       el("details", { class: "metadata-editor" }, el("summary", {}, "Dependencies & work requirements"), dependencyPicker, field("Required skills", "required_skills", { value: (t?.required_skills || []).join(", "), placeholder: "Optional: python, android" }), field("Shared resource", "resource", { value: t?.resource || "", hint: "Tasks using the same resource cannot run at the same time.", placeholder: "Optional: agent-board:main" })),
-      t ? el("details", { class: "metadata-editor", open: t.status === "done" ? "" : null }, el("summary", {}, "Outcome & verification"), field("Outcome", "outcome", { type: "textarea", value: t.outcome }), field("Verification evidence", "evidence", { type: "textarea", value: t.evidence, hint: "Required together with an outcome when marking a task done." })) : null,
+      t ? el("details", { class: "metadata-editor", open: t.status === "done" ? "" : null }, el("summary", {}, "Outcome & verification"), field("Outcome", "outcome", { type: "textarea", value: t.outcome }), field("Verification evidence", "evidence", { type: "textarea", value: t.evidence, hint: "Required together with an outcome when marking a task done. For Superseded / Won't do, the outcome is the reason and evidence is optional; prerequisites don't need to be finished." })) : null,
       formButtons(t ? "Save task" : "Create task"));
+    // Closing needs an outcome (or a reason for superseded / won't do): reveal it when chosen.
+    form.querySelector('select[name="status"]')?.addEventListener("change", event => {
+      if (String(event.target.value).startsWith("done")) form.querySelector('textarea[name="outcome"]')?.closest("details")?.setAttribute("open", "");
+    });
     bindForm(form, async data => {
       const payload = Object.fromEntries(["title", "description", "acceptance_criteria", "priority", "resource"].map(key => [key, String(data.get(key) || "").trim()]));
       const assignee = String(data.get("assignee") || "");
       Object.assign(payload, { assignee_owner_id: assignee.startsWith("owner:") ? assignee.slice(6) : null, assignee_agent_id: assignee.startsWith("agent:") ? assignee.slice(6) : null, depends_on: data.getAll("depends_on"), labels: data.getAll("labels"), required_skills: csv(data.get("required_skills")) });
       if (t) {
         if (assignee === who) { delete payload.assignee_owner_id; delete payload.assignee_agent_id; }
-        Object.assign(payload, { expected_version: t.version, status: data.get("status"), outcome: data.get("outcome"), evidence: data.get("evidence") });
+        const [chosenStatus, chosenResolution] = String(data.get("status")).split(":");
+        Object.assign(payload, { expected_version: t.version, status: chosenStatus, outcome: data.get("outcome"), evidence: data.get("evidence") });
+        if (chosenStatus === "done") payload.resolution = chosenResolution || "completed";
         if (t.status === "done" && payload.status !== "done") {
           if (payload.outcome === t.outcome) payload.outcome = "";
           if (payload.evidence === t.evidence) payload.evidence = "";

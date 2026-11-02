@@ -126,8 +126,9 @@ class CoordinationMixin(ProjectsMixin):
                 (dependency, ticket_id)).fetchone()
             if cycle:
                 _fail('This dependency would create a cycle')
-        ticket = db.execute('SELECT status FROM tickets WHERE id=?', (ticket_id,)).fetchone()
-        if ticket and ticket['status'] == 'done' and any(db.execute(
+        ticket = db.execute('SELECT status,resolution FROM tickets WHERE id=?', (ticket_id,)).fetchone()
+        # A superseded / won't-do close doesn't claim its prerequisites were finished.
+        if ticket and ticket['status'] == 'done' and ticket['resolution'] not in ('superseded', 'wont_do') and any(db.execute(
             'SELECT status FROM tickets WHERE id=?', (item,)).fetchone()[0] != 'done' for item in depends_on):
             _fail('A completed task cannot depend on unfinished work', 409)
         db.execute('DELETE FROM ticket_dependencies WHERE ticket_id=?', (ticket_id,))

@@ -300,7 +300,7 @@ def test_migration_16_to_17_is_atomic_and_preserves_every_existing_row(ready,mon
     with b._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==16
     monkeypatch.setattr(module,'migrate_server_messages_append',original);reopened=Board(b.data_dir)
     assert snapshot(reopened,exclude=tuple(SQL)[:5])==before
-    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==17
+    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==18
 
 
 @pytest.mark.parametrize('name,args',[

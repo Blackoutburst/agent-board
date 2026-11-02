@@ -281,7 +281,7 @@ def test_schema16_migration_is_atomic_and_preserves_old_rows(env,monkeypatch):
     monkeypatch.setattr(module,'migrate_server_provisioning',original)
     reopened=Board(b.data_dir)
     assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)==before
-    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 17
+    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 18
 
 
 @pytest.mark.parametrize('phase', ['request', 'cancel'])

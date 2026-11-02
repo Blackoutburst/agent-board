@@ -184,7 +184,7 @@ def _view(row,controller=None):
 
 class ServerMessagesAppendMixin:
     def _messages_append_schema(self, db):
-        if db.execute('PRAGMA user_version').fetchone()[0]!=17: _fail('server_messages_append_schema_invalid',409)
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (17, 18): _fail('server_messages_append_schema_invalid',409)
         if any(r['name'] not in SQL for r in db.execute("SELECT name FROM main.sqlite_master WHERE lower(name) GLOB 'server_messages_append_*'")):
             _fail('server_messages_append_schema_invalid',409)
         marks=','.join('?' for _ in SENSITIVE)

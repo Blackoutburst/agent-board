@@ -128,7 +128,7 @@ def summary(value):
         keep = {'id','project_id','number','thread_id','title','status','priority',
             'version','assignee_owner_id','assignee_agent_id','claimant',
             'lease_expires_at','claim_expired','ready','work_state','waiting_on_human',
-            'assignee_presence','assignment_stale'}
+            'assignee_presence','assignment_stale','resolution'}
         return {**compact({k:v for k,v in value.items() if k in keep}),
                 'detail_tool': 'get_ticket'}
     if 'question' in value:

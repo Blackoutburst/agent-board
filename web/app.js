@@ -453,6 +453,9 @@ function showToken(device) {
 
 // Project and ticket views. Shared values are plain text, never HTML.
 const ticketStatuses = { todo: "À faire", in_progress: "En cours", blocked: "Bloqué", review: "À valider", done: "Terminé" };
+// How a done ticket was closed; only "completed" claims delivered, verified work.
+const ticketResolutions = { completed: "Terminé", superseded: "Remplacé", wont_do: "Abandonné" };
+const unworked = (task) => task?.status === "done" && (task.resolution === "superseded" || task.resolution === "wont_do");
 const ticketPriorities = { low: "Basse", normal: "Normale", high: "Haute", urgent: "Urgente" };
 const workError = (error) => notify(error.message || "Impossible de joindre le tableau.", true);
 const workPath = (value) => encodeURIComponent(String(value));
