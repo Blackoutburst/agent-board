@@ -332,7 +332,8 @@ class DevelopmentProviderContinuation:
                 instruction=bound['instruction'],broker_directory=selection['broker_directory'],
                 backend_directory=selection['backend_directory'],planner_policy_directory=selection['planner_policy_directory'],
                 model=selection['model'],budgets=PlannerBudgets(**selection['budgets']),operation_id=next_operation_id,
-                **_reasoning_configuration(selection.get('reasoning_effort')))
+                **_reasoning_configuration(selection.get('reasoning_effort')),
+                **({'queue_admission':selection['queue_admission']} if 'queue_admission' in selection else {}))
             preparer.driver._operation(worker,context,bound)
             require(worker.journal.get(next_operation_id)['stage']=='new'
                 and not worker.store._db.execute('SELECT id FROM works LIMIT 1').fetchall()

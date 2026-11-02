@@ -16,13 +16,14 @@ import threading
 import time
 import uuid
 
-from .continuation_pool_configuration import load_continuation, MAX_CONFIGURATION
+from .continuation_pool_configuration import (load_continuation,load_queue_continuation,
+    QUEUE_CONTINUATION_SCHEMA,MAX_CONFIGURATION)
 from .continuation import ContinuationTask, ContinuationChecks, PHASES
 from .continuation_journal import ContinuationJournal, ContinuationError
 from .board_reader import BoardReadError
 from .context import ContextError
 from .dev_journal import PrivateDirectory, decode, DevelopmentJournal
-from .dev_manifest import Budgets, DevelopmentError, canonical, digest, identity, opaque, validate_manifest
+from .dev_manifest import Budgets, DevelopmentError, canonical, digest, identity, opaque, signature,validate_manifest
 from .dev_planner import _directory_pin, _reasoning_configuration
 from .dev_planner_journal import PlannerBudgets
 from .development_authorization import DevelopmentAuthorization
@@ -492,8 +493,24 @@ TARGET_FAILURE_CODES=frozenset({
     'work_locked', 'work_not_found', 'worker_not_found', 'worker_not_resolved', 'worker_not_successful',
     'worker_proof_mismatch', 'worker_proof_required', 'workspace_identity_changed',
     'workspace_not_exclusive', 'write_set',
+    'development_queue_admission_invalid', 'development_queue_admission_pending',
+    'development_queue_approval_changed', 'development_queue_arguments_invalid',
+    'development_queue_batch_changed', 'development_queue_busy',
+    'development_queue_candidate_changed', 'development_queue_candidates_invalid',
+    'development_queue_claim_required', 'development_queue_connection_changed',
+    'development_queue_intent_conflict', 'development_queue_invalid',
+    'development_queue_project_changed', 'development_queue_receipt_changed',
+    'development_queue_registration_required', 'development_queue_root_changed',
+    'development_queue_tick_busy', 'development_queue_tick_changed', 'development_queue_tick_invalid',
+    'development_queue_verifier_changed', 'development_queue_workflow_invalid',
+    'team_ticket_approval_changed', 'team_ticket_creation_unconfirmed',
+    'team_ticket_document_changed', 'team_ticket_document_invalid', 'team_ticket_document_unavailable',
+    'team_ticket_journal_busy', 'team_ticket_journal_changed', 'team_ticket_journal_conflict',
+    'team_ticket_journal_required', 'team_ticket_lead_unavailable', 'team_ticket_parent_changed',
+    'team_ticket_plan_cycle', 'team_ticket_plan_invalid', 'team_ticket_profile_changed',
+    'team_ticket_project_changed', 'team_ticket_receipt_changed', 'team_ticket_registration_required',
 })|FAILURE_NOTICE_CODES
-TARGET_FAILURE_STAGES=frozenset({'unknown','target_entry','target_binding','cursor_read',
+TARGET_FAILURE_STAGES=frozenset({'unknown','queue_tick','target_entry','target_binding','cursor_read',
     'historical_review','previous_generation_open','previous_state_check','provider_availability',
     'next_generation_intent','next_generation_create','initial_preparation','previous_retirement',
     'next_preparation','worker_open','task_open','cycle_run','provider_wake','cycle_retirement',
@@ -739,8 +756,11 @@ class ContinuationPoolService:
         self.root=Path(_path(os.fspath(root)));self.path=Path(configuration_path)
         self.owner_id,self.endpoint=opaque(owner_id),board_endpoint
         self.max_seconds=max_seconds;self.cli_version=cli_version
-        self.loaded,self.configuration_pins=load_continuation(configuration_path,root=self.root,
+        standing=load_queue_continuation(configuration_path,root=self.root,
             owner_id=owner_id,board_endpoint=board_endpoint,max_seconds=max_seconds)
+        self.loaded,self.configuration_pins=(standing if standing is not None else
+            load_continuation(configuration_path,root=self.root,owner_id=owner_id,
+                board_endpoint=board_endpoint,max_seconds=max_seconds))
         require(type(cli_version) is str and cli_version.startswith('codex-cli '))
         self.tools={key:_executable_pin(os.fspath(value)) for key,value in
             (('executable',executable),('interpreter',interpreter),('unshare',unshare),('gh',gh_executable))}
@@ -850,6 +870,15 @@ class ContinuationPoolService:
     def run_once(self,*,should_stop=None):
         require(self.pid==os.getpid() and self.thread is threading.current_thread())
         require(should_stop is None or callable(should_stop))
+        if self.loaded['configuration']['schema']==QUEUE_CONTINUATION_SCHEMA:
+            try:return self._queue_once(should_stop)
+            except Exception as error:
+                # The pass may already have effects. Correlation is unknown;
+                # neither cleanup nor absence of execution can be inferred.
+                observation=_TargetObservation(None);observation.stage='queue_tick'
+                return {'schema':'continuation-pool-pass-v1','status':'needs_you','tasks':[],
+                    'activated':True,'pass_complete_is_project_completion':False,
+                    'failure':_target_failure(error,observation)}
         require(self._mutex.acquire(blocking=False),'continuation_pool_owner_busy')
         try:
             require(self._retained_lease is None,'continuation_pool_cleanup_unknown')
@@ -915,6 +944,36 @@ class ContinuationPoolService:
                 status='needs_you' if control.stop_failed or any(row['phase']=='needs_you' for row in ordered) else 'stopped' if control.cancel.is_set() else 'pass_complete'
                 return {'schema':'continuation-pool-pass-v1','status':status,'tasks':ordered,
                     'activated':True,'pass_complete_is_project_completion':False}
+        finally:self._mutex.release()
+
+    def _queue_once(self,should_stop):
+        """Installed entry facade; generated Core configs select the other branch."""
+        from .development_queue import DevelopmentQueueAdmission
+        from .development_queue_client import DevelopmentQueueDiscoveryClient
+        require(self._mutex.acquire(blocking=False),'continuation_pool_owner_busy')
+        try:
+            before=signature(os.stat(self.path,follow_symlinks=False))
+            self._pins(full=True);config=self.loaded['configuration'];catalog=self.loaded['plan']['catalog']
+            require(before==signature(os.stat(self.path,follow_symlinks=False)),'continuation_pool_configuration_changed')
+            def stopping():
+                require(signature(os.stat(self.path,follow_symlinks=False))==before,'continuation_pool_configuration_changed')
+                return bool(should_stop and should_stop())
+            session='continuation-queue-'+digest(canonical({'owner_id':self.owner_id,
+                'agent_id':catalog['agent_id'],'configuration_path':str(self.path)}))
+            with DevelopmentQueueDiscoveryClient.from_connection_file(catalog['connection_file'],session_id=session) as client:
+                result=DevelopmentQueueAdmission(self.root,client).tick(config['catalog_file'],config['workflow_file'],
+                    approved_sha256=config['approved_sha256'],executable=self.tools['executable']['path'],
+                    cli_version=self.cli_version,interpreter=self.tools['interpreter']['path'],
+                    unshare=self.tools['unshare']['path'],gh_executable=self.tools['gh']['path'],
+                    max_seconds=self.max_seconds,checkpoint_after_actions=config['checkpoint_after_actions'],
+                    provider_backoff_seconds=config['provider_backoff_seconds'],should_stop=stopping)
+            self._pins(full=True)
+            service=result['service']
+            envelope=(service if service is not None else {'schema':'continuation-pool-pass-v1',
+                'status':'stopped' if result['phase']=='stopped' else 'pass_complete','tasks':[],
+                'activated':True,'pass_complete_is_project_completion':False})
+            return {**envelope,'queue':{key:result[key] for key in
+                ('schema','phase','request_id','logical_task_id','launchable')}}
         finally:self._mutex.release()
 
     def _target(self,root,target,job,control):
@@ -1219,6 +1278,10 @@ class _Generation:
     @classmethod
     def create(cls,service,directory,target,job,generation,control,resources,*,old=None):
         result=cls();result._setup(service,directory,target,job,generation,control,resources)
+        if old is not None and 'queue_admission' in job:
+            require(old.provider.maintenance.retire_checkpoint(old.operation)['phase']=='retired')
+            result.admission=old.provider.maintenance.next_queue_admission(old.operation)
+            result.arguments['queue_admission']=deepcopy(result.admission)
         _mkdir(result.directory)
         if old is None:grant=deepcopy(job['repository'])
         else:
@@ -1237,7 +1300,8 @@ class _Generation:
         result._pool(create=True)
         with PrivateDirectory(result.directory) as private:
             _write(private,'generation.json',{'schema':'continuation-pool-generation-v1','generation':generation,
-                'grant':grant,'submitted':result.submitted,'connection':result.driver.selections.connection_pin})
+                'grant':grant,'submitted':result.submitted,'connection':result.driver.selections.connection_pin,
+                **({'queue_admission':result.admission} if result.admission is not None else {})})
         if old is not None:
             with PrivateDirectory(result.directory) as private:
                 _write(private,'parent.json',{'checkpoint_id':cp['checkpoint_id'],'checkpoint_sha256':cp['checkpoint_sha256']})
@@ -1249,8 +1313,15 @@ class _Generation:
     def open(cls,service,directory,target,job,generation,control,resources,*,candidate_for=None):
         uuid_value(generation);result=cls();result._setup(service,directory,target,job,generation,control,resources)
         with PrivateDirectory(result.directory) as private:value=_read(private,'generation.json')
-        require(type(value) is dict and set(value)=={'schema','generation','grant','submitted','connection'}
+        fields={'schema','generation','grant','submitted','connection'}
+        require(type(value) is dict and set(value)==fields|({'queue_admission'} if 'queue_admission' in job else set())
             and value['schema']=='continuation-pool-generation-v1' and value['generation']==generation)
+        if 'queue_admission' in job:
+            from .development_pool_selection import queue_admission
+            result.admission=queue_admission(value['queue_admission'])
+            require(all(result.admission[key]==job['queue_admission'][key]
+                for key in ('schema','profile_version','catalog_sha256')),'development_queue_admission_changed')
+            result.arguments['queue_admission']=deepcopy(result.admission)
         result.grant=value['grant']
         # Existing metadata is not permission: exact source identity/caps are
         # revalidated below by Git, Core, provider and real Worker paths.
@@ -1285,6 +1356,8 @@ class _Generation:
             broker_budgets=Budgets(**job['broker_budgets']),cli_version=service.cli_version,
             **{key:service.tools[key]['path'] for key in ('executable','interpreter','unshare')},
             **_reasoning_configuration(job.get('reasoning_effort')))
+        self.admission=deepcopy(job.get('queue_admission'))
+        if self.admission is not None:self.arguments['queue_admission']=deepcopy(self.admission)
     def _pool(self,*,create):
         if not create:
             for path in (self.directory/'pool'/'pool-state.json',self.directory/'pool'/'pool-owner.lock'):
@@ -1329,7 +1402,8 @@ class _Generation:
         require(not self._worker_open)
         if unprepared:
             bound={'selection':{'scope':{**self.driver.selections.fixed,
-                **{key:self.job[key] for key in ('project_id','ticket_id')},'board_session_id':self.context.session_id}},
+                **{key:self.job[key] for key in ('project_id','ticket_id')},'board_session_id':self.context.session_id},
+                **({'queue_admission':self.admission} if self.admission is not None else {})},
                 'connection':self.driver.selections.connection_pin}
         else:bound=self.driver.selections.load(self.context)
         self.worker=self.driver._open(self.resources,self.context,bound,existing=existing,observe=False)
@@ -1345,7 +1419,8 @@ class _Generation:
                 instruction=bound['instruction'],broker_directory=selection['broker_directory'],
                 backend_directory=selection['backend_directory'],planner_policy_directory=selection['planner_policy_directory'],
                 model=selection['model'],budgets=PlannerBudgets(**selection['budgets']),operation_id=self.operation,
-                **_reasoning_configuration(selection.get('reasoning_effort')))
+                **_reasoning_configuration(selection.get('reasoning_effort')),
+                **({'queue_admission':selection['queue_admission']} if 'queue_admission' in selection else {}))
     def open_task(self,*,create,old=None):
         try:from .development_provider_continuation import DevelopmentProviderContinuation
         except ImportError:fail('continuation_pool_api_unavailable')
