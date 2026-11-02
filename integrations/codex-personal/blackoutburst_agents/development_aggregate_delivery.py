@@ -69,12 +69,13 @@ class AggregateDevelopmentDeliveryProof:
         self.configuration = deepcopy(controller.final_proof.configuration)
         self.workspaces = controller.original_workspaces
 
-    def evidence(self, snapshot):
+    def evidence(self, snapshot, *, schema='controller-test-evidence-v2'):
+        require(schema in ('controller-test-evidence-v1','controller-test-evidence-v2'))
         controller = self.controller
         controller._logical()
         lineage = controller._lineage()
         source = controller._source_capture()
-        final = controller._final_evidence(source)
+        final = controller._final_evidence(source,schema=schema)
         results = controller._model_results()
         require(type(snapshot) is dict and snapshot.get('schema') == 'local-captured-tree-v1')
         request = snapshot['request']
@@ -94,7 +95,7 @@ class AggregateDevelopmentDeliveryProof:
                 and object_id(raw, 'blob', self.workspaces.grant['base_commit']) == row['blob_oid'],
                 'development_aggregate_tree_changed')
         require(controller._lineage() == lineage and controller._source_capture() == source)
-        require(controller._final_evidence(source) == final)
+        require(controller._final_evidence(source,schema=schema) == final)
         require(controller._model_results() == results)
         controller._logical()
         snapshot_sha = digest(canonical(snapshot))
@@ -103,13 +104,23 @@ class AggregateDevelopmentDeliveryProof:
             'lineage_sha256': digest(canonical(lineage)), 'final_evidence_sha256': digest(canonical(final)),
             'final_model_results_sha256': results,
             'final_snapshot_sha256': digest(canonical(source)), 'aggregate_snapshot_sha256': snapshot_sha}
-        return {'schema': 'controller-test-evidence-v1', 'snapshot_sha256': snapshot_sha,
+        if schema=='controller-test-evidence-v2':
+            from .delivery_review_material import validate_review_evidence
+            validate_review_evidence(final)
+            review_metadata={**deepcopy(final['review']),'kind':'aggregate',
+                'original_public_base':controller.original_base,'lineage_sha256':binding['lineage_sha256']}
+            binding['review_sha256']=digest(canonical(review_metadata))
+        evidence={'schema': schema, 'snapshot_sha256': snapshot_sha,
             'receipts': [{'name': row['name'], 'sha256': digest(canonical({**binding,
                 'final_test_receipt_sha256': row['sha256']}))} for row in final['receipts']]}
+        if schema=='controller-test-evidence-v2':
+            evidence['review']=review_metadata
+            validate_review_evidence(evidence)
+        return evidence
 
     def __call__(self, *, operation_id, scope, snapshot, evidence):
         require(operation_id == self.operation_id and scope == snapshot['request']['scope'])
-        require(evidence == self.evidence(snapshot))
+        require(type(evidence) is dict and evidence == self.evidence(snapshot,schema=evidence.get('schema')))
         return True
 
 
@@ -428,10 +439,10 @@ class AggregateDevelopmentDeliveryController:
                 value['phase'] = 'captured';private.replace('private-source.json',canonical(value))
                 return _copy(snapshot)
 
-    def _final_evidence(self, source):
+    def _final_evidence(self, source, *, schema='controller-test-evidence-v2'):
         if source.get('schema') == PRIVATE_SOURCE_SCHEMA:
-            return self.final_proof._aggregate_source_evidence(source,controller=self)
-        return self.final_proof.evidence(source)
+            return self.final_proof._aggregate_source_evidence(source,controller=self,schema=schema)
+        return self.final_proof.evidence(source,schema=schema)
 
     @staticmethod
     def _changes(workspaces, root, files):

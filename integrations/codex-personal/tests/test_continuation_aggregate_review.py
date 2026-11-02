@@ -92,6 +92,29 @@ def test_published_aggregate_runs_one_actual_reviewer_and_replay_is_historical(t
         before=source.status(source.operation_id);result=helper.run()
         assert result['status']=='complete' and result['verdict']=='corrections'
         assert len(turns)==1 and len(author_turns)==3 and public['posts']==public['pushes']==1
+        material=json.loads(turns[0].split('\n\nDelivery material:\n',1)[1])
+        assert material['schema']=='delivery-review-material-v1'
+        assert material['test_metadata_status']=='detailed' and material['completeness']=='complete'
+        assert material['operation_id']==source.operation_id
+        assert material['base_commit']==f.commit!=aggregate.final_proof.workspaces.grant['base_commit']
+        assert material['delivery_sha']==before['delivery_sha']
+        assert material['pull_request']==before['pull_request']
+        assert material['files'][0]['path']=='one.py'
+        assert material['files'][0]['content']=={'status':'complete',
+            'before_text':'value = 1\n','after_text':'value = 3\n'}
+        evidence=source.frame['evidence'];review=evidence['review']
+        assert material['test_evidence_sha256']==digest(canonical(evidence))
+        assert material['test_binding']=={k:v for k,v in review.items() if k!='tests'}
+        assert material['test_binding']['kind']=='aggregate'
+        assert material['test_binding']['original_public_base']==f.commit
+        assert material['test_binding']['source_snapshot_sha256']!=material['snapshot_sha256']
+        receipts={row['name']:row['sha256'] for row in evidence['receipts']}
+        assert material['tests']==[{**row,'controller_receipt_sha256':receipts[row['name']]}
+            for row in review['tests']]
+        assert len(material['tests'])==1 and material['tests'][0]['result']=='passed'
+        assert material['tests'][0]['script_sha256']==digest(f.verifier.read_bytes())
+        encoded=json.dumps(material,ensure_ascii=False)
+        assert str(f.verifier) not in encoded and f.verifier.read_text() not in encoded
         ticket=f.board.get_ticket(f.human,aggregate.final_proof.scope['ticket_id'])['ticket']
         assert ticket['status']=='review' and ticket['claimant'] is None
         assert 'Add a boundary test' in ticket['outcome'] and source.status(source.operation_id)==before

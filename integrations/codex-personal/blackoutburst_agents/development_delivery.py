@@ -232,26 +232,27 @@ class DevelopmentDeliveryProof:
             if len(rows)>128 or {row['id'] for row in rows} != expected_runtime: fail()
         return digest(canonical(sorted(hashes)))
 
-    def evidence(self, snapshot):
-        return self._evidence(snapshot)
+    def evidence(self, snapshot, *, schema='controller-test-evidence-v2'):
+        return self._evidence(snapshot, schema=schema)
 
-    def _aggregate_source_evidence(self, snapshot, *, controller):
+    def _aggregate_source_evidence(self, snapshot, *, controller, schema='controller-test-evidence-v2'):
         """Private whole-tree observation; never a public Delivery snapshot.
 
         The concrete live aggregate and its recorded source bytes are required.
         There is no serialized flag or ordinary GitDelivery empty-change mode.
         """
-        return self._evidence(snapshot, _aggregate=controller)
+        return self._evidence(snapshot, _aggregate=controller, schema=schema)
 
-    def _evidence(self, snapshot, *, _aggregate=None):
+    def _evidence(self, snapshot, *, _aggregate=None, schema='controller-test-evidence-v2'):
         try:
+            if schema not in ('controller-test-evidence-v1','controller-test-evidence-v2'): fail()
             op = self._operation(); manifest,broker,planner,policy,documents = self._documents(op)
             current,planner_hash = self._snapshot(snapshot,manifest,_aggregate=_aggregate)
             review = planner['review']; required = {suite['name'] for suite in manifest['tests']}
             if (not required or type(review['tests']) is not dict or set(review['tests']) != required
                     or review['snapshot_sha256'] != planner_hash or planner['tests'] != review['tests']
                     or review['diff']['base_sha'] != manifest['base_sha']): fail()
-            receipts = []; native_hashes = {}
+            receipts = []; native_hashes = {}; review_tests = []
             for name,proof in sorted(review['tests'].items()):
                 operation = broker['operations'][digest(proof['key'].encode('ascii'))]; receipt = operation['receipt']
                 if (proof['snapshot_sha256'] != planner_hash or operation['kind'] != 'test'
@@ -273,6 +274,19 @@ class DevelopmentDeliveryProof:
                         or native['reason'] != 'completed' or native['exit_code'] != 0 or native['source_released'] is not True
                         or native['output_bytes'] != receipt['output_bytes'] or native['output_sha256'] != receipt['output_sha256']): fail()
                 receipts.append(dict(name=name,sha256=proof['receipt_sha256'])); native_hashes[name]=record['native_receipt_sha256']
+                if schema=='controller-test-evidence-v2':
+                    script=decode(documents['backend'])['input_plan']['scripts'][name]
+                    suite=next(row for row in manifest['tests'] if row['name']==name)
+                    if (job['request']!=record['request'] or job['script_sha256']!=script['sha256']
+                            or any(script[key]!=suite[key] or job[key]!=suite[key]
+                                for key in ('timeout_seconds','max_output_bytes'))): fail()
+                    review_tests.append(dict(name=name,operation_id=receipt['operation_id'],
+                        script_sha256=script['sha256'],timeout_seconds=suite['timeout_seconds'],
+                        max_output_bytes=suite['max_output_bytes'],result=receipt['result'],
+                        cleanup_confirmed=receipt['cleanup_confirmed'],output_bytes=receipt['output_bytes'],
+                        output_sha256=receipt['output_sha256'],test_receipt_sha256=proof['receipt_sha256'],
+                        native_receipt_sha256=record['native_receipt_sha256'],native_exit_code=native['exit_code'],
+                        source_released=native['source_released']))
             runtime_hash = self._runtime(op,manifest,planner,policy)
             fresh = self._operation()
             if fresh != op or self._documents(fresh)[4] != documents: fail()
@@ -281,9 +295,20 @@ class DevelopmentDeliveryProof:
                 configuration_sha256=digest(canonical(self.configuration)),manifest_sha256=self.configuration['manifest_hash'],
                 planner_document_sha256=digest(documents['planner.json']),broker_document_sha256=digest(documents['state.json']),
                 planner_snapshot_sha256=planner_hash,git_snapshot_sha256=git_hash,runtime_cleanup_sha256=runtime_hash)
-            return dict(schema='controller-test-evidence-v1',snapshot_sha256=git_hash,receipts=[dict(name=row['name'],
+            if schema=='controller-test-evidence-v2':
+                review_metadata=dict(schema='verified-delivery-review-evidence-v1',kind='development',
+                    operation_id=self.operation_id,source_snapshot_sha256=git_hash,
+                    planner_snapshot_sha256=planner_hash,runtime_cleanup_sha256=runtime_hash,
+                    original_public_base=None,lineage_sha256=None,tests=review_tests)
+                binding['review_sha256']=digest(canonical(review_metadata))
+            evidence=dict(schema=schema,snapshot_sha256=git_hash,receipts=[dict(name=row['name'],
                 sha256=digest(canonical({**binding,'test_receipt_sha256':row['sha256'],'native_receipt_sha256':native_hashes[row['name']]})))
                 for row in receipts])
+            if schema=='controller-test-evidence-v2':
+                from .delivery_review_material import validate_review_evidence
+                evidence['review']=review_metadata
+                validate_review_evidence(evidence)
+            return evidence
         except DevelopmentError:
             raise
         except Exception:
@@ -292,7 +317,7 @@ class DevelopmentDeliveryProof:
     def __call__(self, *, operation_id, scope, snapshot, evidence):
         if (type(snapshot) is not dict or type(snapshot.get('request')) is not dict
                 or operation_id != self.operation_id or scope != snapshot['request'].get('scope')): fail()
-        if evidence != self.evidence(snapshot): fail()
+        if type(evidence) is not dict or evidence != self.evidence(snapshot,schema=evidence.get('schema')): fail()
         return True
 
 

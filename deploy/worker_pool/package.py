@@ -35,7 +35,9 @@ def required_sdk_modules(version):
     if type(version) is not str or re.fullmatch(r'0\.[0-9]+\.[0-9]+',version) is None:fail()
     return REQUIRED_SDK_MODULES + (('protected_public_pins',) if
         tuple(int(part) for part in version.split('.')) >= (0,35,0) else ()) + (
-        CONTINUATION_SDK_MODULES if continuation_supported(version) else ())
+        CONTINUATION_SDK_MODULES if continuation_supported(version) else ()) + (
+        ('delivery_review_material',) if
+        tuple(int(part) for part in version.split('.')) >= (0,45,6) else ())
 
 
 class PackageError(Exception):

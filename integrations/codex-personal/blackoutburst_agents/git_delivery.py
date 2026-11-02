@@ -260,9 +260,15 @@ class LocalGitDeliveryController:
         if value['phase'] == 'sealed': self._commit_proof(root, value)
 
     def _tests(self, value, evidence):
+        if type(evidence) is dict and evidence.get('schema')=='controller-test-evidence-v2':
+            from .delivery_review_material import validate_review_evidence
+            validate_review_evidence(evidence)
+            fields={'schema','snapshot_sha256','receipts','review'}
+        else:
+            fields={'schema','snapshot_sha256','receipts'}
         if (not callable(self.test_guard) or type(evidence) is not dict
-                or set(evidence) != {'schema','snapshot_sha256','receipts'}
-                or evidence['schema'] != 'controller-test-evidence-v1'
+                or set(evidence) != fields
+                or evidence['schema'] not in ('controller-test-evidence-v1','controller-test-evidence-v2')
                 or evidence['snapshot_sha256'] != value['snapshot_sha256']
                 or type(evidence['receipts']) is not list or not 1 <= len(evidence['receipts']) <= 32
                 or len(canonical(evidence)) > 32768): fail('git_delivery_test_evidence_required')

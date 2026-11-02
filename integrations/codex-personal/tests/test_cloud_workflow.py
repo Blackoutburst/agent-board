@@ -54,6 +54,26 @@ class CloudWorkflowTests(unittest.TestCase):
         self.assertIn('-value = 1',material);self.assertIn('+value = 2',material)
         self.assertEqual((f.pushes,f.posts),(1,1))
 
+    def test_transient_delivery_test_metadata_cannot_enter_reviewer_material(self):
+        f=self.fixture()
+        changes=f.workflow._postimages(f.pool,f.driver,f.job,['main.py','untouched.txt'])
+        f.helper.deliver(f)
+        target=f.pipeline.paths['deliveries']/f.operation/'delivery.json'
+        original=target.read_bytes();forged=json.loads(original)
+        forged['seal']['test_evidence']['review']['tests'][0]['script_sha256']='a'*64
+        forged_raw=canonical(forged);real=module.file_document;attacked=[]
+        def transient_read(path,maximum=module.MAX_CONFIG):
+            if Path(path)!=target or attacked:return real(path,maximum)
+            attacked.append(True)
+            with PrivateDirectory(target.parent) as private:
+                private.replace(target.name,forged_raw)
+                try:return real(path,maximum)
+                finally:private.replace(target.name,original)
+        with patch.object(module,'file_document',side_effect=transient_read):
+            with self.assertRaises(DevelopmentError):
+                f.workflow._material(f.pipeline,f.operation,changes)
+        self.assertEqual(attacked,[True]);self.assertEqual(target.read_bytes(),original)
+
     def test_workflow_rejects_model_like_destination_and_paths_outside_operator_manifest(self):
         f=self.fixture()
         with self.assertRaises(DevelopmentError):f.workflow._postimages(f.pool,f.driver,f.job,['outside.txt'])
@@ -134,6 +154,28 @@ class CloudWorkflowTests(unittest.TestCase):
         self.assertEqual(ticket['status'],'review');self.assertIsNone(ticket['claimant']);self.assertIsNone(ticket['assignee_agent_id'])
         item=result['jobs'][0];self.assertIn(item['delivery']['delivery_sha'],ticket['evidence'])
         self.assertIn('/pull/17',ticket['evidence']);self.assertIn(f.opinion_text,ticket['evidence'])
+        material=json.loads(f.review_turns[0].split('\n\nDelivery material:\n',1)[1])
+        self.assertEqual(material['schema'],'delivery-review-material-v1')
+        self.assertEqual(material['test_metadata_status'],'detailed')
+        self.assertEqual(material['completeness'],'complete')
+        self.assertEqual(material['operation_id'],item['source_operation_id'])
+        self.assertEqual(material['delivery_sha'],item['delivery']['delivery_sha'])
+        self.assertEqual(material['pull_request'],item['delivery']['pull_request'])
+        self.assertEqual(material['files'][0]['path'],'main.py')
+        self.assertEqual(material['files'][0]['content'],dict(status='complete',
+            before_text='value = 1\n',after_text='value = 2\n'))
+        source_record=json.loads((f.workflow.directory/'delivery-development'/'deliveries'/
+            item['source_operation_id']/'delivery.json').read_bytes())
+        evidence=source_record['seal']['test_evidence'];review=evidence['review']
+        self.assertEqual(material['test_evidence_sha256'],digest(canonical(evidence)))
+        self.assertEqual(material['test_binding'],{k:v for k,v in review.items() if k!='tests'})
+        receipt_hashes={row['name']:row['sha256'] for row in evidence['receipts']}
+        self.assertEqual(material['tests'],[{**row,'controller_receipt_sha256':receipt_hashes[row['name']]}
+            for row in review['tests']])
+        self.assertEqual(material['tests'][0]['result'],'passed')
+        self.assertEqual(material['tests'][0]['native_exit_code'],0)
+        self.assertNotIn('stdout',material['tests'][0])
+        self.assertNotIn('script',material['tests'][0])
         self.assertNotEqual(f.workflow.review_drivers['development'].fixed['agent_id'],f.scope['agent_id'])
         self.assertEqual(ticket['version'],before['version']+4)
         self.assertEqual((f.native_prepares,f.native_qualifications),(1,1))

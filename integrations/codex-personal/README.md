@@ -2,6 +2,14 @@
 
 Ce module vérifie une connexion ChatGPT personnelle et fournit un exécutant local capable de conserver puis reprendre les sessions Codex. La première preuve locale du 15 octobre 2026 a réussi avec Codex `0.162.0-alpha.17.2` : connexion ChatGPT reconnue, réponse exacte reçue et tour terminé sans erreur.
 
+La source 0.45.6 complète le contexte de revue : fichiers avant/après complets
+quand ils tiennent dans les 24 000 octets, omissions explicites sinon, et
+métadonnées des tests finaux réellement vérifiés. Les scripts privés et leur
+sortie ne sont pas transmis. Le reviewer conserve son verdict indépendant.
+Le pilote réel 0.45.5 #65 a confirmé les deux générations, la PR #82 et l’avis
+distinct ; cet avis `limited` a motivé ce complément. Un nouvel essai sélectionné
+doit valider la source 0.45.6 avant de la présenter comme installée.
+
 Les commandes `doctor` et `probe` établissent une **preuve ponctuelle de connexion personnelle**. Les commandes [`runner`](RUNNER.md) ajoutent les tours de texte avec état durable, reprise exacte, déduplication et annulation. Les commandes [`context`](CONTEXT.md) lisent les sources d’un ticket via le MCP du board, les conservent localement et vérifient leur version avant un tour explicitement demandé. La commande [`worker`](WORKER.md) réserve un ticket choisi explicitement, exécute un tour textuel et publie sa réponse en revue, avec un journal des effets et une reprise après coupure. La commande [`events drain`](EVENTS.md) conserve les événements d’un ticket et peut soumettre un lot au worker sur demande explicite. La commande [`queue`](QUEUE.md) prévisualise les tickets éligibles et peut en sélectionner un seul dans un projet explicitement choisi. Aucun listener, orchestrateur général ou service cloud n’est activé par ce programme.
 
 Depuis 0.33.0, la source compose le profil Linux explicite avec des
@@ -55,8 +63,8 @@ distinct, avant un refus `continuation_review_cleanup_unknown`. Son avis final
 n'est pas confirmé. La version 0.45.5 réduit la répétition des validations
 locales pendant une même observation de publication en lecture seule, avec
 validation complète avant et après, permissions et Stop frais par commande.
-Le même scénario composé profilé passe de 173 à 81 secondes ; le nouvel essai
-réel et son nettoyage restent à valider.
+Le même scénario composé profilé passe de 173 à 81 secondes ; le pilote réel
+#65 a ensuite confirmé le parcours avec sortie propre des opérations sélectionnées.
 
 La version 0.42 conserve dans les notifications du board les codes publics
 connus des refus de planification, d'action et de budget. Les valeurs inconnues
