@@ -71,6 +71,23 @@ def actions(case):
         case.action('read',path='main.py'),case.action('test',name='unit'),case.action('final',summary='verified')]
 
 
+def test_generic_one_action_partial_checkpoint_remains_valid(checkpoint_case):
+    from dataclasses import replace
+    case = checkpoint_case
+    case.checkpoint_request = replace(case.checkpoint_request, after_actions=1)
+    case.actions = actions(case)
+    first = case.worker.run(case.operation)
+    assert first['stage'] == 'running' and first['status'] == 'pending'
+    assert type(case.frames[0]) is DevelopmentCheckpointReady
+    observation = case.observations[0]
+    assert observation['used_planner']['actions'] == observation['used_planner']['turns'] == 1
+    assert observation['passed_tests_promoted'] is False
+    assert len(case.inferences) == 1 and not case.backend.calls and len(case.actions) == 3
+    case.worker.planner_factory = DevelopmentPlanner
+    final = case.worker.run(case.operation)
+    assert final['status'] == 'review_ready' and len(case.inferences) == 4 and len(case.backend.calls) == 1
+
+
 @pytest.mark.parametrize('checkpoint_case',[None,'low'],indirect=True)
 def test_patch_read_yield_is_ready_without_next_prompt_or_budget_charge(checkpoint_case):
     case=checkpoint_case;case.actions=actions(case)

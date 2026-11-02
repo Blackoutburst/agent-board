@@ -84,7 +84,7 @@ def test_pending_intent_never_replayed_and_changed_config_never_freshens_namespa
         result=service._target(owned.path,target,job,module._Pass(service,None))
         assert result['phase']=='needs_you' and result['reason']=='continuation_pool_pending'
         assert before=={str(p):p.read_bytes() for p in directory.rglob('*') if p.is_file()}
-        config['tasks'][0]['checkpoint_after_actions']=1;write();other=construct()
+        config['tasks'][0]['checkpoint_after_actions']=3;write();other=construct()
         with pytest.raises(DevelopmentError,match='continuation_pool_binding_changed'):
             other._target(owned.path,target,job,module._Pass(other,None))
 
@@ -108,7 +108,7 @@ def test_global_deadline_cancels_active_target_and_blocks_later_one(service_case
         connection_file=str(root/'connections/second.json'))
     job['repository']['workspace_root']=str(root/'checkouts'/batch['batch_id']/'second');batch['jobs'].append(job)
     spec=deepcopy(workflow['jobs'][0]);spec['name']='second';workflow['jobs'].append(spec)
-    config['tasks'].append(dict(name='second',logical_task_id=str(uuid.uuid4()),checkpoint_after_actions=1));write()
+    config['tasks'].append(dict(name='second',logical_task_id=str(uuid.uuid4()),checkpoint_after_actions=2));write()
     service=construct();available_apis(monkeypatch);calls=[];original=module._Pass.__init__
     def short(self,*args):original(self,*args);self.deadline=time.monotonic()+.06
     monkeypatch.setattr(module._Pass,'__init__',short)

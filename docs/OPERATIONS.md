@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.18.1/schema 18 with adapter 0.48.0.
+Current source is Board 2.18.1/schema 18 with adapter 0.48.1.
 
 The hosted board's scoped Lead can retarget inactive tickets between explicitly
 authorized resources after its owner enables the separate permission. PR #83

@@ -69,6 +69,23 @@ def test_standing_plan_ignores_tickets_and_performs_no_rpc_or_creation(tick_case
     assert client.calls==[] and not (root/'admissions').exists()
 
 
+def test_one_action_standing_tick_refuses_before_rpc_admission_or_service(tick_case):
+    root, path, _, client, controller, workflow, _, run, calls, *_ = tick_case
+    with pytest.raises(DevelopmentError, match='^development_queue_tick_invalid$'):
+        plan = controller.tick_plan(path, str(workflow), checkpoint_after_actions=1)
+        run(checkpoint_after_actions=1, approved_sha256=plan['approval_sha256'])
+    assert client.calls == [] and calls == [] and not (root / 'admissions').exists()
+
+
+@pytest.mark.parametrize('threshold', [2, 3])
+def test_standing_window_accepts_two_or_three_actions_in_an_inert_plan(tick_case, threshold):
+    root, path, _, client, controller, workflow, *_ = tick_case
+    result = controller.tick_plan(path, str(workflow), checkpoint_after_actions=threshold)
+    assert result['binding']['checkpoint_after_actions'] == threshold
+    assert result['activated'] is result['launchable'] is False
+    assert client.calls == [] and not (root / 'admissions').exists()
+
+
 def standing_wrapper(t):
     root,path,_,_,c,workflow,*_=t
     value=dict(schema='linux-cloud-queue-continuation-v1',catalog_file=str(path),workflow_file=str(workflow),

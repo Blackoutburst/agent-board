@@ -67,6 +67,26 @@ def test_plan_copies_exact_caps_without_credentials_models_or_private_state(case
     assert set(p.name for p in root.iterdir())=={'config'}
 
 
+@pytest.mark.parametrize('threshold', [1, 2, 3])
+def test_complete_workflow_leaves_room_for_test_and_final_before_yield(case, monkeypatch, threshold):
+    root, path, config, batch, workflow, write, load = case
+    config['tasks'][0]['checkpoint_after_actions'] = threshold
+    write()
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    import socket, subprocess
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Configuration validation must not execute or connect')
+    monkeypatch.setattr(socket, 'socket', forbidden)
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    if threshold == 1:
+        with pytest.raises(DevelopmentError, match='^continuation_pool_cycle_limits_invalid$'):
+            load()
+    else:
+        loaded, _ = load()
+        assert loaded['configuration']['tasks'][0]['checkpoint_after_actions'] == threshold
+    assert before == {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
 @pytest.mark.parametrize('key,value',[
     ('concurrency',True),('concurrency',0),('concurrency',8),
     ('provider_backoff_seconds',True),('provider_backoff_seconds',29),('provider_backoff_seconds',3601),
@@ -160,7 +180,7 @@ def second_target(case):
     other['repository']['workspace_root']=str(root/'checkouts'/batch['batch_id']/'coder2')
     batch['jobs'].append(other)
     review=deepcopy(workflow['jobs'][0]);review['name']='coder2';workflow['jobs'].append(review)
-    config['tasks'].append(dict(name='coder2',logical_task_id=str(uuid.uuid4()),checkpoint_after_actions=1))
+    config['tasks'].append(dict(name='coder2',logical_task_id=str(uuid.uuid4()),checkpoint_after_actions=2))
     config['concurrency']=2
 
 
