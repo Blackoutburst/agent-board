@@ -723,7 +723,7 @@
     "tests/test_worker_pool_planner_diagnostic.py": "b3710c6c9edaef38e040c4bc9b53d7966d17b28cc4bf5473f84b7db05d6ab2e2",
     "tests/test_worker_pool_standalone_bootstrap.py": "c93092429702e21786bfd63eb9412a75d47b8ab95cf3c1d150add4b25a3340a0",
     "tests/test_worker_pool_upgrade.py": "627389c669b98ca2f3fe684defdf5a17e662b39487eab951bede8087bed38f2e",
-    "tests/test_worker_pool_upgrade_cli.py": "f71bdc86a9e1ca1f6ae9899b44f75619f651f0fd373d6eabc6ee9142a13eb478",
+    "tests/test_worker_pool_upgrade_cli.py": "1ab9d0573047897a90006fb5c1aee65b6b7f7e86ea8013eac2bc8280a7be0016",
     "tests/test_worker_pool_upgrade_diagnostics.py": "ee3096578cb300be672faa595ad541d10d423bcb0eb803982458c4d1e0b84458",
     "updates/conversations-20261015/apply_conversations_release.py": "d189f66b71ed4cfc919242b84ce6fffe24667e177a48dea11804122b391e645b",
     "updates/conversations-20261015/manifest.json": "248ab4cfcfb7fe3918db8968fa5fcb600f90285b24e6a24ae275cb966a358e23",
