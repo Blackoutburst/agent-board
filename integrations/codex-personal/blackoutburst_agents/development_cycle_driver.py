@@ -8,6 +8,7 @@ from contextlib import closing,contextmanager
 from copy import deepcopy
 import fcntl
 import os
+import re
 from pathlib import Path
 import threading
 
@@ -183,6 +184,48 @@ def validate_worker_checkpoint_caps(op,manifest,backend,controller):
         'development_cycle_caps_changed')
 
 
+def _recorded_linux_policy(directory,fingerprint):
+    """Pinned historical metadata; never an execution-qualified policy handle."""
+    from . import linux_planner_policy as policy
+    with PrivateDirectory(directory) as private:
+        raw=private.read('planner-plan.json',policy.MAX_PLAN_BYTES);p=decode(raw)
+        fields={'schema','profile_version','origin','workspace','workspace_identity','workspace_chain',
+            'checkout','checkout_identity','checkout_chain','private_identity','private_chain','executable',
+            'executable_pin','cli_version','cli_sha256','interpreter','interpreter_pin','policy',
+            'canary_sha256','source_pins','environment','environment_sha256'}
+        require(type(p) is dict and set(p)==fields and canonical(p)==raw and digest(raw)==fingerprint
+            and p['schema']==policy.PLAN_SCHEMA and type(p['profile_version']) is int
+            and p['profile_version']==policy.PROFILE_VERSION,'development_cycle_tools_changed')
+        _operation(p['origin'])
+        policy.validate_linux_execution_identity(p['environment'])
+        require(type(p['cli_version']) is str and re.fullmatch(r'codex-cli [0-9][A-Za-z0-9._+-]{0,79}',p['cli_version'])
+            and p['environment_sha256']==digest(canonical(p['environment']))
+            and p['policy']==policy.permission_document(p['workspace'],executable=p['executable'])
+            and p['canary_sha256']==digest(policy.LINUX_CANARY.encode())
+            and p['source_pins']==policy.linux_source_pins(),'development_cycle_tools_changed')
+        for name in ('workspace','checkout'):
+            require(canonical(policy._directory(p[name],**({'empty':True,'private':True} if name=='workspace' else {})))
+                ==canonical(p[name+'_identity']) and policy._chain(p[name])==p[name+'_chain'],
+                'development_cycle_tools_changed')
+        require(list(private.identity)==p['private_identity'] and policy._chain(str(private.path))==p['private_chain'],
+            'development_cycle_tools_changed')
+        for name in ('executable','interpreter'):
+            require(policy._executable_pin(p[name])==p[name+'_pin'],'development_cycle_tools_changed')
+        require(p['cli_sha256']==p['executable_pin']['sha256'],'development_cycle_tools_changed')
+        for path in (p['checkout'],str(private.path),str(Path(p['executable']).parent),
+                     str(Path(p['interpreter']).parent),str(Path(__file__).parent)):
+            policy._separate(p['workspace'],path)
+        private.verify()
+        return p
+
+
+def _generation_environment(previous,current):
+    from .linux_planner_policy import validate_linux_execution_identity
+    for value in (previous,current):validate_linux_execution_identity(value)
+    require({key:value for key,value in previous.items() if key!='namespaces'}==
+        {key:value for key,value in current.items() if key!='namespaces'},'development_cycle_caps_changed')
+
+
 def _validate_next_inputs(op,parameters,observation,*,preparer=None,operation_id=None):
     """Static approved inputs only; no backend construction or qualification."""
     from . import linux_pool_preparation as preparation
@@ -221,14 +264,18 @@ def _validate_next_inputs(op,parameters,observation,*,preparer=None,operation_id
         'development_cycle_caps_changed')
     for key in ('interpreter','unshare'):
         require(parameters[key]==old[key],'development_cycle_tools_changed')
-    from .linux_planner_policy import LinuxPlannerPolicy
-    with LinuxPlannerPolicy(op['configuration']['pins']['planner_policy']['path']) as policy:
-        policy.validate_for(policy.executable,policy.workspace)
-        require(policy.fingerprint==op['configuration']['policy_hash']
-            and parameters['executable']==policy.executable and parameters['cli_version']==policy._plan['cli_version'],
-            'development_cycle_tools_changed')
+    recorded=_recorded_linux_policy(op['configuration']['pins']['planner_policy']['path'],op['configuration']['policy_hash'])
+    require(recorded['environment']==old['environment'] and parameters['executable']==recorded['executable']
+        and parameters['cli_version']==recorded['cli_version'],'development_cycle_tools_changed')
     if plan!=old:
-        for key in ('environment','sources','interpreter','interpreter_pin','unshare','unshare_pin',
+        _generation_environment(old['environment'],plan['environment'])
+        from .linux_planner_policy import LinuxPlannerPolicy
+        with LinuxPlannerPolicy(Path(preparer.directory)/operation_id/'policy') as policy:
+            policy.validate_for(policy.executable,policy.workspace)
+            require(policy.environment==plan['environment'] and all(policy._plan[key]==recorded[key] for key in
+                ('executable','executable_pin','cli_version','cli_sha256','interpreter','interpreter_pin','source_pins')),
+                'development_cycle_tools_changed')
+        for key in ('sources','interpreter','interpreter_pin','unshare','unshare_pin',
                     'runtime','bootstrap_sha256','seccomp_sha256','imports','limits'):
             require(plan[key]==old[key],'development_cycle_caps_changed')
         script=plan['input_plan']['scripts'][test['name']]
