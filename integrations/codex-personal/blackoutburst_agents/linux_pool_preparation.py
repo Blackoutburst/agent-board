@@ -90,14 +90,15 @@ class LinuxPoolJobPreparer:
                 fail('linux_pool_job_not_queued')
             return state['id'],job
 
-    def _local(self, request):
+    def _local(self, request, *, cycle_fresh=True):
         if getattr(self,'_continuation_initial_preparation',None) is not None:
             from .continuation_pool_service import check_initial_preparation
             check_initial_preparation(self,request['job']['id'],fresh=True)
         if getattr(self,'_checkpoint_preparation',None) is not None:
             from .development_cycle_driver import check_preparer_cycle
-            # Fresh callbacks stay outside the global Pool metadata mutex.
-            check_preparer_cycle(self,request['job']['id'],fresh=True)
+            # Whole Core observations belong to preparation boundaries. Native
+            # polls retain local identity/Stop plus their own fresh authority.
+            check_preparer_cycle(self,request['job']['id'],fresh=cycle_fresh)
         with PrivateDirectory(self.directory):pass
         if (_directory_pin(self.directory)!=self.pin or self.driver.selections.fixed!=self.fixed
                 or self.workspaces.grant!=self.grant or self.workspaces.pins!=self.git_pins
@@ -200,9 +201,11 @@ class LinuxPoolJobPreparer:
                     or client.session_id!=request['job']['session_id']):fail('linux_pool_registration_changed')
             yield self._authority(client,client.register_initial(),request,expected_scope=expected_scope)
 
-    def _fresh(self, authority, request, baseline=None):
-        self._local(request)
+    def _fresh(self, authority, request, baseline=None, *, cycle_fresh=True):
+        self._local(request,cycle_fresh=cycle_fresh)
         observed=authority.snapshot()
+        # Also bracket legacy non-frame RPCs with current local Stop/pins.
+        self._local(request,cycle_fresh=False)
         ticket=observed['ticket']
         if (ticket['status']!='todo' or ticket['claimant'] is not None
                 or ticket.get('delegation') is not None or ticket.get('claim_expired') is True
@@ -286,7 +289,7 @@ class LinuxPoolJobPreparer:
                         try:started=time.monotonic_ns()
                         except Exception:pass
                         try:
-                            held();scope_stage='fresh';self._fresh(authority,request,baseline)
+                            held();scope_stage='fresh';self._fresh(authority,request,baseline,cycle_fresh=False)
                             scope_stage='scope'
                             allowed=given==manifest_scope and action in request['actions'] and wanted==request['resource']
                             return allowed

@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.18.1/schema 18 with adapter 0.48.1.
+Current source is Board 2.18.1/schema 18 with adapter 0.48.2.
 
 Stopped continuation upgrades reset a service's failed state only when the
 service was failed before the upgrade. Inactive units may be unloaded after
