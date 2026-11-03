@@ -9,8 +9,10 @@ See [companion identity and migration](docs/COMPANIONS.md) and the exhaustive
 their own agent transport identity and audited owner linkage. They may dispatch,
 answer their owner's requests, decide reviews and pause/resume ordinary agents or
 project automation. They never claim/work tickets or gain permission, identity,
-pairing, account or device-management powers. The two added MCP operations are
-`resolve_human_request` and `set_companion_agent_status`; ordinary agent behavior
+pairing, account or device-management powers. The added MCP operations are
+`resolve_human_request`, `set_companion_agent_status` and `update_companion_profile`
+(a companion's own name, avatar and description only, so its companion app can keep
+them in step); ordinary agent behavior
 and browser human authentication remain enforced.
 
 Specific-agent ticket creation is separately delegable with the explicit

@@ -50,7 +50,7 @@ MAX_BODY = 15 * 1024 * 1024
 APPEND_MANAGER_TOOLS = frozenset({'poll_server_messages_appends', 'prepare_server_messages_append',
     'precommit_server_messages_append', 'commit_server_messages_append', 'complete_server_messages_append',
     'report_server_messages_append_status'})
-COMPANION_TOOLS = frozenset({'resolve_human_request', 'set_companion_agent_status'})
+COMPANION_TOOLS = frozenset({'resolve_human_request', 'set_companion_agent_status', 'update_companion_profile'})
 
 
 class BoardMCP(FastMCP):
@@ -72,7 +72,8 @@ class BoardMCP(FastMCP):
         elif name == 'claim_selected_queue_ticket':
             validate_selected_queue_claim_arguments(arguments)
         elif name in COMPANION_TOOLS:
-            model = CompanionStatusArguments if name == 'set_companion_agent_status' else CompanionAnswerArguments
+            model = {'set_companion_agent_status': CompanionStatusArguments,
+                     'update_companion_profile': CompanionPresentationArguments}.get(name, CompanionAnswerArguments)
             try:
                 model.model_validate(arguments)
             except ValueError:
@@ -330,6 +331,13 @@ class CompanionStatusArguments(ProjectBody):
     expected_version: Version
     status: Literal['active', 'paused']
     idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class CompanionPresentationArguments(ProjectBody):
+    session_id: str = Field(min_length=1, max_length=200)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    avatar: str | None = Field(default=None, max_length=32)
+    description: str | None = Field(default=None, max_length=4000)
 
 
 class CompanionAnswerArguments(ProjectBody):
@@ -799,6 +807,12 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     async def get_managed_agent_profile(session_id: str, profile_id: str, view: Literal['compact','full'] = 'full') -> dict:
         """Read one ordinary profile within your explicit human delegation. Never returns connection keys, bindings, Runtime or another management profile. Full view preserves exact instructions and policy for a later CAS; reading grants no authority."""
         return managed_profile_view(board.get_managed_agent_profile(session_actor(session_id),profile_id),view)
+
+    @mcp.tool()
+    async def update_companion_profile(session_id: str, name: str | None = None, avatar: str | None = None,
+                                       description: str | None = None) -> dict:
+        """Companions only: keep your own Board name, avatar and description in step with your companion app. Supply only changed fields. Your kind, permissions, projects and bindings stay with your owner."""
+        return board.update_companion_profile(session_actor(session_id), name, avatar, description)
 
     @mcp.tool()
     async def set_companion_agent_status(session_id: str, profile_id: str, expected_version: Version,
@@ -1311,7 +1325,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.18.1", "schema_version": 19, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal", "managed_ticket_resource_routing", "ticket_resolutions", "selected_queue_admission", "companion_profiles"]}
+        return {"status": "ok", "version": "2.19.0", "schema_version": 19, "features": ["projects", "tickets", "dependencies", "agent_identities", "agent_profiles", "profile_permissions", "work_queue", "leases", "human_requests", "pairing", "activity", "agent_mentions", "focused_inbox", "project_labels", "attachment_transfer", "message_only_inbox", "runtime_reservations", "owner_execution_limits", "usage_observations", "task_description_attachments", "markdown_rendering", "confirmed_message_feed", "exact_message_source", "message_execution_scope", "bounded_mcp_reads", "assignment_inbox", "delegation_families", "get_development_frame", "server_instance_controls", "provider_preparation", "message_admission_refusals", "explicit_admission_seal", "explicit_catalogue_replacement", "provisioning_draft_requests", "messages_append_v1", "delegated_agent_profile_management", "get_development_ticket_frame", "delegated_agent_claim_release", "device_rename", "profile_binding_removal", "managed_ticket_resource_routing", "ticket_resolutions", "selected_queue_admission", "companion_profiles"]}
 
     @app.get("/api/notifications")
     async def notification_status(actor=Depends(human)):

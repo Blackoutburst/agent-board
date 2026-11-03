@@ -187,3 +187,26 @@ def test_companion_bearer_never_opens_human_settings_profile_or_pairing_routes(c
             'allow_requests': True, 'actions': [], 'resources': []}).status_code == 401
     finally:
         agent.close()
+
+
+def test_mcp_companion_presentation_follows_the_app_and_nothing_else(companion_browser):
+    home = companion_browser; board = home['board']
+    tools = {tool['name']: tool for tool in rpc(home['client'], home['device']['token'], 'tools/list').json()['result']['tools']}
+    assert set(tools['update_companion_profile']['inputSchema']['properties']) == {'session_id', 'name', 'avatar', 'description'}
+    updated = call(home, 'update_companion_profile', {'name': 'Claude', 'avatar': '✳️', 'description': "Blackout's companion"})
+    assert updated['name'] == 'Claude' and updated['avatar'] == '✳️' and updated['kind'] == 'companion'
+    assert updated['version'] == home['profile']['version'] + 1
+    stored = board.get_agent_profile(home['human'], home['profile']['id'])
+    assert stored['description'] == "Blackout's companion" and stored['policy'] == home['profile']['policy']
+    assert stored['project_ids'] == home['profile']['project_ids'] and stored['status'] == 'active'
+    # The calling session stays current, and an unchanged update is a no-op.
+    again = call(home, 'update_companion_profile', {'name': 'Claude'})
+    assert again['version'] == updated['version']
+    call(home, 'list_projects')
+    # Nothing but presentation can be sent, and ordinary agents cannot use it.
+    call(home, 'update_companion_profile', {'status': 'paused'}, error=True)
+    call(home, 'update_companion_profile', {}, error=True)
+    call(home, 'update_companion_profile', {'avatar': 'https://x'}, error=True)
+    worker = home['worker']
+    with pytest.raises(Exception, match='Only a companion'):
+        board.update_companion_profile(worker['actor'], name='Renamed')

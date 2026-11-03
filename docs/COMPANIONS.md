@@ -36,7 +36,9 @@ MCP uses existing `create_ticket`, `update_ticket`, `release_ticket`, `get_work`
 `list_agents` and `update_project` operations. `resolve_human_request` answers an
 owner-addressed request. `set_companion_agent_status` accepts only an ordinary
 owned profile ID, current version, `active`/`paused` and a stable retry key. Its
-response and `list_agents` expose a public version for CAS, without bindings,
+response and `list_agents` expose a public version for CAS. `update_companion_profile`
+lets a companion change only its own name, avatar and description (its companion app
+syncs them); the calling session stays current and unchanged values are a no-op. Its status, without bindings,
 credentials, instructions or policy. Status changes do not stop running processes
 or fabricate cleanup; owners/workers still reconcile existing effects normally.
 

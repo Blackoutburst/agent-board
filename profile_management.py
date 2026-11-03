@@ -182,6 +182,26 @@ class ProfileManagementMixin:
             self._audit(db,actor,'companion_agent_status_changed',dict(profile_id=profile_id,status=status,version=expected_version+1))
             return result
 
+    def update_companion_profile(self,actor,name=None,avatar=None,description=None):
+        """A companion keeps its own name, avatar and description in step with its companion app.
+        Nothing else: kind, policy, projects, status and bindings stay with the human owner."""
+        fields={key:value for key,value in (('name',name),('avatar',avatar),('description',description)) if value is not None}
+        if not fields:_fail('Supply name, avatar or description',400)
+        with self._tx() as db:
+            actor=self._actor(db,actor)
+            profile=self._profile_for_actor(db,actor)
+            if not profile or profile['kind']!='companion' or actor.get('companion_for')!=actor['owner_id']:
+                _fail('Only a companion can update its own presentation',403)
+            values=self._profile_values(db,actor,fields)
+            current=json.loads(profile['fields'])
+            if all(current.get(key)==value for key,value in values.items()):
+                return self._profile_public(profile)
+            self._write_profile(db,profile['id'],values)
+            # The session that made the change stays current; other sessions re-register as usual.
+            db.execute('UPDATE sessions SET profile_version=? WHERE id=?',(profile['version']+1,actor['session_id']))
+            self._audit(db,actor,'companion_presentation_updated',dict(profile_id=profile['id'],version=profile['version']+1,fields=sorted(values)))
+            return self._profile_public(db.execute('SELECT * FROM agent_profiles WHERE id=?',(profile['id'],)).fetchone())
+
     def _managed_retry(self,db,actor,manager,ceiling,operation,key,payload):
         _identity(key)
         previous=self._retry(db,actor,operation,key,payload)
