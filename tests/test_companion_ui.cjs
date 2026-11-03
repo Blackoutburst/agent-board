@@ -16,7 +16,8 @@ class Element {
     this.append(children);
     this.elements = { namedItem: name => this.querySelectorAll('input, textarea, select').find(node => node.name === name) };
   }
-  append(...values) { this.children.push(...values.flat(Infinity).filter(value => value != null)); }
+  // Like the browser: native append() renders null/undefined as text ("null").
+  append(...values) { this.children.push(...values.flat(Infinity).map(value => value === null || value === undefined ? String(value) : value)); }
   replaceChildren(...values) { this.children = []; this.append(values); }
   setAttribute(key, value) { this.props[key] = value; this[key] = value; }
   addEventListener(name, action) { this.listeners[name] = action; }
@@ -147,6 +148,7 @@ const reset = () => { entries = []; calls.length = 0; scope.state.actor = { kind
   assert.equal(modal.title, 'Create companion'); checks++;
   const create = modal.content; create.elements.namedItem('name').value = 'Ari';
   ok(!text(create).includes('Authorized queue work'));
+  ok(!text(create).includes('null'), 'Hidden companion sections leave no "null" text');
   await create.submit(new FormData(create));
   const post = calls.find(call => call.method === 'POST');
   assert.equal(post.data.kind, 'companion'); checks++;

@@ -1847,7 +1847,9 @@ const Workspace = (() => {
     ticketResourceManagementInput.addEventListener("change", () => { ticketResourceManagementTouched = true; });
     ticketCreationManagementInput.addEventListener("change", () => { ticketCreationManagementTouched = true; });
     refreshClaimManagement();
-    form.append(creatingCompanion ? null : projectPicker, creatingCompanion ? null : permissions,
+    // Native append() writes null as the text "null"; skip the sections a companion does not have.
+    const appendPresent = (node, ...children) => node.append(...children.flat().filter(child => child !== undefined && child !== null));
+    appendPresent(form, creatingCompanion ? null : projectPicker, creatingCompanion ? null : permissions,
       companion ? null : el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
         el("p", { class: "small muted" }, "Autorise la création, la modification et l’archivage réversible des profils ordinaires de votre compte. Chaque profil doit rester dans les projets suivis et sous les plafonds effectifs de permissions, d’actions, de ressources et d’autonomie de ce Lead."),
         el("p", { class: "small muted" }, p?.legacy ? "Créez un nouveau profil à projets explicites pour cette délégation. Le nom du rôle seul ne donne aucun droit." : "Activez la lecture et les demandes de travail, choisissez des projets explicites et une sélection de travail autorisée. Les identités Management, les connexions et les limites d’exécution restent gérées par vous. Cette délégation ne démarre aucun agent."),
