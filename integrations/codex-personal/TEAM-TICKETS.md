@@ -12,6 +12,16 @@ writer, or a completed project. The Board schema and worker tool channels are
 unchanged. The caller must already have delegated profile-read and work-request
 permissions for the selected project and resources.
 
+On a Board with companion/assigned-creation gates, the human owner must also
+separately enable **Créer des tickets affectés aux agents autorisés** for this
+Lead. This grants `agent.ticket.create_assigned`; base profile management and
+the local plan approval hash do not imply assigned-ticket authority. Existing
+Leads are not upgraded automatically. Refresh the registered session normally
+after the profile version changes. The current project/resource and same-owner
+destination ceilings apply to both worker slots and the exact Lead self-slot.
+Without the grant, preview may read permitted sources, but publication is refused
+before any ticket creation or creation-receipt replay.
+
 ## Operator documents
 
 Save a UTF-8 `catalog.json` using actual existing ordinary profile IDs and their

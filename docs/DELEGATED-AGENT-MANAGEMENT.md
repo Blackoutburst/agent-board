@@ -55,6 +55,25 @@ same `expected_version`/`enabled` body. It grants only
 `agent.ticket.retarget_resource` to the selected profile and account ceiling.
 Clearing base Management removes this permission from the profile as well.
 
+Assigned-ticket creation has a separate optional human grant, disabled by
+default. Select **Créer des tickets affectés aux agents autorisés** after
+enabling profile management. The human-only endpoint
+`PUT /api/agent-profiles/{profile_id}/ticket-creation-management` accepts the
+same strict `expected_version`/`enabled` body. It grants only
+`agent.ticket.create_assigned` to the selected ordinary scoped profile and the
+account ceiling. Existing profile management and SDK plan approval do not imply
+this permission. Clearing base Management removes it from the profile too.
+Revocation remains available after the prerequisites were removed; grant
+changes require the normal session/profile refresh before further work.
+
+The existing `create_ticket` tool then permits assigned creation only to a
+same-owner ordinary managed worker, or the exact authenticated Lead self-slot,
+inside its current project and grant ceilings. The task's nonempty exact
+ordinary resource must be stored and effective for the Lead and allowed by the
+destination. Other managers, companions, legacy/inactive/out-of-ceiling targets
+are refused. It grants no reassign/release or execution authority. Authorization
+is rechecked before exact-key creation receipt replay.
+
 ## MCP tools
 
 All calls require the registered `session_id`; the server derives the owner,

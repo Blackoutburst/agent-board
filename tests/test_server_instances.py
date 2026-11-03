@@ -308,13 +308,15 @@ def test_schema13_to14_preserves_accounts_profiles_and_old_tables(env):
         db.execute('DROP TABLE runtime_admission_refusals')
         for name in ('server_control_receipts','server_instance_commands','server_instances','server_hosts'):
             db.execute('DROP TABLE ' + name)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=13')
     reopened = Board(b.data_dir)
     assert reopened.get_agent_profile(human, profile['id']) == before
     assert reopened.authenticate(device['token']) == raw
     assert reopened.list_server_hosts(human) == {'hosts': []}
     with reopened._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 18
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
     assert Board(b.data_dir).list_server_hosts(human) == {'hosts': []}
 
 
@@ -505,6 +507,8 @@ def test_schema14_migration_failure_is_atomic_with_no_partial_role(env, monkeypa
         db.execute('DROP TABLE runtime_admission_refusals')
         for name in ('server_control_receipts','server_instance_commands','server_instances','server_hosts'):
             db.execute('DROP TABLE ' + name)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=13')
     original = board_module.migrate_server_instances
     def fail(db):

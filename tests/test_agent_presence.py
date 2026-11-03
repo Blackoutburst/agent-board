@@ -9,7 +9,7 @@ from mcp_views import MCPViews, compact
 
 NOW = 1800000000
 CONTROLS = {'presence', 'online', 'last_seen_at', 'idle_after_seconds'}
-PUBLIC = {'id', 'owner_id', 'name', 'avatar', 'status'} | CONTROLS
+PUBLIC = {'id', 'owner_id', 'name', 'avatar', 'status', 'kind', 'acts_for', 'version'} | CONTROLS
 
 
 @pytest.fixture

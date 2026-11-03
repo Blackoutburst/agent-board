@@ -106,7 +106,7 @@ def _request_view(row, body):
 
 class ServerProvisioningMixin:
     def _provisioning_schema(self, db):
-        if db.execute('PRAGMA user_version').fetchone()[0] not in (16, 17, 18):
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (16, 17, 18, 19):
             _fail('server_provisioning_schema_invalid', 409)
         names = tuple(SQL)[:4]
         if any(row['name'] not in SQL for row in db.execute(
@@ -173,7 +173,7 @@ class ServerProvisioningMixin:
 
     def _provisioning_profile(self, db, host, profile_id):
         row = db.execute('SELECT * FROM agent_profiles WHERE id=? AND owner_id=?', (profile_id, host['owner_id'])).fetchone()
-        if (row is None or row['status'] != 'active' or db.execute('''SELECT 1 FROM agent_profile_bindings
+        if (row is None or row['kind'] != 'agent' or row['status'] != 'active' or db.execute('''SELECT 1 FROM agent_profile_bindings
                 WHERE profile_id=? AND device_id=?''', (profile_id, host['device_id'])).fetchone() is None):
             _fail('server_provisioning_profile_unavailable', 409)
         snap = db.execute('''SELECT length(CAST(snapshot AS BLOB)) AS size FROM agent_profile_versions
@@ -187,6 +187,9 @@ class ServerProvisioningMixin:
             expected = {**dict(row), **fields, 'policy': json.loads(row['policy']),
                 'project_ids': json.loads(row['project_ids']), 'legacy': bool(row['legacy'])}
             del expected['fields']
+            # Ordinary snapshots retain their pre-schema19 canonical shape.
+            # Identity metadata is a live view, never a rewrite of pinned bytes.
+            expected.pop('kind')
             if snapshot != expected:
                 raise ValueError
             provider = fields['preferred_provider']

@@ -1,6 +1,28 @@
 # Board interface contract — 2.17.6
 
-The browser REST API and MCP act on one database. Application version is `2.17.6`; schema version is `17`; the MCP catalogue has 78 tools. Existing project/task IDs, conversations and device tokens are preserved. Delegated profile management, expired-claim release and inactive-ticket resource routing each require their explicit human grants; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+The browser REST API and MCP act on one database. The companion source candidate uses schema `19` and an 81-tool MCP catalogue; check `/health` for the installed application version. Existing project/task IDs, conversations and device tokens are preserved. Delegated profile management, expired-claim release and inactive-ticket resource routing each require their explicit human grants; see [Management / Lead](docs/DELEGATED-AGENT-MANAGEMENT.md).
+
+## Companion owner powers (schema 19)
+
+See [companion identity and migration](docs/COMPANIONS.md) and the exhaustive
+[human-gate audit](docs/COMPANION-GATE-AUDIT.md). Human-created companions retain
+their own agent transport identity and audited owner linkage. They may dispatch,
+answer their owner's requests, decide reviews and pause/resume ordinary agents or
+project automation. They never claim/work tickets or gain permission, identity,
+pairing, account or device-management powers. The two added MCP operations are
+`resolve_human_request` and `set_companion_agent_status`; ordinary agent behavior
+and browser human authentication remain enforced.
+
+Specific-agent ticket creation is separately delegable with the explicit
+`agent.ticket.create_assigned` capability. Human-only
+`PUT /api/agent-profiles/{profile_id}/ticket-creation-management` accepts the
+strict `expected_version`/`enabled` body. Profile management alone does not grant
+it. The scoped Lead must retain stored/effective action, profile-read and exact
+owner management resource grants. Only bounded same-owner ordinary workers or
+the exact authenticated self-slot are permitted, with a nonempty exact task
+resource in both manager and destination ceilings. Other managers, companions,
+legacy/inactive/out-of-scope destinations are refused before receipt replay.
+No reassign, release, pairing, policy or execution rights are added.
 
 ## Inactive ticket resource routing (2.17.6, schema 17)
 
