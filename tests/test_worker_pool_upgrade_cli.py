@@ -107,7 +107,7 @@ def test_real_cli_neighbour_version_does_not_gain_template_exception(tmp_path,mo
     unit=p.UNIT_DIR/first['service'];expected=unit.read_bytes()
     assert manage.main(selected_new_version(state,new_version))==2
     captured=capsys.readouterr()
-    assert not captured.err and json.loads(captured.out)=={'status':'refused'}
+    assert not captured.err and json.loads(captured.out)=={'status':'refused','reason':'pool_upgrade_scope_changed'}
     assert unit.read_bytes()==expected and not calls
     assert not (p.RELEASES/p.manifest_id(new)).exists()
     assert sentinel.read_bytes()==b'old evidence retained'
@@ -122,7 +122,7 @@ def test_real_cli_extra_unit_edit_refuses_before_intent_or_publication(tmp_path,
     new['files']['unit.service.in']=pin(raw)
     assert manage.main(selected_new_version(state,'0.37.1'))==2
     captured=capsys.readouterr()
-    assert not captured.err and json.loads(captured.out)=={'status':'refused'}
+    assert not captured.err and json.loads(captured.out)=={'status':'refused','reason':'pool_upgrade_scope_changed'}
     assert unit.read_bytes()==expected and not calls
     assert not (p.BASE/'installations'/(p.manifest_id(new)+'.json')).exists()
     assert not (p.RELEASES/p.manifest_id(new)).exists()

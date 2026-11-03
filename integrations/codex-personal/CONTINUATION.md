@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.48.1
+# Reprise du travail par cycles — adaptateur 0.48.2
 
 La source 0.48 ajoute `development-queue tick` : une commande ponctuelle qui
 admet au plus une tâche depuis un catalogue et un workflow opérateur approuvés,
@@ -63,6 +63,13 @@ Une fenêtre de 1 céderait après chaque test, puis la génération suivante de
 refaire le test sans jamais atteindre la preuve finale fraîche. Les bornes
 supérieures et les budgets ne changent pas. Les checkpoints partiels génériques
 `DevelopmentCheckpointRequest(after_actions=1)` restent valides.
+
+Pendant la préparation d'une génération suivante, chaque poll natif collecte
+sa propre autorisation fraîche et revalide les pins, l'identité, le Stop et
+l'état Core local. Les contrôles complets du cycle restent aux frontières de
+préparation, sans seconde collecte distante dans la fenêtre de contrôle native.
+La durée de validité reste de 1,5 s et toute échéance dépassée refuse. Aucun
+état pending ni préparation incertaine n'est rouvert.
 
 Le 2 novembre, le pilote 0.45.5 #65 a confirmé deux générations auteur, la PR
 #82 et un avis distinct publié, avec sortie propre des opérations sélectionnées.
