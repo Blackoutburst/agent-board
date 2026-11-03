@@ -264,6 +264,8 @@ def test_cancel_cas_and_pagination_keep_terminal_history(ready):
 def downgrade_empty_provisioning(b):
     with b._tx() as db:
         remove_provisioning_schema16_tables(db)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=15')
 
 
@@ -280,8 +282,9 @@ def test_schema16_migration_is_atomic_and_preserves_old_rows(env,monkeypatch):
     assert snapshot(b)==before
     monkeypatch.setattr(module,'migrate_server_provisioning',original)
     reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)==before
-    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 18
+    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)=={**before,
+        'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
+    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 19
 
 
 @pytest.mark.parametrize('phase', ['request', 'cancel'])
@@ -377,7 +380,8 @@ def test_schema16_retains_actual_runtime_and_permanent_admission_refusal(runtime
     downgrade_empty_provisioning(b)
     before=snapshot(b)
     reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)==before
+    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)=={**before,
+        'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
     assert reopened.reserve_message_execution(actor(e),**args)==proof
     with reopened._connection() as db:
         assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0]==1

@@ -290,6 +290,8 @@ def test_migration_16_to_17_is_atomic_and_preserves_every_existing_row(ready,mon
     with b._tx() as db:
         for name in reversed(tuple(SQL)):
             db.execute(('DROP INDEX ' if name.endswith('one_active') else 'DROP TABLE ')+name)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=16')
     before=snapshot(b);original=module.migrate_server_messages_append
     def fail(db):
@@ -299,8 +301,9 @@ def test_migration_16_to_17_is_atomic_and_preserves_every_existing_row(ready,mon
     assert snapshot(b)==before
     with b._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==16
     monkeypatch.setattr(module,'migrate_server_messages_append',original);reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:5])==before
-    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]==18
+    assert snapshot(reopened,exclude=tuple(SQL)[:5])=={**before,
+        'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
+    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 19
 
 
 @pytest.mark.parametrize('name,args',[

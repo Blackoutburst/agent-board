@@ -193,6 +193,8 @@ def test_schema_eleven_upgrade_keeps_pending_full_delivery_and_legacy_cursor(spa
     exact=b.get_message(actor,t['id'],messages[0]['id'])
     with b._tx() as db:
         remove_server_schema14_tables(db)
+        db.execute('DROP INDEX companion_per_owner')
+        db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('DROP TABLE mcp_page_cursors')
         db.execute('ALTER TABLE message_feeds DROP COLUMN pending_view')
         db.execute('ALTER TABLE message_feeds DROP COLUMN pending_compact_json')
@@ -205,7 +207,7 @@ def test_schema_eleven_upgrade_keeps_pending_full_delivery_and_legacy_cursor(spa
     assert upgraded.checkpoint_message_feed(actor,feed['feed_id'],pending['delivery_id'],pending['checkpoint'])['checkpoint']==pending['checkpoint']+1
     assert [x['id'] for x in upgraded.read_inbox(actor,cursor=inbox['cursor'])['messages']]==[x['id'] for x in messages[1:]]
     with upgraded._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]== 18
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 19
         assert db.execute('SELECT COUNT(*) FROM messages').fetchone()[0]==before
         assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert not db.execute('PRAGMA foreign_key_check').fetchall()

@@ -23,6 +23,7 @@ from delegation_families import DelegationFamiliesMixin, migrate_delegation_fami
 from server_instances import ServerInstancesMixin, migrate_server_instances
 from server_provisioning import ServerProvisioningMixin, migrate_server_provisioning
 from server_messages_append import ServerMessagesAppendMixin, migrate_server_messages_append
+from owner_powers import has_owner_power
 
 
 class BoardError(Exception):
@@ -68,7 +69,7 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 18:
+            if version > 19:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -195,6 +196,10 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                     db.execute("ALTER TABLE tickets ADD COLUMN resolution TEXT NOT NULL DEFAULT ''")
                 db.execute("UPDATE tickets SET resolution='completed' WHERE status='done' AND resolution=''")
                 db.execute("PRAGMA user_version=18")
+            if version < 19:
+                db.execute("ALTER TABLE agent_profiles ADD COLUMN kind TEXT NOT NULL DEFAULT 'agent' CHECK(kind IN ('agent','companion'))")
+                db.execute("CREATE UNIQUE INDEX companion_per_owner ON agent_profiles(owner_id) WHERE kind='companion'")
+                db.execute("PRAGMA user_version=19")
             self._provisioning_schema(db)
             self._messages_append_schema(db)
 
@@ -275,7 +280,9 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             if not registered:
                 raise BoardError("Unknown session for this device", 403)
             validated["session_id"] = registered["id"]
-            self._profile_authorize(db, validated, permission)
+            profile = self._profile_authorize(db, validated, permission)
+            if profile['kind'] == 'companion':
+                validated['companion_for'] = owner['id']
         elif session:
             raise BoardError("Register a separate session for this chat first", 403)
         return validated
@@ -299,9 +306,11 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
         if actor["kind"] == "agent":
             result["device_label"] = db.execute("SELECT label FROM devices WHERE id=?", (actor["device_id"],)).fetchone()[0]
             result["session_label"] = db.execute("SELECT label FROM sessions WHERE id=?", (actor["session_id"],)).fetchone()[0]
-            identity = db.execute("SELECT p.id,p.fields,s.agent_kind,p.version FROM agent_profiles p JOIN sessions s ON s.agent_id=p.id WHERE s.id=?", (actor["session_id"],)).fetchone()
+            identity = db.execute("SELECT p.id,p.fields,s.agent_kind,p.version,p.kind FROM agent_profiles p JOIN sessions s ON s.agent_id=p.id WHERE s.id=?", (actor["session_id"],)).fetchone()
             if identity:
                 result.update(agent_id=identity["id"], agent_name=_decode(identity["fields"])["name"], agent_kind=identity["agent_kind"], profile_version=identity["version"])
+                if identity['kind'] == 'companion':
+                    result.update(profile_kind='companion', companion_for=actor['owner_id'], acts_for=actor['owner_id'])
         return result
 
     def _actor_key(self, actor):
@@ -776,6 +785,8 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             raise BoardError("Invalid recovery evidence")
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
+            if has_owner_power(actor, 'dispatch') and actor['kind'] == 'agent':
+                raise BoardError("Companions cannot claim tasks", 403)
             self._delegation_claim_scope(db,actor,None)
             self._expire(db)
             row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()

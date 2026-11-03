@@ -12,6 +12,7 @@ import secrets
 import time
 import re
 from urllib.parse import urlsplit
+from owner_powers import has_owner_power
 
 
 STATUSES = ("todo", "in_progress", "blocked", "review", "done")
@@ -267,7 +268,7 @@ class ProjectsMixin:
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
             row = self._project_member(db, actor, project_id)
-            if "automation_enabled" in changes and actor["kind"] != "human":
+            if "automation_enabled" in changes and not has_owner_power(actor, 'manage_agents'):
                 _fail("Only a human can change project automation", 403)
             if row["version"] != expected_version:
                 _fail("Project changed; reload before saving", 409)
@@ -303,6 +304,8 @@ class ProjectsMixin:
             self._project_assignee(db, project_id, assignee_owner_id)
             self._project_agent(db, project_id, assignee_agent_id)
             self._check_assignment(db, assignee_owner_id, assignee_agent_id)
+            if assignee_agent_id is not None and not has_owner_power(actor, 'dispatch'):
+                self._managed_ticket_creation(db, actor, project_id, assignee_owner_id, assignee_agent_id, coordination['resource'])
             payload = {**values, "project_id": project_id, "priority": priority, "assignee_owner_id": assignee_owner_id, **coordination, "depends_on": depends_on or [], "assignee_agent_id": assignee_agent_id}
             previous = self._retry(db, actor, "create_ticket", idempotency_key, payload)
             if previous:
@@ -358,11 +361,29 @@ class ProjectsMixin:
             actor = self._actor(db, actor, "allow_requests")
             row = self._ticket_member(db, actor, ticket_id)
             claimant = json.loads(row["claimant"]) if row["claimant"] else None
-            if actor["kind"] == "agent" and not _same_claim(claimant, actor):
+            companion = actor.get('companion_for') is not None
+            review_decision = (companion and row['status'] == 'review'
+                               and changes.get('status') in ('done', 'in_progress', 'todo'))
+            if companion:
+                if not has_owner_power(actor, 'dispatch'):
+                    _fail('Companion dispatch is not authorized', 403)
+                if set(changes) & {'progress', 'outcome', 'evidence'}:
+                    _fail('Companions manage work; they cannot supply worker progress or results', 403)
+                if review_decision:
+                    if not has_owner_power(actor, 'accept_reviews'):
+                        _fail('Companion review decisions are not authorized', 403)
+                    values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
+                elif 'status' in changes and not (release and changes['status'] in ('todo', row['status'])):
+                    _fail('Companions may decide reviews or release work, never start or deliver it', 403)
+                if changes.get('resolution', 'completed') != 'completed':
+                    _fail('Companions may accept completed reviews only', 403)
+                if 'resolution' in changes and not (review_decision and changes.get('status') == 'done'):
+                    _fail('Companions may set a resolution only while accepting a delivered review', 403)
+            if actor["kind"] == "agent" and not companion and not _same_claim(claimant, actor):
                 _fail("Claim this ticket before updating it", 403)
             if row["version"] != expected_version:
                 _fail("Ticket changed; reload before saving", 409)
-            if actor["kind"] == "agent" and row["status"] != "done" and (row["lease_expires_at"] or 0) <= time.time():
+            if actor["kind"] == "agent" and not companion and row["status"] != "done" and (row["lease_expires_at"] or 0) <= time.time():
                 _fail("Claim expired; inspect and recover before updating", 409)
             if "attachment_ids" in changes:
                 self._set_ticket_attachments(db, row, changes["attachment_ids"])
@@ -373,7 +394,7 @@ class ProjectsMixin:
             if "assignee_owner_id" in changes:
                 assigned = self._project_assignee(db, row["project_id"], changes["assignee_owner_id"])
                 if assigned != row["assignee_owner_id"]:
-                    if actor["kind"] != "human":
+                    if not has_owner_power(actor, 'dispatch'):
                         _fail("Only a human member can reassign a ticket; release your claim instead", 403)
                     values["claimant"] = None
                     values["claim_started_version"] = None
@@ -388,7 +409,7 @@ class ProjectsMixin:
                 if assigned_agent != row["assignee_agent_id"]:
                     assigned_agent = self._project_agent(db, row["project_id"], assigned_agent)
                 if assigned_agent != row["assignee_agent_id"]:
-                    if actor["kind"] != "human":
+                    if not has_owner_power(actor, 'dispatch'):
                         _fail("Only a human can assign a specific agent identity", 403)
                     values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
                 values["assignee_agent_id"] = assigned_agent
@@ -465,7 +486,7 @@ class ProjectsMixin:
                 _fail("blocked_reason and recheck_after_seconds only apply to a blocked task")
             if status == "done":
                 values["lease_expires_at"] = None
-            elif actor["kind"] == "agent" and not release:
+            elif actor["kind"] == "agent" and not companion and not release:
                 values["lease_expires_at"] = time.time() + self.ticket_lease_seconds
             # Even a no-op explicit release updates the optimistic version. No
             # caller may overwrite a newer state with a stale form.
@@ -512,6 +533,8 @@ class ProjectsMixin:
         _version(expected_version)
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
+            if actor.get('companion_for') is not None:
+                _fail('Companions manage work and cannot claim tickets', 403)
             row = self._ticket_member(db, actor, ticket_id)
             claimant = json.loads(row["claimant"]) if row["claimant"] else None
             if row["status"] == "done":
