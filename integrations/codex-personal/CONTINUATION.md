@@ -1,4 +1,12 @@
-# Reprise du travail par cycles — adaptateur 0.48.2
+# Reprise du travail par cycles — adaptateur 0.48.3
+
+Entre deux invocations du même Core, seuls les identifiants du mapping des
+namespaces Linux peuvent changer. L'ancien plan reste une preuve historique
+liée à son hash, à ses outils, sources et répertoires ; il n'est pas rouvert
+comme autorisation d'exécution actuelle. La nouvelle génération qualifie
+intégralement son backend et sa politique dans son propre environnement.
+Les champs host, UID/GID, cgroups, capacités, seccomp et label restent égaux,
+ainsi que les outils, sources, scripts, permissions et plafonds approuvés.
 
 La source 0.48 ajoute `development-queue tick` : une commande ponctuelle qui
 admet au plus une tâche depuis un catalogue et un workflow opérateur approuvés,
