@@ -91,8 +91,43 @@ def test_real_cli_two_units_replaced_backed_up_and_canonically_receipted(upgrade
         assert intent.with_suffix(suffix).stat().st_mode&0o777==0o600
         assert (p.UNIT_DIR/name).read_bytes()==rendered[name]
     assert sum(argv[1]=='daemon-reload' for argv in s.calls)==1
-    assert [argv for argv in s.calls if argv[1]=='reset-failed']==[['/usr/bin/systemctl','reset-failed',service]]
+    assert [argv for argv in s.calls if argv[1]=='reset-failed']==([['/usr/bin/systemctl','reset-failed',service]] if failed else [])
     assert all(argv[1] in ('show','daemon-reload','reset-failed') for argv in s.calls)
+
+
+def _inactive_gc_system(monkeypatch, s):
+    """show loads inactive units; reload may collect them before ResetFailedUnit."""
+    original = s.command
+    unloaded = set()
+    calls = []
+    def command(argv):
+        calls.append(tuple(argv))
+        if argv[1] == 'daemon-reload':
+            unloaded.update(name for name in (s.old_result['service'], s.old_result['timer'])
+                if s.states.get(name, {}).get('ActiveState', 'inactive') == 'inactive')
+        elif argv[1] == 'show':
+            unloaded.discard(argv[-1])
+        elif argv[1] == 'reset-failed' and argv[-1] in unloaded:
+            p.fail('pool_system_command_failed')
+        return original(argv)
+    monkeypatch.setattr(manage, 'command', command)
+    return calls
+
+
+@pytest.mark.parametrize('initial_failed', [False, True])
+def test_reload_collection_of_inactive_units_preserves_stopped_upgrade(upgrade45, monkeypatch, initial_failed):
+    s = upgrade45
+    service = s.old_result['service']
+    if initial_failed:
+        s.states[service] = {'ActiveState': 'failed', 'SubState': 'failed'}
+    calls = _inactive_gc_system(monkeypatch, s)
+    result = apply(s)
+    assert result['status'] == 'continuation_upgraded_disabled'
+    resets = [argv for argv in calls if argv[1] == 'reset-failed']
+    assert len(resets) == int(initial_failed)
+    assert s.finite.read_bytes() == s.finite_raw
+    assert s.sentinel.read_bytes() == b'old state retained'
+    assert (p.BASE / 'installations' / (p.manifest_id(s.value) + '.continuation.complete.json')).exists()
 
 
 def test_completed_upgrade_is_an_exact_input_for_the_next_upgrade(upgrade45,tmp_path):
@@ -149,6 +184,7 @@ def test_changed_continuation_template_is_not_implicitly_authorized(upgrade45):
 @pytest.mark.parametrize('boundary',['after_first','after_second','reload','reset_failed'])
 def test_precompletion_failures_restore_both_exact_old_units(upgrade45,monkeypatch,boundary):
     s=upgrade45;replace=manage._replace_unit;command=s.command;count=[0];failed=[False]
+    if boundary=='reset_failed':s.states[s.old_result['service']]={'ActiveState':'failed','SubState':'failed'}
     def replaced(path,expected,new):
         value=replace(path,expected,new);count[0]+=1
         if not failed[0] and boundary==('after_first' if count[0]==1 else 'after_second'):

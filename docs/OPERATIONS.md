@@ -2,6 +2,12 @@
 
 Current source is Board 2.18.1/schema 18 with adapter 0.48.1.
 
+Stopped continuation upgrades reset a service's failed state only when the
+service was failed before the upgrade. Inactive units may be unloaded after
+`daemon-reload`; they do not need `reset-failed`. The deployment CLI exposes
+only twelve closed public refusal codes and keeps all other exception details
+opaque. A partial upgrade still requires explicit review and is never replayed.
+
 The hosted board's scoped Lead can retarget inactive tickets between explicitly
 authorized resources after its owner enables the separate permission. PR #83
 was deployed with a private server-side backup; the new grant and ticket #61
