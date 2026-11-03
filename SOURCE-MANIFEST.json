@@ -631,7 +631,7 @@
     "tests/test_blocked_reevaluation_scope_runtime.py": "28d0f13831e97cd9e58abfcd172ddddc68380714666b91a6542bb3d19e0ab943",
     "tests/test_board.py": "73df725b9ea0fdb287d1a3791bc9c53bee1bc368db76921b19512bb70bd67054",
     "tests/test_companion_foundation.py": "93fca47c33075c1d0178da8327e12c1453263afd055b0aeb2ed2f9f77ec7e2a3",
-    "tests/test_companion_ui.cjs": "f31bd8d1c2ccef681e1d67d63337172a64a830dc754ef675d0e98a3e9e9f03dd",
+    "tests/test_companion_ui.cjs": "612b61a396c013255e277ffef050b5ea07564f971bda29fdcc01e976a1e4f68d",
     "tests/test_companion_workflow.py": "a243d2463935a30fb3409100539981eee80435f044229797f4886fb9b3d0807e",
     "tests/test_companion_workflow_api.py": "6b1a0c1c34f5c91090e715dcff0a0931bb471f36375d66354ab70af3ce40e378",
     "tests/test_connector.py": "d5fd4560d1de3881b1fb7d2bdd9914a745146dbbb9ac8a5413ee4af07522058c",
@@ -831,6 +831,6 @@
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "a40835c938440daf14457681f2661a9814c90333d34535d69ca3073237d98330"
+    "web/workspace.js": "3bad002f03319f4ecef21c8093d9314b7f63f19d7a27d04f81d8ca95dbbf89e5"
   }
 }

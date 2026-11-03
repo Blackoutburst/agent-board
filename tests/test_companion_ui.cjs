@@ -90,6 +90,7 @@ const scope = vm.createContext({ el, btn, field, check, select, FormData, TextEn
     if (url === '/projects?include_archived=true') return projectReply();
     if (url === '/agent-profiles?include_archived=true') return entries;
     if (url === '/agents') return [];
+    if (url === '/settings') return { devices: [{ id: 'device-1', label: 'Home server', revoked: false }] };
     if (url.startsWith('/agent-profiles/') && !options) return entries.find(item => item.id === url.split('/')[2]);
     if (url === '/agent-profiles' && options?.method === 'POST') {
       const kind = options.data.kind || 'agent', saved = profile(kind, { ...options.data, id: 'created-' + serial });
@@ -102,6 +103,7 @@ const scope = vm.createContext({ el, btn, field, check, select, FormData, TextEn
   }
 });
 vm.runInContext('const guard = action => (...args) => Promise.resolve().then(() => action(...args));\nlet agentTab="profiles", includeArchivedProfiles=false;\n'
+  + fragment(workspace, '  const appendPresent =', '  function navigate(')
   + fragment(app, 'function companionOwner(', 'function renderMessages(')
   + fragment(workspace, '  function activityList(', '  const profileStates =')
   + fragment(workspace, '  function profileCard(', '  const serverStates =')
@@ -109,7 +111,8 @@ vm.runInContext('const guard = action => (...args) => Promise.resolve().then(() 
   + fragment(workspace, '  async function agents()', '  const runtimeReasons =')
   + fragment(workspace, '  async function profileEditor(', '  function changeProfileStatus(')
   + fragment(workspace, '  async function profileHistory(', '  async function profileBindings(')
-  + '\nthis.ui={companionOwner,authorLabel,authorMeta,activityList,agentList,profileCard,agents,profileEditor,duplicateProfile,profileHistory,serverInstanceCard};', scope);
+  + fragment(workspace, '  async function profileBindings(', '  function renameAgent(')
+  + '\nthis.ui={companionOwner,authorLabel,authorMeta,activityList,agentList,profileCard,agents,profileEditor,duplicateProfile,profileHistory,profileBindings,serverInstanceCard};', scope);
 const ui = scope.ui;
 let checks = 0;
 const ok = (value, message) => { assert.ok(value, message); checks++; };
@@ -205,6 +208,9 @@ const reset = () => { entries = []; calls.length = 0; scope.state.actor = { kind
   scope.provisionProviders = { codex_chatgpt: 'Codex' }; scope.provisionModel = () => true; scope.provisionText = value => typeof value === 'string' && value.length > 0;
   const append = fragment(workspace, '  async function appendRequestDialog(', '  async function renderMessagesAppend(').match(/const candidates = ([^;]+);/)[1];
   ok(vm.runInContext(append, scope).every(item => item.kind !== 'companion'));
+  reset(); entries = [profile('companion')]; await ui.profileBindings('companion');
+  assert.equal(modal.title, 'Connections · Ari'); checks++;
+  ok(text(modal.content).includes('Link this profile') && !text(modal.content).includes('null'), 'Connections leaves no "null" text');
   console.log(JSON.stringify({ result: 'passed', checks, synthetic_calls: totalCalls,
     network_calls: 0, providers: 0, board_effects: 0 }));
 })().catch(error => { console.error(error); process.exitCode = 1; });

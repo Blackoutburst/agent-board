@@ -20,6 +20,8 @@ const Workspace = (() => {
   const tabs = (items, active, change) => el("nav", { class: "tabs", "aria-label": "Project sections" }, items.map(([key, label]) => btn(label, () => change(key), key === active ? "selected" : "", { "aria-current": key === active ? "page" : null })));
   const panel = (title, ...content) => el("section", { class: "panel" }, el("div", { class: "panel-heading" }, el("h2", {}, title)), ...content);
   const box = (title, text, action) => el("div", { class: "empty-state" }, el("h2", {}, title), el("p", {}, text), action);
+  // Native append() renders null/undefined as the text "null"; el() skips them, this does the same for DOM nodes.
+  const appendPresent = (node, ...children) => node.append(...children.flat().filter(child => child !== undefined && child !== null));
   function navigate(view) {
     setView(view);
     ["agents", "requests"].forEach(key => $(key + "-nav").classList.toggle("active", view === key));
@@ -1680,7 +1682,7 @@ const Workspace = (() => {
         }
       });
       loading.remove();
-      body.append(el("div", { class: "runtime-intro" }, el("p", {}, `Runtime for ${ownerName(owner)}`),
+      appendPresent(body, el("div", { class: "runtime-intro" }, el("p", {}, `Runtime for ${ownerName(owner)}`),
           el("p", { class: "small muted" }, "Only executors using the runtime protocol appear here. These controls share your account’s capacity across its profiles and devices; they do not control other processes."),
           el("p", { class: "small muted runtime-snapshot" }, `Snapshot loaded ${date(Date.now() / 1000)}. Use Refresh for current state.`)),
         el("div", { class: "runtime-summary" },
@@ -1847,8 +1849,6 @@ const Workspace = (() => {
     ticketResourceManagementInput.addEventListener("change", () => { ticketResourceManagementTouched = true; });
     ticketCreationManagementInput.addEventListener("change", () => { ticketCreationManagementTouched = true; });
     refreshClaimManagement();
-    // Native append() writes null as the text "null"; skip the sections a companion does not have.
-    const appendPresent = (node, ...children) => node.append(...children.flat().filter(child => child !== undefined && child !== null));
     appendPresent(form, creatingCompanion ? null : projectPicker, creatingCompanion ? null : permissions,
       companion ? null : el("fieldset", { class: "profile-section" }, el("legend", {}, "Délégation Management / Lead"), management,
         el("p", { class: "small muted" }, "Autorise la création, la modification et l’archivage réversible des profils ordinaires de votre compte. Chaque profil doit rester dans les projets suivis et sous les plafonds effectifs de permissions, d’actions, de ressources et d’autonomie de ce Lead."),
@@ -2045,7 +2045,7 @@ const Workspace = (() => {
     if (!devices.length) {
       form.append(el("p", { class: "muted" }, "Connect a device first, then return here to link its executor."), btn("Connect a device", guard(async () => { closeModal(); await setup(); }), "primary"));
     } else {
-      form.append(select("Connected device", "device_id", devices.map(device => [device.id, device.label]), devices[0].id),
+      appendPresent(form, select("Connected device", "device_id", devices.map(device => [device.id, device.label]), devices[0].id),
         select("Client", "agent_kind", [["codex", "Codex"], ["claude-code", "Claude Code"], ["other", "Other MCP client"]], "codex"),
         profileField("Installation key", "identity_key", 200, { value: `profile-${p.id}`, required: true, hint: "Use this key with the connector on the chosen device. A key already linked to another profile cannot be moved." }),
         el("p", { class: "small muted" }, `Configuration v${p.version}. Linking an executor does not change this profile’s permissions.`), profileWorkNotice(p), formButtons("Link executor"));
