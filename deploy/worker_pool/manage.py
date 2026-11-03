@@ -60,6 +60,22 @@ def command(argv):
     except (OSError,subprocess.SubprocessError):p.fail('pool_system_command_failed')
 
 
+UPGRADE_REFUSAL_CODES=frozenset({
+    'pool_system_command_failed',
+    'pool_unit_not_stopped_disabled',
+    'pool_unit_not_inactive_disabled',
+    'pool_unit_changed',
+    'pool_unit_state_changed',
+    'pool_previous_receipt_invalid',
+    'pool_continuation_previous_receipt_invalid',
+    'pool_continuation_install_exists',
+    'pool_upgrade_scope_changed',
+    'pool_upgrade_completion_unconfirmed',
+    'pool_continuation_upgrade_completion_unconfirmed',
+    'pool_continuation_upgrade_units_unconfirmed',
+})
+
+
 def prepare_addon(source,output,*,codex,bwrap,gh,codex_version,gh_version,python_pin,
                   unix_owner,board_owner,board_endpoint,unit_limits):
     source=p.no_symlinks(source);output=p.no_symlinks(output)
@@ -551,7 +567,7 @@ def upgrade_continuation(release,*,previous_bundle_id,apply=False,expected_bundl
                 files({other:(rendered[other] if other in attempted else old[other]) for other in old})
                 attempted.append(name);_replace_unit(p.UNIT_DIR/name,old[name],raw)
             command(['/usr/bin/systemctl','daemon-reload'])
-            command(['/usr/bin/systemctl','reset-failed',plan['service']])
+            if before[0]['ActiveState']=='failed':command(['/usr/bin/systemctl','reset-failed',plan['service']])
             for name in rendered:_inactive(name,timer=name==plan['timer'])
             files(rendered);finite_unchanged()
             committing=True;_new_file(complete,p.encoded(completion),0o600)
@@ -607,6 +623,11 @@ def main(argv=None):
         elif args.action=='upgrade':result=upgrade_addon(args.path,previous_bundle_id=args.previous_bundle_id,apply=args.apply,expected_bundle_id=args.expected_bundle_id)
         else:result=rollback_addon(args.path,apply=args.apply)
         print(p.encoded(result).decode().strip());return 0
-    except (p.PackageError,OSError,ValueError,TypeError):print('{"status":"refused"}');return 2
+    except (p.PackageError,OSError,ValueError,TypeError) as error:
+        result={'status':'refused'}
+        if (type(error) is p.PackageError and type(error.code) is str
+                and error.code in UPGRADE_REFUSAL_CODES):
+            result['reason']=error.code
+        print(p.encoded(result).decode().strip());return 2
 
 if __name__=='__main__':raise SystemExit(main())
