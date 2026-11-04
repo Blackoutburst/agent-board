@@ -84,6 +84,23 @@ def test_release_preserves_work_assignment_and_all_runtime_records(lead):
     assert event['target_profile_id']==target['id'] and event['manager_profile_id']==s['profile']['id']
 
 
+@pytest.mark.parametrize('history', ['current', 'legacy_hold', 'legacy_release'])
+def test_managed_release_preserves_an_owner_hold_after_its_timer_expires(lead, history):
+    s=lead;enable(s);b=s['b'];task,_,worker,_=claim(s)
+    held=b.update_ticket(s['human'],task['id'],task['version'],status='blocked',
+        blocked_reason='Explicit owner hold',recheck_after_seconds=300)
+    with b._tx() as db:
+        db.execute('UPDATE tickets SET recheck_at=? WHERE id=?',(time.time()-1,task['id']))
+        if history!='current':
+            db.execute("DELETE FROM ticket_events WHERE ticket_id=? AND event='ticket_owner_hold'",(task['id'],))
+    released=release(s,held)
+    assert released['status']=='blocked' and released['claimant'] is None
+    if history=='legacy_release':
+        with b._tx() as db:
+            db.execute("DELETE FROM ticket_events WHERE ticket_id=? AND event='ticket_owner_hold'",(task['id'],))
+    assert task['id'] not in {item['id'] for item in b.get_work(worker,s['project']['id'])['ready']}
+
+
 def test_missing_runtime_is_not_a_cleanup_receipt_and_requires_explicit_evidence(lead):
     s=lead;enable(s);task,*_=claim(s)
     with s['b']._tx() as db:db.execute('DELETE FROM runtime_executions')
