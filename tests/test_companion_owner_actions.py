@@ -92,6 +92,39 @@ def test_companion_can_manage_archived_project_ticket_like_owner(home):
     assert changed['status'] == 'blocked' and changed['priority'] == 'low'
 
 
+@pytest.mark.parametrize('include_status', [False, True])
+@pytest.mark.parametrize('real_attempt', ['reason', 'recheck'])
+def test_worker_responsibility_edits_preserve_block_budget_and_real_attempts_escalate(home, include_status, real_attempt):
+    board = home['board']; actor = home['worker']['actor']; created = task(home)
+    claimed = board.claim_ticket(actor, created['id'], created['version'])
+    blocked = board.update_ticket(actor, created['id'], claimed['version'], status='blocked',
+        blocked_reason='A genuine external obstacle', recheck_after_seconds=300)
+    deadline = blocked['recheck_at']
+
+    def attempts():
+        with board._connection() as db:
+            return db.execute("SELECT COUNT(*) FROM audit WHERE event='agent_block_recorded' "
+                "AND json_extract(detail,'$.ticket_id')=?", (created['id'],)).fetchone()[0]
+
+    assert attempts() == 1
+    for owner in ('bob', 'alice'):
+        fields = {'unblock_owner': owner}
+        if include_status:
+            fields['status'] = 'blocked'
+        blocked = board.update_ticket(actor, created['id'], blocked['version'], **fields)
+        assert blocked['unblock_owner'] == owner
+        assert blocked['recheck_at'] == deadline
+        assert attempts() == 1
+    for index in range(2):
+        fields = ({'blocked_reason': f'A further obstacle {index}'} if real_attempt == 'reason'
+                  else {'recheck_after_seconds': 301 + index})
+        blocked = board.update_ticket(actor, created['id'], blocked['version'], **fields)
+        assert attempts() == 2 + index
+        if index == 0:
+            assert blocked['unblock_owner'] != 'human' and blocked['recheck_at'] is not None
+    assert blocked['unblock_owner'] == 'human' and blocked['recheck_at'] is None
+
+
 @pytest.mark.parametrize('revocation', ['owner_disabled', 'requests_revoked', 'profile_paused', 'profile_changed'])
 def test_companion_status_action_rechecks_current_authority(home, revocation):
     board = home['board']; human = home['humans']['alice']; actor = home['companion']['actor']

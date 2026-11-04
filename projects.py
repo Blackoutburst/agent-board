@@ -470,6 +470,7 @@ class ProjectsMixin:
             if status == "done" and not unworked and detail["delivered_dependencies"]:
                 _fail("Accept or complete delivered prerequisite tasks before completing this one", 409)
             now = time.time()
+            block_attempt = False
             if status == "blocked":
                 # A stored block needs a verifiable reason; anything else is a
                 # ghost that no agent could ever release.
@@ -486,6 +487,7 @@ class ProjectsMixin:
                     values["unblock_owner"] = block_owner or (actor['owner_id'] if companion else
                         (self._author(db, actor).get("agent_id") or actor["owner_id"]))
                     if block_reason != row["blocked_reason"] or block_seconds is not None:
+                        block_attempt = True
                         if block_seconds is not None or actor["kind"] == "agent" and not companion:
                             values["recheck_at"] = now + (block_seconds or _DEFAULT_BLOCK_RECHECK)
                         else:
@@ -525,7 +527,8 @@ class ProjectsMixin:
                 self._assignment_notice(db,actor,notice_row,values['assignee_agent_id'],'assigned',expected_version+1)
             if status == "review" and row["status"] != "review":
                 self._record_review_request(db, actor, ticket_id)
-            if status == "blocked" and actor["kind"] == "agent" and not companion and values.get("blocked_reason"):
+            # Responsibility-only edits do not consume the worker retry budget.
+            if status == "blocked" and actor["kind"] == "agent" and not companion and block_attempt:
                 self._audit(db, actor, "agent_block_recorded", {"ticket_id": ticket_id})
                 self._escalate_repeated_blocks(db, actor, db.execute("SELECT * FROM tickets WHERE id=?", (ticket_id,)).fetchone())
             if status in ("done", "review") and status != row["status"]:
