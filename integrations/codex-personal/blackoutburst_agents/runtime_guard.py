@@ -1,9 +1,5 @@
-"""Synchronous owner-capacity gate for one tool-free model turn.
-
-There is no listener or process watcher. Heartbeats run only from the transport's
-cancellation callback. A lost control response cancels; a lost finish response
-retains local review state. Cached private results may reconcile cleanup, never
-restart inference.
+"""One tool-free turn under the owner gate. Lost control cancels; unknown cleanup
+retains review state. Heartbeats use the callback; cached turns never infer again.
 """
 import hashlib
 import json
@@ -11,7 +7,7 @@ import math
 import re
 import time
 
-from .runtime_client import REASONS
+from .runtime_client import REASONS, RUNTIME_FAILURE_CODES, BoardReadError
 from .runtime_journal import RuntimeJournal
 from .run_store import StoreError,RunStore
 
@@ -103,10 +99,12 @@ class RuntimeGuard:
             raise RuntimeControlError('runtime_existing_turn_requires_review')
         from .runtime_uninvoked import bind_new
         bind_new(self,self.operation)
+        stage='reserve'
         try:
             config=self.operation['configuration']
             name, arguments = self.reservation(config)
             result=self.client.call(name,arguments)
+            stage='receipt'
             self.reject_admission(result)
             if not isinstance(result,dict) or result.get('reserved') is not True or type(result.get('retried')) is not bool:
                 raise RuntimeControlError('runtime_reservation_unconfirmed')
@@ -115,6 +113,7 @@ class RuntimeGuard:
             if result['retried'] or receipt['state']!='reserved' or receipt['should_stop']:
                 raise RuntimeControlError('runtime_reservation_requires_review')
             self.save('starting')
+            stage='start'
             started=self.metadata(self.client.call('start_execution',{'execution_id':receipt['id'],
                 'expected_revision':receipt['revision']}))
             if started['state']!='running' or started['should_stop']:
@@ -123,9 +122,15 @@ class RuntimeGuard:
             self.last_heartbeat=self.clock()
         except RuntimeAdmissionRefused:
             raise
-        except Exception:
+        except Exception as error:
             self.review()
-            raise RuntimeControlError('runtime_start_requires_review') from None
+            code=None
+            if type(error) in (BoardReadError,RuntimeControlError):
+                fields=vars(error);code=fields.get('_runtime_tool_code',fields.get('code'))
+            if type(code) is not str or code not in RUNTIME_FAILURE_CODES:code='unrecognized_code'
+            failure=RuntimeControlError('runtime_start_requires_review')
+            failure.runtime_failure={'stage':stage,'code':code}
+            raise failure from None
 
     def finish_uninvoked(self,work,turn_id,proof):
         from .runtime_uninvoked import finish

@@ -140,9 +140,11 @@ def continuation_entry(args,manifest,release,account):
     from blackoutburst_agents.development_pool_selection import file_document
     from blackoutburst_agents.dev_journal import decode
     document=decode(file_document(path,512*1024)[0])
-    recovering=type(document) is dict and document.get('schema')=='linux-cloud-review-recovery-v1'
+    schema=document.get('schema') if type(document) is dict else None
+    recovering=schema in ('linux-cloud-review-recovery-v1','linux-cloud-review-recovery-v2')
     if recovering:
-        if tuple(map(int,manifest['adapter_version'].split('.'))) < (0,49,0):p.fail('pool_review_recovery_version_required')
+        minimum=(0,49,1) if schema=='linux-cloud-review-recovery-v2' else (0,49,0)
+        if tuple(map(int,manifest['adapter_version'].split('.'))) < minimum:p.fail('pool_review_recovery_version_required')
         if args.action=='continuation-plan':
             from blackoutburst_agents.review_recovery_service import review_recovery_plan
             return review_recovery_plan(path,root=root,owner_id=manifest['board_owner'],

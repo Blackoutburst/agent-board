@@ -8,6 +8,7 @@ It deliberately is not part of either native/family execution source roster.
 from contextlib import ExitStack
 from copy import deepcopy
 import os
+import json
 from pathlib import Path
 import sqlite3
 from urllib.parse import quote
@@ -158,10 +159,16 @@ attributed transactional claim revocation. No old record is repaired/adopted.
     def __init__(self,directory,*,prior_review_directory,prior_job_id,source_directory,
                  publication_root,workspace_state_root,git_executable,expected_source_sha256,expected_delivery_sha,
                  expected_ticket_version,revocation_event_id,job,connection_file,owner_id,agent_id,project_id,ticket_id,board_endpoint,
-                 gh_executable,interpreter):
+                 gh_executable,interpreter,prior_recovery_id=None,expected_prior_configuration_sha256=None):
         self.directory=Path(directory);self.prior=Path(prior_review_directory)
         require(not os.path.lexists(self.directory),'historical_review_fresh_admission_required')
         self.prior_job=uuid_value(prior_job_id)
+        self.prior_recovery=uuid_value(prior_recovery_id) if prior_recovery_id is not None else None
+        require((self.prior_recovery is None)==(expected_prior_configuration_sha256 is None))
+        self.prior_configuration_sha=sha256(expected_prior_configuration_sha256) if self.prior_recovery else None
+        if self.prior_recovery:
+            require(self.prior==self.directory.parents[1]/self.prior_recovery
+                and self.directory.parent.name!=self.prior_recovery,'historical_review_prior_recovery_changed')
         self.new_job=job_identity(job)
         require(job.get('state')=='queued' and job.get('driver_id')=='review'
             and job.get('driver_revision')=='delivery-review-pool-v1'
@@ -187,8 +194,9 @@ attributed transactional claim revocation. No old record is repaired/adopted.
         self.old,self.old_pin=document(self.prior/'selections'/(prior_job_id+'.json'),128*1024)
         selected=self.old['selection'];old_job=selected['operation_id']
         require(old_job==prior_job_id and selected['source_operation_id']==self.operation_id
-            and self.old['source']['receipt']==self.receipt and self.old['source']['directory']==str(source_directory)
-            and self.old['source']['kind']=='published-aggregate-review-source-v1'
+            and self.old['source']['receipt']==self.receipt
+            and self.old['source']['directory']==(str(self.prior/'historical-source') if self.prior_recovery else str(source_directory))
+            and self.old['source']['kind']==(KIND if self.prior_recovery else 'published-aggregate-review-source-v1')
             and self.new_job['session_id']!=selected['session_id'] and self.new_job['id']!=old_job
             and all(selected['scope'][k]==self.scope[k] for k in ('owner_id','project_id','ticket_id','board_endpoint')))
         self.old_scope=deepcopy(selected['scope'])
@@ -214,12 +222,15 @@ attributed transactional claim revocation. No old record is repaired/adopted.
             test_guard=lambda **_:False)
         self.pins={'source':self.source_pin,'aggregate':self.aggregate_pin,'delivery':self.delivery_pin,
             'workspace':self.workspace_pin,'old_selection':self.old_pin}
-        ledger,ledger_pin=document(Path(source_directory)/'continuation-review.json',128*1024)
-        require(ledger['phase']=='running' and ledger['result'] is None
-            and ledger['request']['source_operation_id']==self.operation_id
-            and ledger['request']['directory']==str(self.prior)
-            and ledger['job']['id']==prior_job_id and ledger['job']['session_id']==self.old_scope['board_session_id'])
-        self.pins['old_ledger']=ledger_pin
+        if self.prior_recovery:
+            self._pending_recovery()
+        else:
+            ledger,ledger_pin=document(Path(source_directory)/'continuation-review.json',128*1024)
+            require(ledger['phase']=='running' and ledger['result'] is None
+                and ledger['request']['source_operation_id']==self.operation_id
+                and ledger['request']['directory']==str(self.prior)
+                and ledger['job']['id']==prior_job_id and ledger['job']['session_id']==self.old_scope['board_session_id'])
+            self.pins['old_ledger']=ledger_pin
         self._local()
         self.reader=HistoricalAggregateReadView(self,publication_root,gh_executable,interpreter)
         self._public()
@@ -238,7 +249,45 @@ attributed transactional claim revocation. No old record is repaired/adopted.
             private.create('admission.json',canonical(self.admission))
         self.admission_pin=file_document(self.directory/'admission.json')[1]
 
+    def _pending_recovery(self):
+        # A pending service cannot dispatch again. Its records correlate a
+        # failed fresh attempt; they never revive an old context or permit.
+        registry,rp=document(self.prior/'registry.json',512*1024)
+        require(set(registry)=={'binding','phase','job','result','proof','queue_ack_sha256'}
+            and registry['phase']=='pending' and all(registry[k] is None for k in ('result','proof','queue_ack_sha256'))
+            and not os.path.lexists(self.prior/'queue-ack.json'),'historical_review_prior_recovery_changed')
+        request=registry['binding']['request'];pin=registry['binding']['configuration']['configuration']
+        encoded=(json.dumps(request,sort_keys=True,separators=(',',':'),ensure_ascii=True)+'\n').encode()
+        require(pin['sha256']==self.prior_configuration_sha and digest(encoded)==self.prior_configuration_sha
+            and request['schema'] in ('linux-cloud-review-recovery-v1','linux-cloud-review-recovery-v2')
+            and request['recovery_id']==self.prior_recovery and request['source_operation_id']==self.operation_id
+            and request['expected_source_sha256']==self.source_pin['sha256']
+            and request['delivery_sha']==self.receipt['delivery_sha']
+            and request['reviewer_agent_id']==self.old_scope['agent_id']
+            and all(request[k]==self.old_scope[k] for k in ('owner_id','project_id','ticket_id'))
+            and request['connection_file']==self.old['connection']['path']
+            and job_identity(registry['job'])=={k:self.old['selection'][v] for k,v in
+                (('id','operation_id'),('session_id','session_id'),('worker_id','worker_id'))},
+            'historical_review_prior_recovery_changed')
+        admission,ap=document(self.prior/'historical-source/admission.json',512*1024)
+        descriptor=self.old['source']
+        require(descriptor['admission']==admission and descriptor['admission_pin']==ap
+            and descriptor['pins']==admission['pins'] and admission['pins']['source']==self.source_pin
+            and admission['schema']=='historical-aggregate-review-admission-v1'
+            and admission['job']==job_identity(registry['job']) and admission['scope']==self.old_scope
+            and admission['source_sha256']==self.source_pin['sha256']
+            and admission['original_frame_sha256']==self.original_frame_sha256
+            and admission['delivery_sha']==self.receipt['delivery_sha']
+            and admission['previous']['kind'] in ('retired_before_transport','retired_pending_recovery_before_transport'),
+            'historical_review_prior_admission_changed')
+        for name,pin in admission['pins'].items():self.pins['prior_'+name]=deepcopy(pin)
+        for index,pin in enumerate(admission['previous']['files']):self.pins['prior_previous_'+str(index)]=deepcopy(pin)
+        self.pins.update(prior_registry=rp,prior_admission=ap)
+
     def _local(self):
+        if self.prior_recovery:
+            require(not any(os.path.lexists(self.prior/p) for p in ('queue-ack.json',
+                'lifecycle/'+self.prior_job+'/stop.json')),'historical_review_prior_recovery_changed')
         for pin in getattr(self,'pins',{}).values():require(file_document(pin['path'],32*1024*1024)[1]==pin)
         for pin in getattr(self,'previous',{}).get('files',[]):
             require(file_document(pin['path'],32*1024*1024)[1]==pin)
@@ -320,12 +369,20 @@ attributed transactional claim revocation. No old record is repaired/adopted.
             and turn['status'] in ('completed','blocked','cancelled')
             and record['configuration']==RuntimeJournal.configuration(self.old_scope,job['id'],turn['id'],work['model'])
             and record['key']==RuntimeJournal.key(record['configuration']))
-        stop,stop_pin=document(self.prior/'lifecycle'/job['id']/'stop.json')
-        require(stop=={'operation_id':job['id'],'stop':True}
-            and not any(os.path.lexists(self.prior/'lifecycle'/job['id']/(n+'.json'))
+        stop_pins=[]
+        if self.prior_recovery:
+            require(job['state']=='retained' and job['stop_requested'] is False
+                and job['cleanup_confirmed'] is False
+                and not os.path.lexists(self.prior/'lifecycle'/job['id']/'stop.json'),
+                'historical_review_previous_unresolved')
+        else:
+            stop,stop_pin=document(self.prior/'lifecycle'/job['id']/'stop.json')
+            require(stop=={'operation_id':job['id'],'stop':True},'historical_review_previous_publication_unknown')
+            stop_pins=[stop_pin]
+        require(not any(os.path.lexists(self.prior/'lifecycle'/job['id']/(n+'.json'))
                 for n in ('publication-intent','published')),'historical_review_previous_publication_unknown')
         found=self._old_control(record)
-        if record['phase']=='finished':
+        if record['phase']=='finished' and not self.prior_recovery:
             guard=ReviewRuntimeGuard(None,None,self.old_scope,selection,job['id']);guard.operation=record
             require(job['state']=='settled' and job['cleanup_confirmed'] is True
                 and job['execution_active'] is False and result.get('cleanup_failed') is not True
@@ -335,17 +392,25 @@ attributed transactional claim revocation. No old record is repaired/adopted.
                 'historical_review_previous_unresolved')
             kind='finished'
         else:
+            require(type(result) is dict and type(result.get('verification')) is dict,
+                'historical_review_previous_unresolved')
+            result=deepcopy(result)
+            telemetry=result['verification'].get('runtime_failure')
+            if telemetry is not None:
+                from .runtime_client import runtime_failure
+                require(runtime_failure(telemetry)==telemetry,'historical_review_previous_unresolved')
+                del result['verification']['runtime_failure']
             require(record['phase']=='needs_review' and record['receipt'] is None and not record['start_confirmed']
-                and job['stop_requested'] is True
+                and job['stop_requested'] is (False if self.prior_recovery else True)
                 and turn['pid'] is None and turn['provider_session_id'] is None and work['provider_session_id'] is None
                 and result=={'status':'blocked','reason':'runtime_start_requires_review','text':'','uncertain':True,
                     'verification':{'cleanup_confirmed':True}} and found=={'found':False},
                 'historical_review_previous_unresolved')
-            kind='retired_before_transport'
+            kind='retired_pending_recovery_before_transport' if self.prior_recovery else 'retired_before_transport'
         return {'kind':kind,'operation_id':job['id'],'session_id':job['session_id'],
             'runtime_key':record['key'],'runtime_pin':rp,'runs_pin':wp,'worker_sha256':digest(canonical(op)),
             'pool_sha256':digest(canonical(state)),
-            'files':[rp,wp,pool_pin,stop_pin,file_document(base/'work/work-journal.sqlite3',32*1024*1024)[1]]}
+            'files':[rp,wp,pool_pin,*stop_pins,file_document(base/'work/work-journal.sqlite3',32*1024*1024)[1]]}
 
     def _admission(self):
         with ExitStack() as resources:
@@ -390,7 +455,7 @@ attributed transactional claim revocation. No old record is repaired/adopted.
             and actor.get('agent_id')==data.get('manager_profile_id'),'historical_review_revocation_required')
         # Lookup follows the transactionally issued claim revocation and the
         # fresh unclaimed ticket read. The old session can no longer reserve.
-        if self.previous['kind']=='retired_before_transport':
+        if self.previous['kind'] in ('retired_before_transport','retired_pending_recovery_before_transport'):
             require(self._old_control(self.previous_runtime)=={'found':False},
                 'historical_review_previous_unresolved')
         return {'event_id':event['id'],'ticket_version':ticket['version'],

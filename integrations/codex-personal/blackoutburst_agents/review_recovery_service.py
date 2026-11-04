@@ -22,6 +22,8 @@ from .pool_journal import uuid_value
 from .worker_pool import WorkerPool, PoolOutcome
 
 SCHEMA='linux-cloud-review-recovery-v1'
+SCHEMA_V2='linux-cloud-review-recovery-v2'
+PRIOR_FIELDS={'prior_recovery_id','expected_prior_configuration_sha256'}
 FIELDS={'schema','recovery_id','logical_task_id','source_operation_id','prior_review_job_id',
     'expected_source_sha256','delivery_sha','ticket_version','revocation_event_id','owner_id',
     'project_id','ticket_id','reviewer_agent_id','connection_file','model','timeout','skills',
@@ -37,8 +39,11 @@ def load_review_recovery(path,*,root,owner_id,board_endpoint,max_seconds):
     """Inert operator scope; no source, journal, connection, registration or RPC."""
     root=Path(root);path=child(path,root/'config')
     raw,pin=file_document(path,MAX_RECORD);value=decode(raw)
-    if type(value) is not dict or value.get('schema')!=SCHEMA:return None
-    require(set(value)==FIELDS,'review_recovery_configuration_invalid')
+    if type(value) is not dict or value.get('schema') not in (SCHEMA,SCHEMA_V2):return None
+    require(set(value)==FIELDS|(PRIOR_FIELDS if value['schema']==SCHEMA_V2 else set()),'review_recovery_configuration_invalid')
+    if value['schema']==SCHEMA_V2:
+        uuid_value(value['prior_recovery_id']);sha256(value['expected_prior_configuration_sha256'])
+        require(value['prior_recovery_id'] not in {value[k] for k in ('recovery_id','logical_task_id','source_operation_id','prior_review_job_id')})
     for key in ('recovery_id','logical_task_id','source_operation_id','prior_review_job_id'):uuid_value(value[key])
     require(len({value[k] for k in ('recovery_id','logical_task_id','source_operation_id','prior_review_job_id')})==4)
     for key in ('expected_source_sha256','next_configuration_sha256'):sha256(value[key])
@@ -71,7 +76,8 @@ def review_recovery_plan(path,**scope):
         'prior_review_job_id','delivery_sha','ticket_version','revocation_event_id','reviewer_agent_id','model','timeout')},
         'status':'plan','configuration_sha256':pins['configuration']['sha256'],
         'next_configuration_sha256':value['next_configuration_sha256'],
-        'activated':False,'launchable':False,'execution_qualified':False}
+        'activated':False,'launchable':False,'execution_qualified':False,
+        **{k:value[k] for k in PRIOR_FIELDS if k in value}}
 
 
 def _rename_noreplace(parent,source,destination):
@@ -170,15 +176,17 @@ class ReviewRecoveryService:
             payload={k:value[k] for k in ('project_id','ticket_id')})
         private.replace('registry.json',canonical(dict(self.state,job=self.job)))
         self.state['job']=deepcopy(self.job)
+        prior=self.root/'review-recoveries'/value['prior_recovery_id'] if value.get('schema')==SCHEMA_V2 else self.target/'independent-review'
         self.source=HistoricalAggregateReviewSource(self.directory/'historical-source',
-            prior_review_directory=self.target/'independent-review',prior_job_id=value['prior_review_job_id'],
+            prior_review_directory=prior,prior_job_id=value['prior_review_job_id'],
             source_directory=self.target/'aggregate/delivery/review-source',publication_root=self.target/'aggregate/publications',
             workspace_state_root=self.target/'aggregate/git-state',git_executable='/usr/bin/git',
             expected_source_sha256=value['expected_source_sha256'],expected_delivery_sha=value['delivery_sha'],
             expected_ticket_version=value['ticket_version'],revocation_event_id=value['revocation_event_id'],
             job=self.job,connection_file=value['connection_file'],owner_id=owner,agent_id=value['reviewer_agent_id'],
             project_id=value['project_id'],ticket_id=value['ticket_id'],board_endpoint=endpoint,
-            gh_executable=self.tools['gh_executable'],interpreter=self.tools['interpreter'])
+            gh_executable=self.tools['gh_executable'],interpreter=self.tools['interpreter'],
+            **{k:value[k] for k in PRIOR_FIELDS if k in value})
         self.lifecycle=DeliveryReviewLifecycle(self.directory/'lifecycle',pool=self.pool,driver=self.driver,source=self.source,
             executable=self.tools['executable'],cli_version=self.tools['cli_version'],interpreter=self.tools['interpreter'])
         self._pins()
@@ -191,12 +199,26 @@ class ReviewRecoveryService:
         status=self.pool.status();require(not status['live_threads'] and not status['capacity_held']
             and len(status['jobs'])==1,'review_recovery_cleanup_unconfirmed')
         job=status['jobs'][0]
-        require(job['id']==self.job['id'] and job['state']=='settled' and job['outcome']=='complete'
+        require(job['id']==self.job['id'] and job['state']=='settled'
             and job['cleanup_confirmed'] is True and job['execution_active'] is False,'review_recovery_cleanup_unconfirmed')
         with self.pool.mutex:job=deepcopy(self.pool._job(self.pool.journal.read(),job['id']))
         context=self.pool._context(job,create=False)
-        require(self.driver._verify_cleanup(context,PoolOutcome(job['id'],job['session_id'],'complete',True)) is True,
+        require(self.driver._verify_cleanup(context,PoolOutcome(job['id'],job['session_id'],job['outcome'],True)) is True,
             'review_recovery_cleanup_unconfirmed')
+        require(job['outcome']=='complete','review_recovery_result_failed')
+
+    def _runtime_failure(self):
+        """Read closed failure telemetry only; never infer cleanup or retry."""
+        from .runtime_client import runtime_failure
+        try:
+            job=job_identity(self.state['job'])
+            path=self.directory/'pool/workers'/job['worker_id']/'queue'
+            with PrivateDirectory(path) as private:value=decode(private.read('review-result.json',MAX_RECORD))
+            if (value['operation_id']==job['id'] and value['session_id']==job['session_id']
+                    and value['status']=='needs_review'):
+                return runtime_failure(value.get('runtime_failure'))
+        except Exception:pass
+        return None
 
     def _proof(self):
         job=self.state['job'];worker=self.directory/'pool/workers'/job['worker_id']
@@ -230,7 +252,10 @@ class ReviewRecoveryService:
             if self.state is not None:
                 require(type(self.state) is dict and set(self.state)=={'binding','phase','job','result','proof','queue_ack_sha256'}
                     and self.state['binding']==binding and self.state['phase'] in ('pending','complete'))
-                if self.state['phase']!='complete':return dict(status='needs_review',reason='review_recovery_pending',activated=False)
+                if self.state['phase']!='complete':
+                    diagnostic=self._runtime_failure()
+                    return dict(status='needs_review',reason='review_recovery_pending',activated=False,
+                        **({'runtime_failure':diagnostic} if diagnostic is not None else {}))
                 self.job=self.state['job'];job_identity(self.job)
                 require(self._proof()==self.state['proof'])
                 ack=private.read('queue-ack.json',MAX_RECORD)
@@ -251,7 +276,13 @@ class ReviewRecoveryService:
                             self.lifecycle.stop(self.job['id']);self.pool.shutdown(timeout=30)
                             raise DevelopmentError('review_recovery_stopped')
                         time.sleep(.05)
-                    self._pins();held();self._clean()
+                    self._pins();held()
+                    try:self._clean()
+                    except DevelopmentError as error:
+                        diagnostic=self._runtime_failure()
+                        if error.code in ('review_recovery_cleanup_unconfirmed','review_recovery_result_failed') and diagnostic is not None:
+                            return dict(status='needs_review',reason=error.code,runtime_failure=diagnostic,activated=False)
+                        raise
                     result=self.lifecycle.publish(self.job['id'])
                     require(result['status']=='complete' and result['delivery_sha']==self.value['delivery_sha'])
                     self._pins();held();self._clean()

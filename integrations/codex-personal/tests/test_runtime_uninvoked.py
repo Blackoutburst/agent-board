@@ -6,6 +6,7 @@ import pytest
 
 from blackoutburst_agents import runtime_uninvoked as module
 from blackoutburst_agents.runtime_guard import RuntimeControlError,RuntimeGuard
+from blackoutburst_agents.runtime_client import runtime_failure
 from test_review_worker import review_case,space,run
 
 
@@ -14,6 +15,9 @@ def state(case,result):
     turns=case['store'].status(op['payload']['work_id'])['turns']
     assert len(turns)==1 and turns[0]['status']=='blocked'
     value=case['store'].turn_result(turns[0]['id'])
+    value=deepcopy(value)
+    diagnostic=value['verification'].pop('runtime_failure',None)
+    if diagnostic is not None:assert runtime_failure(diagnostic)==diagnostic
     assert value=={'status':'blocked','reason':'runtime_start_requires_review','text':'',
         'uncertain':True,'verification':{'cleanup_confirmed':True}}
     records=case['runtime'].list_status()
