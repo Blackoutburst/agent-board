@@ -6,6 +6,11 @@ import time
 from projects import _fail, _text
 from owner_powers import has_owner_power
 
+GROUP_MENTIONS = (
+    {'id': 'group:human', 'name': 'human', 'kind': 'group', 'hint': 'everyone human here'},
+    {'id': 'group:agent', 'name': 'agent', 'kind': 'group', 'hint': 'every agent here · max 50'},
+)
+
 
 def migrate_communication(db):
     db.execute('''CREATE TABLE project_labels(project_id TEXT NOT NULL REFERENCES projects(id),
@@ -50,10 +55,11 @@ class CommunicationMixin:
         with self._connection() as db:
             actor=self._actor(db,actor,'allow_read')
             self._member(db,actor,thread_id)
-            return self._mentionables(db,thread_id,actor)
+            return [dict(group) for group in GROUP_MENTIONS] + self._mentionables(db,thread_id,actor)
 
     def _resolve_mentions(self, db, actor, thread_id, body, mentions, reply_to):
-        candidates=self._mentionables(db,thread_id,actor)
+        individuals=self._mentionables(db,thread_id,actor)
+        candidates=[*GROUP_MENTIONS, *individuals]
         by_id={item['id']:item for item in candidates}
         if any(identifier not in by_id for identifier in mentions):
             _fail('Mention a human or active agent who can access this conversation')
@@ -66,11 +72,27 @@ class CommunicationMixin:
         for (start,end),identifiers in sorted(matches.items(),key=lambda item:-(item[0][1]-item[0][0])):
             if any(start<right and end>left for left,right in occupied):continue
             occupied.append((start,end))
+            groups = [identifier for identifier in identifiers if identifier.startswith('group:')]
+            if groups:
+                identifiers = groups  # Reserved tokens win identical display names.
             if len(identifiers)>1 and not set(identifiers).intersection(result):
                 _fail('This mention name is ambiguous; select its specific recipient')
             if len(identifiers)==1:
                 result.extend(identifiers)
-        explicit = list(dict.fromkeys(result))
+        current=self._author(db,actor)
+        author_ref='agent:'+current['agent_id'] if current['kind']=='agent' else current['owner_id']
+        expanded=[]
+        for identifier in result:
+            if identifier in ('group:human', 'group:agent'):
+                kind=identifier[6:]
+                targets=[item['id'] for item in individuals if item['kind']==kind and item['id']!=author_ref]
+                if kind=='agent' and len(targets)>50:
+                    _fail('@agent can mention at most 50 agents; select individual recipients instead')
+                expanded.extend(targets)
+            else:
+                expanded.append(identifier)
+        result=list(dict.fromkeys(expanded))
+        explicit = result.copy()
         if reply_to:
             original=db.execute('SELECT author FROM messages WHERE id=? AND thread_id=?',(reply_to,thread_id)).fetchone()
             if original:

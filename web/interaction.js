@@ -17,17 +17,41 @@ const Conversations = (() => {
     const menu = el("div", { class: "mention-menu", id: "mention-options", role: "listbox", "aria-label": "Mention someone", hidden: true });
     const wrapper = el("div", { class: "mention-editor" }, textarea, menu);
     textarea.setAttribute("aria-controls", "mention-options"); textarea.setAttribute("aria-expanded", "false");
-    let choices = [], selected = 0, generation = 0;
+    let choices = [], selected = 0, generation = 0, pendingEdit = null;
     const query = () => /(?:^|\s)@([^@\n]{0,100})$/.exec(textarea.value.slice(0, textarea.selectionStart));
     function hide() { menu.hidden = true; textarea.setAttribute("aria-expanded", "false"); }
+    function adjustSelections(value, edit) {
+      for (const [id, spans] of Object.entries(draft.mentionSpans || {})) {
+        const retained = edit ? spans.flatMap(span => {
+          const delta = value.length - edit.previous.length;
+          let {start, end} = span;
+          if (edit.end <= start) { start += delta; end += delta; }
+          else if (edit.start < end) return [];
+          // Python's server-side \w includes Unicode letters and numbers.
+          // Match full code points at the boundaries, including astral letters.
+          if (value.slice(start, end) !== span.token || /(?:\p{L}|\p{N}|_|@)$/u.test(value.slice(0, start)) || /^(?:\p{L}|\p{N}|_)/u.test(value.slice(end))) return [];
+          return [{start, end, token: span.token}];
+        }) : [];
+        if (retained.length) draft.mentionSpans[id] = retained;
+        else { delete draft.mentionSpans[id]; draft.mentions = draft.mentions.filter(target => target !== id); }
+      }
+    }
     function choose(target) {
       const match = query(); if (!match) return;
       const end = textarea.selectionStart, start = end - match[1].length - 1;
-      const text = `@${target.name} `;
-      textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+      const reservedIndividual = target.kind !== "group" && ["human", "agent"].includes(target.name.toLowerCase());
+      const token = reservedIndividual ? target.name : `@${target.name}`;
+      const text = `${token} `;
+      const previous = textarea.value;
+      textarea.value = previous.slice(0, start) + text + previous.slice(end);
+      adjustSelections(textarea.value, {start, end, previous});
       draft.body = textarea.value;
       draft.mentionNames ||= {};
       draft.mentionNames[target.id] = target.name;
+      if (reservedIndividual || target.kind === "group") {
+        draft.mentionSpans ||= {};
+        draft.mentionSpans[target.id] = [...(draft.mentionSpans[target.id] || []), {start, end: start + token.length, token}];
+      }
       draft.mentions = [...new Set([...draft.mentions, target.id])];
       hide(); textarea.focus(); textarea.setSelectionRange(start + text.length, start + text.length);
     }
@@ -35,7 +59,8 @@ const Conversations = (() => {
       menu.replaceChildren(...choices.map((target, index) => btn("", () => choose(target), index === selected ? "selected" : "", { role: "option", "aria-selected": String(index === selected), onMousedown: event => event.preventDefault() })));
       [...menu.children].forEach((button, index) => {
         const target = choices[index], presence = { online: "Online", idle: "Idle", offline: "Offline" }[target.presence];
-        button.append(el("strong", {}, `@${target.name}`), el("span", { class: "small muted" }, `${target.kind === "agent" ? "Agent" : "Human"} · ${ownerName(target.owner_id)}${target.kind === "agent" && presence ? " · " + presence : ""}`));
+        const hint = target.kind === "group" ? target.hint : `${target.kind === "agent" ? "Agent" : "Human"} · ${ownerName(target.owner_id)}${target.kind === "agent" && presence ? " · " + presence : ""}`;
+        button.append(el("strong", {}, `@${target.name}`), el("span", { class: "small muted" }, hint));
       });
       menu.hidden = !choices.length; textarea.setAttribute("aria-expanded", String(choices.length > 0));
     }
@@ -48,7 +73,18 @@ const Conversations = (() => {
       choices = all.filter(item => item.name.toLowerCase().includes(filter)).slice(0, 12);
       selected = 0; render();
     }
-    textarea.addEventListener("input", () => update().catch(() => hide()));
+    textarea.addEventListener("beforeinput", event => {
+      let start = textarea.selectionStart, end = textarea.selectionEnd;
+      const type = event.inputType || "";
+      if (start === end && type === "deleteContentBackward") start = Math.max(0, start - 1);
+      else if (start === end && type === "deleteContentForward") end = Math.min(textarea.value.length, end + 1);
+      const unknown = !type || type.startsWith("history") || (start === end && type.startsWith("delete"));
+      pendingEdit = unknown ? null : {start, end, previous: textarea.value};
+    });
+    textarea.addEventListener("input", () => {
+      adjustSelections(textarea.value, pendingEdit); pendingEdit = null;
+      update().catch(() => hide());
+    });
     textarea.addEventListener("click", () => update().catch(() => hide()));
     textarea.addEventListener("keydown", event => {
       if (menu.hidden) return;
@@ -59,7 +95,13 @@ const Conversations = (() => {
     return wrapper;
   }
   function selectedMentions(draft) {
-    return draft.mentions.filter(id => draft.mentionNames?.[id] && draft.body.includes(`@${draft.mentionNames[id]}`));
+    return draft.mentions.filter(id => {
+      const name = draft.mentionNames?.[id]; if (!name) return false;
+      if (id.startsWith("group:") || ["human", "agent"].includes(name.toLowerCase())) {
+        return draft.mentionSpans?.[id]?.some(span => draft.body.slice(span.start, span.end) === span.token);
+      }
+      return draft.body.includes(`@${name}`);
+    });
   }
   function messageBody(message) {
     return Markdown.block(message.body, "", message.mention_targets);
