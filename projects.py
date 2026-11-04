@@ -385,6 +385,11 @@ class ProjectsMixin:
                 _fail("Ticket changed; reload before saving", 409)
             if actor["kind"] == "agent" and not companion and row["status"] != "done" and (row["lease_expires_at"] or 0) <= time.time():
                 _fail("Claim expired; inspect and recover before updating", 409)
+            held = self._retain_owner_block(db, actor, row)
+            if held and not has_owner_power(actor, 'dispatch') and (
+                    ('status' in changes and changes['status'] != row['status'])
+                    or set(changes) & {'blocked_reason', 'recheck_after_seconds', 'unblock_owner'}):
+                _fail('Only a human or companion may change an owner hold; release without changing its status', 403)
             if "attachment_ids" in changes:
                 self._set_ticket_attachments(db, row, changes["attachment_ids"])
             if "depends_on" in changes:
@@ -501,6 +506,10 @@ class ProjectsMixin:
                 db.execute("UPDATE threads SET title=?,updated_at=? WHERE id=?",
                            (self._ticket_thread_title(project["name"], row["number"], values["title"]), now, row["thread_id"]))
             self._audit(db, actor, "ticket_updated", {"ticket_id": ticket_id, "version": expected_version + 1, "fields": sorted(changes)})
+            if has_owner_power(actor, 'dispatch') and set(changes) & {
+                    'status', 'blocked_reason', 'recheck_after_seconds', 'unblock_owner'}:
+                self._audit(db, actor, 'ticket_owner_hold', {'ticket_id': ticket_id,
+                    'active': status == 'blocked', 'holder': self._author(db, actor)})
             if 'assignee_agent_id' in values and values['assignee_agent_id'] != row['assignee_agent_id']:
                 notice_row=db.execute('SELECT * FROM tickets WHERE id=?',(ticket_id,)).fetchone()
                 self._assignment_notice(db,actor,notice_row,row['assignee_agent_id'],'unassigned',expected_version+1)

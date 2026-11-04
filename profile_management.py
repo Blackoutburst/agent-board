@@ -351,6 +351,7 @@ class ProfileManagementMixin:
                 AND (state IS NOT 'finished' OR cleanup_confirmed IS NOT 1) LIMIT 1''',
                 (ticket_id,)).fetchone():
                 _fail('managed_claim_runtime_unresolved',409)
+            self._retain_owner_block(db, actor, row)
             now=time.time();next_status='todo' if row['status']=='in_progress' else row['status']
             db.execute('''UPDATE tickets SET status=?,claimant=NULL,claim_started_version=NULL,
                 lease_expires_at=NULL,version=version+1,updated_at=? WHERE id=? AND version=?''',

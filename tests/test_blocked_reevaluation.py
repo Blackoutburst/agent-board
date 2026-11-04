@@ -60,6 +60,126 @@ def test_human_manual_block_is_kept_until_a_human_changes_it(space):
     assert reopened['blocked_reason'] == '' and reopened['unblock_owner'] is None and reopened['recheck_at'] is None
 
 
+@pytest.mark.parametrize('legacy', [False, True])
+def test_human_reaffirmed_block_survives_an_inherited_worker_timer(space, legacy):
+    board, human, _, project, first, *_ = space
+    task = new(space)
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    blocked = board.update_ticket(first, task['id'], claimed['version'], status='blocked',
+                                  blocked_reason='Repository unavailable', release_claim=True)
+    held = board.update_ticket(human, task['id'], blocked['version'], status='blocked')
+    with board._tx() as db:
+        db.execute('UPDATE tickets SET recheck_at=? WHERE id=?', (time.time()-1, task['id']))
+        if legacy:
+            db.execute("DELETE FROM ticket_events WHERE ticket_id=? AND event='ticket_owner_hold'", (task['id'],))
+    board.post_message(human, task['thread_id'], 'Nobody take this task.')
+    for index in range(2):
+        assert task['id'] not in {item['id'] for item in board.get_work(first, project['id'])['ready']}
+        assert board.sweep_blocked(first, project['id']) == []
+        current = board.get_ticket(human, task['id'])['ticket']
+        assert current['status'] == 'blocked' and 'explicit' in current['block_reasons']
+        assert not board.claim_next_ticket(first, 'held-' + str(index), project['id'])['claimed']
+    reopened = board.update_ticket(human, task['id'], current['version'], status='todo')
+    assert board.claim_ticket(first, task['id'], reopened['version'])['claimant']
+
+
+def test_human_timed_hold_survives_answering_a_request_and_dependency_completion(space):
+    board, human, other, project, first, second, _ = space
+    prerequisite = new(space, 'Dependency')
+    task = new(space)
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    request = board.request_human_input(first, task['id'], other['owner_id'], 'Which value?', 'request')
+    current = board.get_ticket(human, task['id'])['ticket']
+    held = board.update_ticket(human, task['id'], current['version'], status='blocked',
+                               blocked_reason='Manual hold', recheck_after_seconds=300,
+                               depends_on=[prerequisite['id']])
+    with board._tx() as db:
+        db.execute('UPDATE tickets SET recheck_at=? WHERE id=?', (time.time()-1, task['id']))
+    board.resolve_human_request(other, request['id'], 'Use A')
+    claimed = board.claim_ticket(second, prerequisite['id'], prerequisite['version'])
+    board.update_ticket(second, prerequisite['id'], claimed['version'], status='review',
+                         outcome='Delivered', evidence='Synthetic test')
+    assert task['id'] not in {item['id'] for item in board.get_work(first, project['id'])['ready']}
+    assert board.get_ticket(human, task['id'])['ticket']['status'] == 'blocked'
+
+
+@pytest.mark.parametrize('operation', ['update', 'release'])
+def test_worker_cannot_reopen_a_human_hold_but_can_release_without_changing_it(space, operation):
+    board, human, _, _, first, *_ = space
+    task = new(space)
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    held = board.update_ticket(human, task['id'], claimed['version'], status='blocked', blocked_reason='Owner hold')
+    if operation == 'update':
+        reject(board.update_ticket, first, task['id'], held['version'], status='todo', expected_status=403)
+    else:
+        reject(board.release_ticket, first, task['id'], held['version'], 'worker-reopen', 'Done waiting',
+               status='todo', expected_status=403)
+    released = board.release_ticket(first, task['id'], held['version'], 'release-only', 'Stopping and preserving hold')
+    assert released['status'] == 'blocked' and released['claimant'] is None
+    assert released['blocked_reason'] == 'Owner hold'
+
+
+def test_new_worker_block_after_explicit_human_reopen_still_expires_normally(space):
+    board, human, _, project, first, *_ = space
+    task = new(space)
+    held = board.update_ticket(human, task['id'], task['version'], status='blocked')
+    reopened = board.update_ticket(human, task['id'], held['version'], status='todo')
+    claimed = board.claim_ticket(first, task['id'], reopened['version'])
+    board.update_ticket(first, task['id'], claimed['version'], status='blocked',
+                         blocked_reason='New worker wait', release_claim=True)
+    with board._tx() as db:
+        db.execute('UPDATE tickets SET recheck_at=? WHERE id=?', (time.time()-1, task['id']))
+    assert task['id'] in {item['id'] for item in board.get_work(first, project['id'])['ready']}
+
+
+def test_a_later_human_question_preserves_a_proven_legacy_owner_hold(space):
+    board, human, other, project, first, *_ = space
+    task = new(space)
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    held = board.update_ticket(human, task['id'], claimed['version'], status='blocked',
+                               blocked_reason='Owner hold', recheck_after_seconds=300)
+    with board._tx() as db:
+        db.execute("DELETE FROM ticket_events WHERE ticket_id=? AND event='ticket_owner_hold'", (task['id'],))
+        db.execute('UPDATE tickets SET recheck_at=? WHERE id=?', (time.time()-1, task['id']))
+    request = board.request_human_input(first, task['id'], other['owner_id'], 'Clarify the stop?', 'held-question')
+    board.resolve_human_request(other, request['id'], 'Keep waiting')
+    assert task['id'] not in {item['id'] for item in board.get_work(first, project['id'])['ready']}
+    assert board.get_ticket(human, task['id'])['ticket']['blocked_reason'] == 'Owner hold'
+
+
+def test_companion_can_explicitly_reopen_a_human_hold_without_claiming_work(space):
+    from test_companion_workflow import running_profile
+    board, human, _, project, first, *_ = space
+    companion = running_profile(board, human, 'Owner companion', [], kind='companion')
+    task = new(space)
+    held = board.update_ticket(human, task['id'], task['version'], status='blocked')
+    reopened = board.release_ticket(companion['actor'], task['id'], held['version'], 'companion-reopen',
+                                     'Owner decision to resume', status='todo')
+    assert reopened['status'] == 'todo' and reopened['claimant'] is None
+    assert task['id'] in {item['id'] for item in board.get_work(first, project['id'])['ready']}
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_owner_hold_survives_delegation_and_subtask_review(space, legacy):
+    board, human, _, project, first, second, _ = space
+    task = new(space)
+    claimed = board.claim_ticket(first, task['id'], task['version'])
+    held = board.update_ticket(human, task['id'], claimed['version'], status='blocked',
+                               blocked_reason='Explicit owner hold', recheck_after_seconds=300)
+    with board._tx() as db:
+        db.execute('UPDATE tickets SET recheck_at=? WHERE id=?', (time.time()-1, task['id']))
+        if legacy:
+            db.execute("DELETE FROM ticket_events WHERE ticket_id=? AND event='ticket_owner_hold'", (task['id'],))
+    child = board.delegate_task(first, task['id'], held['version'], 'Synthetic dependency',
+                                 'Prepare a synthetic result', [], 'held-delegation')['child']
+    claimed = board.claim_ticket(second, child['id'], child['version'])
+    board.update_ticket(second, child['id'], claimed['version'], status='review', release_claim=True,
+                         outcome='Delivered subtask', evidence='Synthetic verification')
+    current = board.get_ticket(human, task['id'])['ticket']
+    assert current['status'] == 'blocked' and not current['ready']
+    assert task['id'] not in {item['id'] for item in board.get_work(first, project['id'])['ready']}
+
+
 def test_get_work_releases_legacy_ghosts_with_audit_and_message(space):
     board, human, _, project, first, *_ = space
     task = new(space)
