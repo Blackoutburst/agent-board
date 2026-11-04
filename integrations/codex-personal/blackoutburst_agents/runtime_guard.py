@@ -101,6 +101,8 @@ class RuntimeGuard:
         self.operation,created=self.journal.begin(self.configuration(work,turn_id))
         if not created:
             raise RuntimeControlError('runtime_existing_turn_requires_review')
+        from .runtime_uninvoked import bind_new
+        bind_new(self,self.operation)
         try:
             config=self.operation['configuration']
             name, arguments = self.reservation(config)
@@ -124,6 +126,10 @@ class RuntimeGuard:
         except Exception:
             self.review()
             raise RuntimeControlError('runtime_start_requires_review') from None
+
+    def finish_uninvoked(self,work,turn_id,proof):
+        from .runtime_uninvoked import finish
+        return finish(self,work,turn_id,proof)
 
     def should_cancel(self):
         if self.control_failed:return True

@@ -76,7 +76,10 @@ class MessageHostReviewTests(unittest.TestCase):
         self.assertEqual(self.calls,0,result)
         self.assertFalse(any(name=='post_message' for name,_ in self.client.calls))
         self.assertFalse(any(name=='checkpoint_message_feed' for name,_ in self.client.calls))
-        self.assertEqual(self.board.get_runtime(self.human)['active_count'],1)
+        runtime=self.board.get_runtime(self.human)
+        self.assertEqual(runtime['active_count'],0)
+        self.assertEqual(runtime['executions'][0]['outcome'],'blocked')
+        self.assertTrue(runtime['executions'][0]['cleanup_confirmed'])
 
     def test_feed_receipts_refuse_boolean_limit_and_integer_acknowledgement(self):
         reader=self.messages.reader('strict-receipts','a'*64,'now',1)

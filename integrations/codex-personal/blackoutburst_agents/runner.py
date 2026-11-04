@@ -7,7 +7,7 @@ from typing import Callable
 from .codex_turn import execute_turn
 from .run_store import RunStore, StoreError
 from .subscription_probe import ProbeSettings
-from .runtime_guard import RuntimeAdmissionRefused
+from .runtime_guard import RuntimeAdmissionRefused,RuntimeGuard
 
 
 class PersonalRunner:
@@ -33,7 +33,7 @@ class PersonalRunner:
             if context_guard is not None:work={**work,'decision_memory':context_guard}
             settings = ProbeSettings(executable=work['executable'], model=work['model'],
                                      timeout_seconds=timeout)
-            entry = self.store.begin_turn(work_id, request_id, prompt)
+            entry = self.store.begin_turn(work_id, request_id, prompt, _runtime_guard=self.runtime_guard if isinstance(self.runtime_guard,RuntimeGuard) else None)
             turn_id = entry['turn']['id']
             if entry['cached']:
                 if self.runtime_guard is not None:
@@ -47,7 +47,8 @@ class PersonalRunner:
 
             if self.runtime_guard is not None:
                 try:
-                    self.runtime_guard.before(work, turn_id)
+                    from .runtime_uninvoked import before
+                    before(self.runtime_guard, work, turn_id, entry.get("_runtime_entry"))
                 except RuntimeAdmissionRefused:
                     self.store.finish_turn(turn_id, {'status':'blocked','reason':'runtime_capacity_exhausted',
                         'text':'','uncertain':False,'verification':{'runtime_not_admitted':True}})

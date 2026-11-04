@@ -82,6 +82,8 @@ class _ObservedReviewRuntime:
             receipt=value.get('execution') if name=='lookup_execution' and type(value) is dict else value
             if type(receipt) is not dict or type(receipt.get('id')) is not str:fail('review_pool_runtime_unconfirmed')
             rows=self.journal.db.execute("SELECT id FROM executions WHERE json_extract(receipt,'$.id')=? LIMIT 2",(receipt['id'],)).fetchall()
+            if not rows and name=='lookup_execution':
+                rows=self.journal.db.execute('SELECT id FROM executions WHERE key=? LIMIT 2',(args['idempotency_key'],)).fetchall()
             if len(rows)!=1:fail('review_pool_runtime_unconfirmed')
             self.validate(self.journal.get(rows[0]['id']),receipt)
             if receipt['state']=='running':self.active.add(receipt['id'])
