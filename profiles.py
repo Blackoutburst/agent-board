@@ -392,7 +392,7 @@ class ProfilesMixin(ProfileRefreshMixin):
         project_ids = json.loads(profile['project_ids'])
         return project_ids is None or project_id in project_ids
 
-    def _profile_thread_allowed(self, db, actor, thread_id):
+    def _profile_thread_allowed(self, db, actor, thread_id, *, allow_standalone_invitation=True):
         if actor['kind'] == 'human' or has_owner_power(actor, 'dispatch'):
             return True
         profile = self._profile_for_actor(db, actor)
@@ -402,8 +402,24 @@ class ProfilesMixin(ProfileRefreshMixin):
         if project_ids is None:
             return True
         ticket = db.execute('SELECT project_id FROM tickets WHERE thread_id=?', (thread_id,)).fetchone()
+        if not ticket:
+            return allow_standalone_invitation and self._profile_standalone_thread_invited(db, profile, thread_id)
         return bool(ticket and ticket['project_id'] in project_ids and db.execute(
             'SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?', (ticket['project_id'], actor['owner_id'])).fetchone())
+
+    @staticmethod
+    def _profile_standalone_thread_invited(db, profile, thread_id):
+        # An invitation is an owner decision for this conversation only. The
+        # ticket path above never falls back to a standalone invitation.
+        if not db.execute('SELECT 1 FROM thread_members WHERE thread_id=? AND owner_id=?',
+                          (thread_id, profile['owner_id'])).fetchone():
+            return False
+        return bool(db.execute('''SELECT 1 FROM audit a JOIN messages x
+            ON x.id=json_extract(a.detail,'$.message_id')
+            WHERE a.event='standalone_agent_invited' AND x.thread_id=?
+            AND json_extract(a.detail,'$.thread_id')=x.thread_id
+            AND json_extract(a.detail,'$.agent_id')=? AND json_extract(a.actor,'$.owner_id')=?
+            LIMIT 1''', (thread_id, profile['id'], profile['owner_id'])).fetchone())
 
     @staticmethod
     def _profile_can_create_projects(profile):
