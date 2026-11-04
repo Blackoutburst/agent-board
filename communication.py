@@ -79,9 +79,11 @@ class CommunicationMixin:
 
     def _inbox_targets(self, db, actor):
         if actor['kind']=='human':return [actor['owner_id']]
-        row=db.execute('SELECT agent_id,agent_kind FROM sessions WHERE id=?',(actor['session_id'],)).fetchone()
+        row=db.execute('''SELECT s.agent_id,s.agent_kind,p.kind AS profile_kind FROM sessions s
+            LEFT JOIN agent_profiles p ON p.id=s.agent_id WHERE s.id=?''',(actor['session_id'],)).fetchone()
         if not row or not row['agent_id']:return [actor['owner_id']]
-        return ['agent:'+row['agent_id']]+([actor['owner_id']] if row['agent_kind']=='agent' else [])
+        # A companion acts for its owner, so it also reads messages that @mention the owner (and can answer or pass them on).
+        return ['agent:'+row['agent_id']]+([actor['owner_id']] if row['agent_kind']=='agent' or row['profile_kind']=='companion' else [])
 
     def _addressed_messages(self, db, actor, *, boundary=0, unread=False, limit=200):
         targets=self._inbox_targets(db,actor)
