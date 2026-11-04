@@ -34,7 +34,7 @@ _TICKET_EDIT_FIELDS = frozenset({
     'title', 'description', 'acceptance_criteria', 'outcome', 'evidence', 'priority',
     'assignee_owner_id', 'status', 'release_claim', 'depends_on', 'labels', 'required_skills',
     'resource', 'progress', 'assignee_agent_id', 'attachment_ids', 'blocked_reason',
-    'recheck_after_seconds', 'unblock_owner',
+    'recheck_after_seconds', 'unblock_owner', 'resolution',
 })
 
 
@@ -78,6 +78,27 @@ def _review_status_event(raw, event, ticket_id):
                     or type(detail['unassign_self']) is not bool):
                 invalid()
             return detail['status'] in ('todo', 'blocked')
+        if event == 'human_input_requested' and 'presentation' in detail:
+            presentation = detail['presentation']
+            if (type(presentation) is not dict or not presentation
+                    or set(presentation) - {'summary', 'choices', 'command'}):
+                invalid()
+            if 'summary' in presentation:
+                summary = presentation['summary']
+                if (not text(summary, 240) or summary != summary.strip()
+                        or '\n' in summary or '\r' in summary):
+                    invalid()
+            if 'command' in presentation and not text(presentation['command'], 20000):
+                invalid()
+            if 'choices' in presentation:
+                choices = presentation['choices']
+                if (type(choices) is not list or not 2 <= len(choices) <= 6
+                        or any(not text(label, 160) or label != label.strip()
+                               or '\n' in label or '\r' in label for label in choices)
+                        or len(set(choices)) != len(choices)):
+                    invalid()
+            detail = dict(detail)
+            del detail['presentation']
         shapes = {
             'review_requested': set(),
             'human_input_requested': {'request_id', 'owner_id', 'message_id'},
