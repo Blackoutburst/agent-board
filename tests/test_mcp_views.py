@@ -27,7 +27,9 @@ def test_compact_inbox_replays_lost_initial_page_and_drains_without_gaps(space):
             mentions=['agent:'+reg['identity']['id']],idempotency_key='huge'+str(i))
         identifiers.append(item['id'])
     first=b.read_inbox(actor,limit=50,mcp_compact=True)
-    assert set(first)=={'messages','cursor','session'}
+    assert set(first)=={'messages','cursor','session','backlog','priority'}
+    assert first['backlog']['unread']==27 and first['backlog']['remaining_after_page']==27-len(first['messages'])
+    assert first['priority'][0]['id']==identifiers[-1]
     assert first['messages'] and len(first['messages'])<27
     assert 'body' not in first['messages'][0]
     retry=b.read_inbox(actor,limit=50,mcp_compact=True)

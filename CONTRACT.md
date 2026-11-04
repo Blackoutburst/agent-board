@@ -213,7 +213,7 @@ Use project tickets for normal collaborative work. The legacy action-task API re
 
 MCP reads default to compact, byte-bounded pages. Omitted prose is labelled with previews and hashes; use `get_text` or explicit `view="full"` for original source. Collection reads follow `next_cursor`, and threads use `next_before`. See [the bounded read and migration contract](docs/MCP-READS.md).
 
-`read_inbox` defaults to `messages`, `cursor`, `session` only. Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
+`read_inbox` defaults to `messages`, `cursor`, `session`; a page that does not drain the backlog adds `backlog` (`unread`, `remaining_after_page`, `oldest_at`, `newest_at`), and a cursorless read with a backlog adds `priority`: up to five of the newest human messages, or replies to the agent's own messages, beyond the page (a preview: they are still delivered and acknowledged in order). Messages the reading identity already followed on the same thread, meaning any of its sessions posted there afterwards, are not delivered (#56). Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
 
 ## Fixed development observation frame
 

@@ -876,6 +876,42 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             raise BoardError("Limit must be between 1 and 200")
         return limit
 
+    def _inbox_backlog(self, pending, presented=0):
+        # #56: the first page says how much is waiting, so callers know to drain (or to look at priority first).
+        return {"unread": len(pending), "remaining_after_page": len(pending) - presented,
+                "oldest_at": pending[0]["created_at"], "newest_at": pending[-1]["created_at"]}
+
+    def _inbox_priority(self, db, agent_id, pending, page, cursor, count=5):
+        # #56: on a cursorless read (new session, restart) a backlog must not bury what is newest and most direct:
+        # messages written by a human, and replies to this agent's own messages, beyond the current page, newest first.
+        if cursor or len(page) >= len(pending):
+            return []
+        shown = {row["seq"] for row in pending[:len(page)]}
+        chosen = []
+        for row in reversed(pending):
+            if row["seq"] in shown:
+                continue
+            author = _decode(row["author"])
+            direct = author.get("kind") == "human"
+            if not direct and agent_id and row["reply_to"]:
+                parent = db.execute("SELECT author FROM messages WHERE id=? AND thread_id=?", (row["reply_to"], row["thread_id"])).fetchone()
+                direct = bool(parent) and _decode(parent["author"]).get("agent_id") == agent_id
+            if direct:
+                chosen.append(row)
+                if len(chosen) >= count:
+                    break
+        return chosen
+
+    def _inbox_priority_entry(self, db, agent_id, row):
+        # A slim pointer (about 300 bytes) so five fit beside a full page; get_message/get_text give the rest.
+        from mcp_views import compact
+        message = compact(self._message(db, row))
+        author = message.get("author") or {}
+        entry = {key: message[key] for key in ("id", "thread_id", "created_at", "reply_to", "url", "body_preview") if message.get(key) is not None}
+        entry["author"] = {"kind": author.get("kind"), "name": author.get("agent_name") or author.get("display_name") or author.get("owner_id")}
+        entry["why"] = "human" if author.get("kind") == "human" else "reply_to_you"
+        return entry
+
     def read_inbox(self, actor, cursor=None, limit=50, reader_id="", include_work=False, *, mcp_compact=False):
         limit = self._limit(limit)
         if type(include_work) is not bool:
@@ -896,8 +932,9 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                     # Presentation acknowledges the previous durable page. A
                     # lost/rejected initial response can be replayed cursorless.
                     db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader,boundary))
-            rows = self._addressed_messages(db, actor, boundary=boundary, limit=limit)
-            source_count = len(rows)
+            agent_id = self._inbox_agent_id(db, actor)
+            pending = self._addressed_messages(db, actor, boundary=boundary, limit=None, answered_by=agent_id)
+            rows = pending[:limit]
             token = secrets.token_urlsafe(32)
             session = None
             if actor["kind"] == "agent":
@@ -908,6 +945,13 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                 metadata = {"messages":[], "cursor":token, "session":session}
                 if include_work:
                     metadata['work']={'detail_tool':'get_work','legacy_tasks_detail':'list_thread_tasks','embedded':False}
+                if pending:
+                    # Reserve the worst case: the budget may still shorten the page below the pending set.
+                    metadata['backlog'] = self._inbox_backlog(pending)
+                    priority = self._inbox_priority(db, agent_id, pending, pending[:1], cursor)
+                    metadata['priority'] = [self._inbox_priority_entry(db, agent_id, row) for row in priority]
+                    while metadata['priority'] and size(compact(metadata)) > BUDGET // 2:
+                        metadata['priority'].pop()
                 selected, used = [], size(compact(metadata))
                 for row in rows:
                     used += size(compact(self._message(db,row)))+1
@@ -917,18 +961,31 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                 if rows and not selected:
                     raise BoardError('One inbox summary exceeds budget; use an explicit full read',413)
                 rows = selected
-            next_seq = rows[-1]["seq"] if rows and (len(rows)==limit or len(rows)<source_count) else db.execute('SELECT COALESCE(MAX(seq),0) FROM messages').fetchone()[0]
+            next_seq = rows[-1]["seq"] if rows and len(rows) < len(pending) else db.execute('SELECT COALESCE(MAX(seq),0) FROM messages').fetchone()[0]
             db.execute("INSERT INTO cursors VALUES(?,?,?)", (_hash(token), reader, next_seq))
             if not mcp_compact:
                 db.execute("INSERT INTO reader_state VALUES(?,?) ON CONFLICT(reader) DO UPDATE SET seq=MAX(seq,excluded.seq)", (reader, next_seq))
             result = {"messages": [self._message(db, row) for row in rows], "cursor": token, "session": session}
             if mcp_compact:
+                extra = {}
+                if len(rows) < len(pending):
+                    extra['backlog'] = self._inbox_backlog(pending, len(rows))
+                    shown = {row['id'] for row in rows}
+                    preview = [item for item in metadata['priority'] if item['id'] not in shown]
+                    if preview:
+                        extra['priority'] = preview
                 result = compact(result)
+                result.update(extra)
                 if include_work:
                     result.update(work={'detail_tool':'get_work','legacy_tasks_detail':'list_thread_tasks','embedded':False})
                 if size(result)>BUDGET:
                     raise BoardError('Inbox metadata exceeds budget; request an explicit full read',413)
                 return result
+            if len(rows) < len(pending):
+                result["backlog"] = self._inbox_backlog(pending, len(rows))
+            priority = self._inbox_priority(db, agent_id, pending, rows, cursor)
+            if priority:
+                result["priority"] = [self._message(db, row) for row in priority]
             if not include_work:
                 return result
             self._expire(db)
