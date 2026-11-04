@@ -179,14 +179,15 @@ def test_companion_reopen_leaves_open_requests_and_dependencies_authoritative(ho
     denied(board.resolve_human_request, actor, request['id'], 'Cannot answer for Bob')
 
 
-def test_companion_reopen_refuses_an_existing_claim_and_outside_owner_scope(home):
+def test_companion_reopen_preserves_existing_claim_and_refuses_outside_owner_scope(home):
     board = home['board']; human = home['humans']['alice']; actor = home['companion']['actor']
     ticket = task(home, 'Claimed blocked work')
     claim = board.claim_ticket(home['worker']['actor'], ticket['id'], ticket['version'])
     blocked = board.update_ticket(home['worker']['actor'], ticket['id'], claim['version'],
                                   status='blocked', blocked_reason='Still owned by the worker')
-    denied(board.update_ticket, actor, ticket['id'], blocked['version'], status='todo')
-    assert board.get_ticket(human, ticket['id'])['ticket']['claimant'] == blocked['claimant']
+    reopened = board.update_ticket(actor, ticket['id'], blocked['version'], status='todo')
+    assert reopened['status'] == 'todo' and reopened['claimant'] == blocked['claimant']
+    assert reopened['lease_expires_at'] == blocked['lease_expires_at']
     outside = board.create_ticket(home['humans']['outsider'], home['outside']['id'], 'Outside owner scope')
     outside = board.update_ticket(home['humans']['outsider'], outside['id'], outside['version'], status='blocked')
     denied(board.update_ticket, actor, outside['id'], outside['version'], status='todo', statuses=(404,))

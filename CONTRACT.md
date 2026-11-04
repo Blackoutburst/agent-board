@@ -7,6 +7,8 @@ The browser REST API and MCP act on one database. The companion source candidate
 See [companion identity and migration](docs/COMPANIONS.md) and the exhaustive
 [human-gate audit](docs/COMPANION-GATE-AUDIT.md). Human-created companions retain
 their own agent transport identity and audited owner linkage. They may dispatch,
+edit/assign tickets, set owner holds or restore Todo, record unworked owner
+closures (reason only, generated non-verification evidence),
 answer their owner's requests, decide reviews and pause/resume ordinary agents or
 project automation. They never claim/work tickets or gain permission, identity,
 pairing, account or device-management powers. The added MCP operations are

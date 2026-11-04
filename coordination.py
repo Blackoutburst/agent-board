@@ -630,7 +630,7 @@ class CoordinationMixin(ProjectsMixin):
             if not companion and (row['assignee_owner_id'] not in (None, actor['owner_id']) or row['assignee_agent_id'] not in (None, identity)):
                 _fail('Task has been assigned elsewhere', 403)
             if companion:
-                if status and status not in ('todo', row['status']):
+                if status and status not in ('todo', 'blocked', row['status']):
                     _fail('Companions may release work but cannot deliver it for review', 403)
             elif claimant:
                 if not _same_claim(claimant, actor):
@@ -660,8 +660,8 @@ class CoordinationMixin(ProjectsMixin):
                 (next_status, None if unassign_self else (row['assignee_agent_id'] if companion else identity),
                  0 if status else row['waiting_for_dependencies'],
                  reason[:2000] if explicit else (row['blocked_reason'] if next_status == 'blocked' else ''),
-                 identity if explicit else (row['unblock_owner'] if next_status == 'blocked' else None),
-                 now + _DEFAULT_RECHECK_SECONDS if explicit else (row['recheck_at'] if next_status == 'blocked' else None),
+                 (actor['owner_id'] if companion else identity) if explicit else (row['unblock_owner'] if next_status == 'blocked' else None),
+                 (None if companion else now + _DEFAULT_RECHECK_SECONDS) if explicit else (row['recheck_at'] if next_status == 'blocked' else None),
                  now, ticket_id, expected_version))
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             self._remember(db, actor, 'release_ticket', idempotency_key, payload, ticket_id)
@@ -671,7 +671,7 @@ class CoordinationMixin(ProjectsMixin):
                     'active': next_status == 'blocked', 'holder': self._author(db, actor)})
             if next_status == 'review' and row['status'] != 'review':
                 self._record_review_request(db, actor, ticket_id)
-            if explicit:
+            if explicit and not companion:
                 self._audit(db, actor, 'agent_block_recorded', {'ticket_id': ticket_id})
                 self._escalate_repeated_blocks(db, actor, db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone())
             if next_status in ('review', 'done'):

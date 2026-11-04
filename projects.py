@@ -364,24 +364,28 @@ class ProjectsMixin:
             companion = actor.get('companion_for') is not None
             review_decision = (companion and row['status'] == 'review'
                                and changes.get('status') in ('done', 'in_progress', 'todo'))
-            reopen_blocked = (companion and row['status'] == 'blocked' and claimant is None
-                              and changes.get('status') == 'todo')
+            owner_closure = (companion and changes.get('status') == 'done'
+                             and changes.get('resolution') in UNWORKED_RESOLUTIONS)
             if companion:
                 if not has_owner_power(actor, 'dispatch'):
                     _fail('Companion dispatch is not authorized', 403)
-                if set(changes) & {'progress', 'outcome', 'evidence'}:
+                if (set(changes) & {'progress', 'evidence'}
+                        or 'outcome' in changes and not owner_closure):
                     _fail('Companions manage work; they cannot supply worker progress or results', 403)
-                if review_decision:
+                if owner_closure:
+                    # A cancellation/supersession records an owner decision,
+                    # never an implementation or verification by the companion.
+                    values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
+                elif review_decision:
                     if not has_owner_power(actor, 'accept_reviews'):
                         _fail('Companion review decisions are not authorized', 403)
                     values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
-                elif 'status' in changes and not (reopen_blocked or
+                elif 'status' in changes and not (changes['status'] in ('todo', 'blocked') or
                         (release and changes['status'] in ('todo', row['status']))):
-                    _fail('Companions may decide reviews, reopen unclaimed blocks or release work, never start or deliver it', 403)
-                if changes.get('resolution', 'completed') != 'completed':
-                    _fail('Companions may accept completed reviews only', 403)
-                if 'resolution' in changes and not (review_decision and changes.get('status') == 'done'):
-                    _fail('Companions may set a resolution only while accepting a delivered review', 403)
+                    _fail('Companions may manage owner status or decide reviews, never start or deliver work', 403)
+                if 'resolution' in changes and not (owner_closure or
+                        review_decision and changes.get('status') == 'done' and changes['resolution'] == 'completed'):
+                    _fail('Companions may accept a delivered review or record an unworked owner closure', 403)
             if actor["kind"] == "agent" and not companion and not _same_claim(claimant, actor):
                 _fail("Claim this ticket before updating it", 403)
             if row["version"] != expected_version:
@@ -449,12 +453,12 @@ class ProjectsMixin:
             if unworked:
                 if not values.get("outcome", row["outcome"]).strip():
                     _fail("Closing as superseded or won't do requires a reason (outcome)")
-                if not values.get("evidence", row["evidence"]).strip():
+                if owner_closure or not values.get("evidence", row["evidence"]).strip():
                     label = "superseded" if resolution == "superseded" else "won't do"
                     values["evidence"] = f"No verification: closed as {label} by {self._author(db, actor)['display_name']}."
             elif status == "done" and (not values.get("outcome", row["outcome"]).strip() or not values.get("evidence", row["evidence"]).strip()):
                 _fail("A completed ticket requires an outcome and verification evidence")
-            if actor["kind"] == "agent" and self._project_member(db, actor, row["project_id"])["archived"] and not release:
+            if actor["kind"] == "agent" and not companion and self._project_member(db, actor, row["project_id"])["archived"] and not release:
                 _fail("Project is archived; release the claim instead", 409)
             if values.get("resource") and row["claimant"] and not release and status != "done":
                 if db.execute("SELECT 1 FROM tickets WHERE resource=? AND id!=? AND claimant IS NOT NULL AND status!='done'",
@@ -473,17 +477,19 @@ class ProjectsMixin:
                     block_reason = row["blocked_reason"]
                 verifiable = detail["blocked_by"] or detail["waiting_on_human"]
                 if not block_reason and not verifiable:
-                    if actor["kind"] == "agent":
+                    if actor["kind"] == "agent" and not companion:
                         _fail("A blocked task needs a blocked_reason (with optional recheck_after_seconds), "
                               "an open human request or an unfinished dependency", 400)
                     block_reason = "Blocked manually by " + self._author(db, actor)["display_name"]
-                if block_reason and (block_reason != row["blocked_reason"] or block_seconds is not None):
+                if block_reason and (block_reason != row["blocked_reason"] or block_seconds is not None or block_owner is not None):
                     values["blocked_reason"] = block_reason
-                    values["unblock_owner"] = block_owner or (self._author(db, actor).get("agent_id") or actor["owner_id"])
-                    if block_seconds is not None or actor["kind"] == "agent":
-                        values["recheck_at"] = now + (block_seconds or _DEFAULT_BLOCK_RECHECK)
-                    else:
-                        values["recheck_at"] = None
+                    values["unblock_owner"] = block_owner or (actor['owner_id'] if companion else
+                        (self._author(db, actor).get("agent_id") or actor["owner_id"]))
+                    if block_reason != row["blocked_reason"] or block_seconds is not None:
+                        if block_seconds is not None or actor["kind"] == "agent" and not companion:
+                            values["recheck_at"] = now + (block_seconds or _DEFAULT_BLOCK_RECHECK)
+                        else:
+                            values["recheck_at"] = None
                 elif not block_reason:
                     values.update(blocked_reason="", unblock_owner=None, recheck_at=None)
             elif row["status"] == "blocked" or row["blocked_reason"]:
@@ -519,7 +525,7 @@ class ProjectsMixin:
                 self._assignment_notice(db,actor,notice_row,values['assignee_agent_id'],'assigned',expected_version+1)
             if status == "review" and row["status"] != "review":
                 self._record_review_request(db, actor, ticket_id)
-            if status == "blocked" and actor["kind"] == "agent" and values.get("blocked_reason"):
+            if status == "blocked" and actor["kind"] == "agent" and not companion and values.get("blocked_reason"):
                 self._audit(db, actor, "agent_block_recorded", {"ticket_id": ticket_id})
                 self._escalate_repeated_blocks(db, actor, db.execute("SELECT * FROM tickets WHERE id=?", (ticket_id,)).fetchone())
             if status in ("done", "review") and status != row["status"]:
