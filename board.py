@@ -641,13 +641,14 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                 return self._message(db, db.execute("SELECT * FROM messages WHERE id=?", (previous,)).fetchone())
             if reply_to and not db.execute("SELECT id FROM messages WHERE id=? AND thread_id=?", (reply_to, thread_id)).fetchone():
                 raise BoardError("Reply must reference a message in this conversation")
-            mentions = self._resolve_mentions(db, actor, thread_id, body, mentions, reply_to)
+            mentions, explicit_mentions = self._resolve_mentions(db, actor, thread_id, body, mentions, reply_to)
             for attachment_id in attachment_ids:
                 if not db.execute("SELECT 1 FROM attachments WHERE id=? AND thread_id=?", (attachment_id, thread_id)).fetchone():
                     raise BoardError("Attachment must belong to this conversation")
             message_id, now = _id(), time.time()
             db.execute("INSERT INTO messages(id,thread_id,body,author,created_at,reply_to,mentions,attachments) VALUES(?,?,?,?,?,?,?,?)",
                        (message_id, thread_id, body, _json(self._author(db, actor)), now, reply_to, _json(mentions), _json(attachment_ids)))
+            self._record_standalone_invitations(db, actor, thread_id, message_id, explicit_mentions)
             db.execute("UPDATE threads SET updated_at=? WHERE id=?", (now, thread_id))
             self._remember(db, actor, "post_message", idempotency_key, payload, message_id)
             # A discussion message and its ticket event commit together. The
@@ -703,6 +704,8 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
         with self._tx() as db:
             actor = self._actor(db, actor, "allow_requests")
             self._member(db, actor, thread_id)
+            if not self._profile_thread_allowed(db, actor, thread_id, allow_standalone_invitation=False):
+                raise BoardError("Conversation invitation does not authorize task management outside project scope", 403)
             previous = self._retry(db, actor, "create_task", idempotency_key, payload)
             if previous:
                 return self._task(db, db.execute("SELECT * FROM tasks WHERE id=?", (previous,)).fetchone())
@@ -772,6 +775,8 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
     def _task_authorized(self, db, actor, row):
         if actor["kind"] == "human":
             return True
+        if not self._profile_thread_allowed(db, actor, row['thread_id'], allow_standalone_invitation=False):
+            return False
         try:
             self._delegation_claim_scope(db,actor,None)
         except BoardError:

@@ -748,7 +748,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     async def post_message(session_id: str, thread_id: str, body: str, idempotency_key: str,
                            reply_to: str | None = None, mentions: list[str] | None = None,
                            attachment_ids: list[str] | None = None, view: Literal["compact", "full"] = "compact") -> dict:
-        """Post an authorized reply with a stable retry key. Select context deliberately; never upload private chat history or credentials. Does not create or complete work."""
+        """Post an authorized reply with a stable retry key. @human and @agent expand to eligible humans/agents except the author at post time; @agent is limited to 50. Group selector IDs are group:human and group:agent. Select context deliberately; never upload private chat history or credentials. Does not create or complete work."""
         values = validated(Message, dict(body=body, idempotency_key=idempotency_key, reply_to=reply_to,
                                         mentions=mentions or [], attachment_ids=attachment_ids or []))
         return _view(board.post_message(session_actor(session_id), thread_id, **values),view)
@@ -893,7 +893,7 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     @mcp.tool()
     async def update_ticket(session_id: str, ticket_id: str, expected_version: Version,
                             changes: TicketChanges, view: Literal["compact", "full"] = "compact") -> dict:
-        """Update a ticket claimed by this session, requiring work-request permission and the current version. Omit unchanged fields; human members and companions may dispatch, reassign and release within their owner scope. Companions may accept or return reviews but never supply worker progress/results or claim work. Done requires outcome and evidence. status=blocked requires blocked_reason (rechecked after recheck_after_seconds, default 24h) unless an open human request or unfinished dependency explains it; a dependency in review no longer blocks claiming. release_claim explicitly releases responsibility; use release_ticket to retain self-assignment for later status correction or to remove your own agent assignment. Does not execute work; do not retry conflicts without rereading."""
+        """Update a ticket claimed by this session, requiring work-request permission and the current version. Omit unchanged fields; human members and companions may dispatch, reassign and release within their owner scope. After owner confirmation, companions may reopen unclaimed blocked tickets to todo or accept/return reviews, but never supply worker progress/results or claim work. Done requires outcome and evidence. status=blocked requires blocked_reason (rechecked after recheck_after_seconds, default 24h) unless an open human request or unfinished dependency explains it; a dependency in review no longer blocks claiming. release_claim explicitly releases responsibility; use release_ticket to retain self-assignment for later status correction or to remove your own agent assignment. Does not execute work; do not retry conflicts without rereading."""
         return _view(board.update_ticket(session_actor(session_id), ticket_id, expected_version,
                                    **changes.model_dump(exclude_unset=True)),view)
 

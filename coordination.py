@@ -459,12 +459,15 @@ class CoordinationMixin(ProjectsMixin):
             self._audit(db, actor, 'review_reminder', {'ticket_id': row['id'], 'key': key, 'waited_hours': hours})
 
     def _escalate_repeated_blocks(self, db, actor, row):
-        """After repeated agent blocks without human action, stop automatic retries."""
+        """After repeated agent blocks without an owner decision, stop automatic retries."""
         # Explicit edits, taking responsibility or answering a request are
         # decisions. A human poll can also write maintenance audits; those must
-        # never erase the history of failed agent retries.
+        # never erase the history of failed agent retries. An authenticated
+        # companion's owner decision has the same effect, with its agent audit.
         human = db.execute("""SELECT MAX(id) FROM ticket_events WHERE ticket_id=? AND (
-            event='review_requested' OR (json_extract(actor,'$.kind')='human' AND (
+            event='review_requested' OR ((json_extract(actor,'$.kind')='human' OR (
+                json_extract(actor,'$.profile_kind')='companion' AND
+                json_extract(actor,'$.companion_for')=json_extract(actor,'$.owner_id'))) AND (
                 event IN ('human_input_resolved','ticket_claimed','ticket_recovered')
                 OR (event='ticket_updated' AND json_array_length(detail,'$.fields')>0))))""",
             (row['id'],)).fetchone()[0] or 0

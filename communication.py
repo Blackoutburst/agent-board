@@ -4,6 +4,12 @@ import re
 import time
 
 from projects import _fail, _text
+from owner_powers import has_owner_power
+
+GROUP_MENTIONS = (
+    {'id': 'group:human', 'name': 'human', 'kind': 'group', 'hint': 'everyone human here'},
+    {'id': 'group:agent', 'name': 'agent', 'kind': 'group', 'hint': 'every agent here · max 50'},
+)
 
 
 def migrate_communication(db):
@@ -17,16 +23,30 @@ def migrate_communication(db):
 
 
 class CommunicationMixin:
-    def _mentionables(self, db, thread_id):
+    def _can_invite_standalone_agents(self, db, actor):
+        if not has_owner_power(actor, 'dispatch'):
+            return False
+        if actor['kind'] == 'human':
+            return True
+        profile = self._profile_for_actor(db, actor)
+        return bool(profile and self._effective_profile_policy(db, actor, profile)['allow_requests'])
+
+    def _mentionables(self, db, thread_id, actor):
         owners=[dict(row) for row in db.execute('''SELECT o.id,o.display_name FROM owners o
             JOIN thread_members m ON m.owner_id=o.id WHERE m.thread_id=? ORDER BY o.display_name''',(thread_id,))]
         result=[{'id':o['id'],'name':o['display_name'],'kind':'human','owner_id':o['id']} for o in owners]
         project=db.execute('SELECT project_id FROM tickets WHERE thread_id=?',(thread_id,)).fetchone()
+        can_invite = self._can_invite_standalone_agents(db, actor)
         for row in db.execute('''SELECT p.* FROM agent_profiles p JOIN thread_members m ON m.owner_id=p.owner_id
             WHERE m.thread_id=? AND p.status='active' ORDER BY p.created_at,p.id''',(thread_id,)):
             selected=json.loads(row['project_ids'])
-            if selected is not None and (not project or project['project_id'] not in selected):
-                continue
+            if selected is not None:
+                if project:
+                    if project['project_id'] not in selected:
+                        continue
+                elif not ((can_invite and row['owner_id'] == actor['owner_id'])
+                          or self._profile_standalone_thread_invited(db, row, thread_id)):
+                    continue
             result.append({'id':'agent:'+row['id'],'agent_id':row['id'],'name':json.loads(row['fields'])['name'],
                            'kind':'agent','owner_id':row['owner_id'], **self._agent_presence(db,row['id'])})
         return result
@@ -35,10 +55,11 @@ class CommunicationMixin:
         with self._connection() as db:
             actor=self._actor(db,actor,'allow_read')
             self._member(db,actor,thread_id)
-            return self._mentionables(db,thread_id)
+            return [dict(group) for group in GROUP_MENTIONS] + self._mentionables(db,thread_id,actor)
 
     def _resolve_mentions(self, db, actor, thread_id, body, mentions, reply_to):
-        candidates=self._mentionables(db,thread_id)
+        individuals=self._mentionables(db,thread_id,actor)
+        candidates=[*GROUP_MENTIONS, *individuals]
         by_id={item['id']:item for item in candidates}
         if any(identifier not in by_id for identifier in mentions):
             _fail('Mention a human or active agent who can access this conversation')
@@ -51,10 +72,27 @@ class CommunicationMixin:
         for (start,end),identifiers in sorted(matches.items(),key=lambda item:-(item[0][1]-item[0][0])):
             if any(start<right and end>left for left,right in occupied):continue
             occupied.append((start,end))
+            groups = [identifier for identifier in identifiers if identifier.startswith('group:')]
+            if groups:
+                identifiers = groups  # Reserved tokens win identical display names.
             if len(identifiers)>1 and not set(identifiers).intersection(result):
                 _fail('This mention name is ambiguous; select its specific recipient')
             if len(identifiers)==1:
                 result.extend(identifiers)
+        current=self._author(db,actor)
+        author_ref='agent:'+current['agent_id'] if current['kind']=='agent' else current['owner_id']
+        expanded=[]
+        for identifier in result:
+            if identifier in ('group:human', 'group:agent'):
+                kind=identifier[6:]
+                targets=[item['id'] for item in individuals if item['kind']==kind and item['id']!=author_ref]
+                if kind=='agent' and len(targets)>50:
+                    _fail('@agent can mention at most 50 agents; select individual recipients instead')
+                expanded.extend(targets)
+            else:
+                expanded.append(identifier)
+        result=list(dict.fromkeys(expanded))
+        explicit = result.copy()
         if reply_to:
             original=db.execute('SELECT author FROM messages WHERE id=? AND thread_id=?',(reply_to,thread_id)).fetchone()
             if original:
@@ -64,7 +102,22 @@ class CommunicationMixin:
                 same=(author.get('agent_id')==current.get('agent_id')) if author.get('agent_id') else (current['kind']=='human' and current['owner_id']==target)
                 if not same and target in by_id:
                     result.append(target)
-        return list(dict.fromkeys(result))
+        return list(dict.fromkeys(result)), explicit
+
+    def _record_standalone_invitations(self, db, actor, thread_id, message_id, explicit):
+        if (not self._can_invite_standalone_agents(db, actor)
+                or db.execute('SELECT 1 FROM tickets WHERE thread_id=?', (thread_id,)).fetchone()):
+            return
+        for target in explicit:
+            if not target.startswith('agent:'):
+                continue
+            profile_id = target[6:]
+            if db.execute("SELECT 1 FROM agent_profiles WHERE id=? AND owner_id=? AND status='active'",
+                          (profile_id, actor['owner_id'])).fetchone():
+                # Persist the authenticated owner decision atomically with the
+                # message, rather than inferring authority from notifications.
+                self._audit(db, actor, 'standalone_agent_invited', {
+                    'thread_id': thread_id, 'message_id': message_id, 'agent_id': profile_id})
 
     def _mention_details(self, db, references):
         result=[]
@@ -79,9 +132,11 @@ class CommunicationMixin:
 
     def _inbox_targets(self, db, actor):
         if actor['kind']=='human':return [actor['owner_id']]
-        row=db.execute('SELECT agent_id,agent_kind FROM sessions WHERE id=?',(actor['session_id'],)).fetchone()
+        row=db.execute('''SELECT s.agent_id,s.agent_kind,p.kind AS profile_kind FROM sessions s
+            LEFT JOIN agent_profiles p ON p.id=s.agent_id WHERE s.id=?''',(actor['session_id'],)).fetchone()
         if not row or not row['agent_id']:return [actor['owner_id']]
-        return ['agent:'+row['agent_id']]+([actor['owner_id']] if row['agent_kind']=='agent' else [])
+        # A companion acts for its owner, so it also reads messages that @mention the owner (and can answer or pass them on).
+        return ['agent:'+row['agent_id']]+([actor['owner_id']] if row['agent_kind']=='agent' or row['profile_kind']=='companion' else [])
 
     def _addressed_messages(self, db, actor, *, boundary=0, unread=False, limit=200):
         targets=self._inbox_targets(db,actor)

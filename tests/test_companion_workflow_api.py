@@ -137,6 +137,26 @@ def test_mcp_resolves_only_owner_needs_you_and_keeps_companion_identity(companio
         assert db.execute('SELECT status FROM human_requests WHERE id=?', (other['id'],)).fetchone()[0] == 'open'
 
 
+def test_mcp_companion_reopens_unclaimed_block_without_worker_authority(companion_browser):
+    home = companion_browser; board = home['board']
+    created = ticket(home, 'Owner confirmed reopening')
+    blocked = board.update_ticket(home['human'], created['id'], created['version'],
+                                  status='blocked', blocked_reason='Owner scope decision')
+    reopened = call(home, 'update_ticket', {'ticket_id': created['id'],
+        'expected_version': blocked['version'], 'changes': {'status': 'todo'}, 'view': 'full'})
+    assert reopened['status'] == 'todo' and reopened['claimant'] is None
+    assert reopened['blocked_reason'] == '' and reopened['unblock_owner'] is None
+    assert reopened['recheck_at'] is None
+    call(home, 'claim_ticket', {'ticket_id': created['id'], 'expected_version': reopened['version']}, error=True)
+    for changes in ({'status': 'in_progress'}, {'status': 'review'},
+                    {'status': 'done', 'outcome': 'Invented', 'evidence': 'Invented'}):
+        call(home, 'update_ticket', {'ticket_id': created['id'],
+            'expected_version': reopened['version'], 'changes': changes}, error=True)
+    activity = board.list_activity(home['human'], ticket_id=created['id'])
+    event = next(event for event in activity if event['event'] == 'ticket_updated')
+    assert_author(event['actor'], home)
+
+
 def test_mcp_agent_status_is_bounded_versioned_and_cannot_edit_policy(companion_browser):
     home = companion_browser; board = home['board']; target = home['worker']['profile']
     values = dict(profile_id=target['id'], expected_version=target['version'],

@@ -291,3 +291,21 @@ def test_schema19_backup_roundtrip_and_newer_schema_refusal(setup, tmp_path):
         db.execute('PRAGMA user_version=20')
     with pytest.raises(RuntimeError, match='newer'):
         Board(tmp_path / 'restored')
+
+
+def test_companion_inbox_includes_messages_that_mention_its_owner(setup):
+    board, human, project = setup
+    companion = board.create_agent_profile(human, 'Companion', kind='companion', idempotency_key='create')
+    _, _, _, companion_actor = running(board, human, companion)
+    worker = board.create_agent_profile(human, 'Worker', idempotency_key='worker')
+    board.update_agent_profile(human, worker['id'], worker['version'], policy=ordinary_policy(), project_ids=[project['id']])
+    _, _, _, worker_actor = running(board, human, board.get_agent_profile(human, worker['id']), session='worker-session')
+    thread = {'id': board.create_ticket(human, project['id'], 'Release')['thread_id']}
+    pinged = board.post_message(worker_actor, thread['id'], 'Alice, can I deploy?', mentions=['alice'], idempotency_key='ping')
+    other = board.post_message(worker_actor, thread['id'], 'Just a note', idempotency_key='note')
+    inbox = board.read_inbox(companion_actor)
+    ids = [message['id'] for message in inbox['messages']]
+    assert pinged['id'] in ids and other['id'] not in ids
+    assert 'alice' in next(m for m in inbox['messages'] if m['id'] == pinged['id'])['mentions']
+    # The owner's own inbox still has it too.
+    assert pinged['id'] in [m['id'] for m in board.read_inbox(human)['messages']]
