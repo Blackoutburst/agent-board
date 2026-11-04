@@ -12,6 +12,12 @@ and `manage_agents`. A companion can:
 
 - Create and assign tickets, reassign them, and release claims in its owner's
   projects, including shared-project work belonging to other members.
+- After its owner confirms in chat, move an unclaimed `blocked` ticket back to
+  `todo`. This clears its explicit block reason and escalation, while open
+  Needs-you requests, dependencies and execution cleanup still gate readiness.
+  The companion's owner decision resets the repeated-block counter; it does not
+  claim the ticket or resume a running process. History retains the companion
+  acting for its owner.
 - Resolve Needs-you requests addressed to its owner, with a distinct companion
   response in the discussion and audit.
 - Accept a delivered review using its existing outcome/evidence, or return it

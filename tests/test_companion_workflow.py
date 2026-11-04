@@ -128,6 +128,70 @@ def test_companion_can_release_a_project_claim_without_assigning_work_to_itself(
                                  'companion-release', 'Replan this task') == released
 
 
+def test_companion_reopens_an_unclaimed_escalated_block_and_resets_retry_history(home):
+    board = home['board']; actor = home['companion']['actor']; worker = home['worker']['actor']
+    ticket = task(home, 'Owner resolved the scope decision')
+    claim = board.claim_ticket(worker, ticket['id'], ticket['version'])
+    for attempt in range(3):
+        blocked = board.update_ticket(worker, ticket['id'], claim['version'], status='blocked',
+                                      blocked_reason=f'Waiting for owner decision {attempt}')
+        claim = blocked
+    assert blocked['unblock_owner'] == 'human' and blocked['recheck_at'] is None
+    released = board.release_ticket(worker, ticket['id'], blocked['version'],
+                                    'release-escalated', 'Keep the owner decision gate')
+    denied(board.update_ticket, actor, ticket['id'], released['version'] - 1,
+           status='todo', statuses=(409,))
+    reopened = board.update_ticket(actor, ticket['id'], released['version'], status='todo')
+    assert reopened['status'] == 'todo' and reopened['claimant'] is None
+    assert reopened['blocked_reason'] == '' and reopened['unblock_owner'] is None
+    assert reopened['recheck_at'] is None and reopened['block_reasons'] == []
+    audit, detail = last_audit(board, 'ticket_updated', ticket['id'])
+    assert audit['kind'] == 'agent' and audit['owner_id'] == audit['companion_for'] == 'alice'
+    assert audit['session_id'] == actor['session_id']
+    event = next(event for event in board.list_activity(home['humans']['alice'], ticket_id=ticket['id'])
+                 if event['event'] == 'ticket_updated')
+    assert_companion_author(event['actor'], home)
+    assert detail['fields'] == ['status']
+    denied(board.update_ticket, actor, ticket['id'], released['version'], status='todo', statuses=(403, 409))
+    claim = board.claim_ticket(worker, ticket['id'], reopened['version'])
+    blocked = board.update_ticket(worker, ticket['id'], claim['version'], status='blocked',
+                                  blocked_reason='A new, independent obstacle')
+    assert blocked['unblock_owner'] != 'human' and blocked['recheck_at'] is not None
+    for attempt in range(2):
+        blocked = board.update_ticket(worker, ticket['id'], blocked['version'], status='blocked',
+                                      blocked_reason=f'New obstacle retry {attempt}')
+    assert blocked['unblock_owner'] == 'human' and blocked['recheck_at'] is None
+
+
+@pytest.mark.parametrize('release_claim', [False, True])
+def test_companion_reopen_leaves_open_requests_and_dependencies_authoritative(home, release_claim):
+    board = home['board']; human = home['humans']['alice']; actor = home['companion']['actor']
+    prerequisite = task(home, 'Unfinished prerequisite')
+    ticket = task(home, 'Still waiting', depends_on=[prerequisite['id']])
+    request = board.request_human_input(human, ticket['id'], 'bob', 'Peer decision needed', 'peer-block')
+    blocked = board.get_ticket(human, ticket['id'])['ticket']
+    reopened = board.update_ticket(actor, ticket['id'], blocked['version'], status='todo',
+                                    **({'release_claim': True} if release_claim else {}))
+    assert reopened['status'] == 'todo' and reopened['waiting_on_human']
+    assert [item['id'] for item in reopened['blocked_by']] == [prerequisite['id']]
+    assert not reopened['ready']
+    denied(board.claim_ticket, home['worker']['actor'], ticket['id'], reopened['version'], statuses=(409,))
+    denied(board.resolve_human_request, actor, request['id'], 'Cannot answer for Bob')
+
+
+def test_companion_reopen_refuses_an_existing_claim_and_outside_owner_scope(home):
+    board = home['board']; human = home['humans']['alice']; actor = home['companion']['actor']
+    ticket = task(home, 'Claimed blocked work')
+    claim = board.claim_ticket(home['worker']['actor'], ticket['id'], ticket['version'])
+    blocked = board.update_ticket(home['worker']['actor'], ticket['id'], claim['version'],
+                                  status='blocked', blocked_reason='Still owned by the worker')
+    denied(board.update_ticket, actor, ticket['id'], blocked['version'], status='todo')
+    assert board.get_ticket(human, ticket['id'])['ticket']['claimant'] == blocked['claimant']
+    outside = board.create_ticket(home['humans']['outsider'], home['outside']['id'], 'Outside owner scope')
+    outside = board.update_ticket(home['humans']['outsider'], outside['id'], outside['version'], status='blocked')
+    denied(board.update_ticket, actor, outside['id'], outside['version'], status='todo', statuses=(404,))
+
+
 @pytest.mark.parametrize('human_dispatch', [False, True])
 def test_dispatch_cannot_assign_a_companion_as_a_worker(home, human_dispatch):
     board = home['board']

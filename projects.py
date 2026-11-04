@@ -364,6 +364,8 @@ class ProjectsMixin:
             companion = actor.get('companion_for') is not None
             review_decision = (companion and row['status'] == 'review'
                                and changes.get('status') in ('done', 'in_progress', 'todo'))
+            reopen_blocked = (companion and row['status'] == 'blocked' and claimant is None
+                              and changes.get('status') == 'todo')
             if companion:
                 if not has_owner_power(actor, 'dispatch'):
                     _fail('Companion dispatch is not authorized', 403)
@@ -373,8 +375,9 @@ class ProjectsMixin:
                     if not has_owner_power(actor, 'accept_reviews'):
                         _fail('Companion review decisions are not authorized', 403)
                     values.update(claimant=None, claim_started_version=None, lease_expires_at=None)
-                elif 'status' in changes and not (release and changes['status'] in ('todo', row['status'])):
-                    _fail('Companions may decide reviews or release work, never start or deliver it', 403)
+                elif 'status' in changes and not (reopen_blocked or
+                        (release and changes['status'] in ('todo', row['status']))):
+                    _fail('Companions may decide reviews, reopen unclaimed blocks or release work, never start or deliver it', 403)
                 if changes.get('resolution', 'completed') != 'completed':
                     _fail('Companions may accept completed reviews only', 403)
                 if 'resolution' in changes and not (review_decision and changes.get('status') == 'done'):
