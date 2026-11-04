@@ -1,9 +1,4 @@
-"""One explicitly claimed delivery review per Pool job; private opinion only.
-
-The author source is historical. No author worker, claim, model, Runtime
-reservation or publication is reopened. Reopening the driver requires explicitly
-reattaching the same concrete source before dispatch or reconciliation.
-"""
+"""One claimed review per job; reattach the same source, never reopen its author."""
 from contextlib import ExitStack, closing
 from copy import deepcopy
 import math
@@ -23,7 +18,7 @@ from .linux_review_binding import LinuxDeliveryReviewBinding
 from .review_client import DeliveryReviewBoardClient
 from .review_worker import DeliveryReviewWorker, ReviewRuntimeGuard
 from .run_store import RunStore
-from .runtime_client import RuntimeBoardClient
+from .runtime_client import RuntimeBoardClient, runtime_failure
 from .runtime_journal import RuntimeJournal
 from .work_journal import WorkJournal, _scope
 from .worker_pool import PoolDriverBinding, PoolOutcome
@@ -39,21 +34,22 @@ def fail(code='review_pool_selection_changed'):
     raise DevelopmentError(code)
 
 
-class HistoricalPoolDeliveryTests:
-    """Concrete read-only historical test guard for the completed source.
+def aggregate_review_source(source):
+    from .development_aggregate_review_source import PublishedAggregateReviewSource
+    if type(source) is PublishedAggregateReviewSource:return True
+    from .historical_review_source import HistoricalAggregateReviewSource
+    return type(source) is HistoricalAggregateReviewSource
 
-    This does not assert current author authority. The review worker obtains
-    its independent, current claim and Runtime authority through its own client.
-    """
+
+class HistoricalPoolDeliveryTests:
+    """Historical tests only; current review claim and Runtime remain independent."""
     def __init__(self, source, operation_id, receipt):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
-        if type(source) not in (DevelopmentPoolResultDelivery,PublishedAggregateReviewSource):
+        if type(source) is not DevelopmentPoolResultDelivery and not aggregate_review_source(source):
             fail('review_pool_concrete_source_required')
         self.source,self.operation_id,self.receipt = source,operation_id,deepcopy(receipt)
 
     def __call__(self, *, operation_id, scope, snapshot, evidence):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
-        if type(self.source) is PublishedAggregateReviewSource:
+        if aggregate_review_source(self.source):
             return self.source.verify_tests(operation_id=operation_id,scope=scope,snapshot=snapshot,
                 evidence=evidence,expected_receipt=self.receipt)
         if operation_id != self.operation_id or self.source.status(operation_id) != self.receipt:
@@ -82,6 +78,8 @@ class _ObservedReviewRuntime:
             receipt=value.get('execution') if name=='lookup_execution' and type(value) is dict else value
             if type(receipt) is not dict or type(receipt.get('id')) is not str:fail('review_pool_runtime_unconfirmed')
             rows=self.journal.db.execute("SELECT id FROM executions WHERE json_extract(receipt,'$.id')=? LIMIT 2",(receipt['id'],)).fetchall()
+            if not rows and name=='lookup_execution':
+                rows=self.journal.db.execute('SELECT id FROM executions WHERE key=? LIMIT 2',(args['idempotency_key'],)).fetchall()
             if len(rows)!=1:fail('review_pool_runtime_unconfirmed')
             self.validate(self.journal.get(rows[0]['id']),receipt)
             if receipt['state']=='running':self.active.add(receipt['id'])
@@ -116,8 +114,7 @@ class DeliveryReviewPoolDriver:
 
     @staticmethod
     def _descriptor(source, operation_id):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
-        if type(source) is PublishedAggregateReviewSource:return source.descriptor(operation_id)
+        if aggregate_review_source(source):return source.descriptor(operation_id)
         if type(source) is not DevelopmentPoolResultDelivery:fail('review_pool_concrete_source_required')
         receipt=source.status(operation_id)
         if receipt.get('status')!='complete':fail('review_pool_source_incomplete')
@@ -169,8 +166,7 @@ class DeliveryReviewPoolDriver:
         if not instruction.strip() or not material.strip():fail()
         executable=str(Path(selected['executable']))
         if not Path(executable).is_absolute():fail()
-        # Public executable can be outside a private directory. Pin its real
-        # bytes and ancestry to the controller selection before dispatch.
+        # Pin public executable bytes/ancestry before dispatch.
         executable=str(Path(executable).resolve(strict=True))
         if not Path(executable).is_file():fail()
         policy=Path(selected['planner_policy_directory'])
@@ -195,8 +191,7 @@ class DeliveryReviewPoolDriver:
         payload={key:selected['scope'][key] for key in ('project_id','ticket_id')}
         bound=self._validate(selected,job,payload)
         bound['source']=self._descriptor(delivery_source,selected['source_operation_id'])
-        # Binding is a bounded local preparation; it creates only the independent
-        # read-only review export. The controller already owns the review claim.
+        # Only create the independent read-only export; the controller owns the claim.
         with self.mutex:self.sources[job['id']]=delivery_source
         deliveries=self._deliveries(bound)
         bound['review']=deliveries.prepare_review(operation_id=selected['source_operation_id'],
@@ -284,12 +279,7 @@ class DeliveryReviewPoolDriver:
     def _factory(self, context):return _ReviewRun(self,context)
 
     def open_completed_source(self, resources, context):
-        """Open real historical inputs on the writer's thread, without RPC.
-
-        The local controller supplies this job's existing PoolContext and owns
-        the ExitStack. No cached reviewer run or Runtime replay is invoked.
-        Returns the correlated ``(LocalGitDeliveryController, DeliveryReviewWorker)``.
-        """
+        """Open correlated delivery/worker on the writer's ExitStack, without RPC/replay."""
         if type(resources) is not ExitStack:fail('review_pool_resources_required')
         bound,deliveries=self._load(context)
         with PrivateDirectory(context.journals['queue']) as private:
@@ -337,9 +327,19 @@ class _ReviewRun:
         try:cleaned=self.driver._cleanup(self.worker,context,bound)
         except Exception:pass
         status='complete' if result.get('status')=='complete' else 'needs_review'
+        diagnostic=None
+        if status!='complete':
+            try:
+                turns=self.worker.run_store.status(context.operation_id)['turns']
+                if len(turns)==1 and turns[0]['status']=='blocked':
+                    value=self.worker.run_store.turn_result(turns[0]['id'])
+                    diagnostic=runtime_failure(value.get('verification',{}).get('runtime_failure'))
+            except Exception:pass
+        receipt=dict(operation_id=context.operation_id,session_id=context.session_id,
+            status=status,opinion_private=True,ticket_published=False,cleanup_confirmed=cleaned)
+        if diagnostic is not None:receipt['runtime_failure']=diagnostic
         with PrivateDirectory(context.journals['queue']) as private:
-            private.create('review-result.json',canonical(dict(operation_id=context.operation_id,session_id=context.session_id,
-                status=status,opinion_private=True,ticket_published=False,cleanup_confirmed=cleaned)))
+            private.create('review-result.json',canonical(receipt))
         return PoolOutcome(context.operation_id,context.session_id,status,cleaned)
 
     def close(self):

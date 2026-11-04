@@ -7,7 +7,8 @@ from typing import Callable
 from .codex_turn import execute_turn
 from .run_store import RunStore, StoreError
 from .subscription_probe import ProbeSettings
-from .runtime_guard import RuntimeAdmissionRefused
+from .runtime_guard import RuntimeAdmissionRefused,RuntimeGuard,RuntimeControlError
+from .runtime_client import runtime_failure
 
 
 class PersonalRunner:
@@ -19,11 +20,7 @@ class PersonalRunner:
     def run(self, work_id: str, request_id: str, prompt: str, *,
             timeout: float = 120, should_cancel: Callable[[], bool] | None = None, context_guard=None,
             before_prompt: Callable[[], None] | None = None, provider_attempt=None) -> dict:
-        """Process one explicit input. Retrying its key never starts another turn.
-
-        The returned result may contain model text. Callers must treat it as
-        private, untrusted content and publish only deliberately selected data.
-        """
+        """One explicit input; cached keys never infer again. Results are private data."""
         with self.store.work_lock(work_id):
             work = self.store.get_work(work_id)
             if provider_attempt is not None:
@@ -33,7 +30,7 @@ class PersonalRunner:
             if context_guard is not None:work={**work,'decision_memory':context_guard}
             settings = ProbeSettings(executable=work['executable'], model=work['model'],
                                      timeout_seconds=timeout)
-            entry = self.store.begin_turn(work_id, request_id, prompt)
+            entry = self.store.begin_turn(work_id, request_id, prompt, _runtime_guard=self.runtime_guard if isinstance(self.runtime_guard,RuntimeGuard) else None)
             turn_id = entry['turn']['id']
             if entry['cached']:
                 if self.runtime_guard is not None:
@@ -47,14 +44,19 @@ class PersonalRunner:
 
             if self.runtime_guard is not None:
                 try:
-                    self.runtime_guard.before(work, turn_id)
+                    from .runtime_uninvoked import before
+                    before(self.runtime_guard, work, turn_id, entry.get("_runtime_entry"))
                 except RuntimeAdmissionRefused:
                     self.store.finish_turn(turn_id, {'status':'blocked','reason':'runtime_capacity_exhausted',
                         'text':'','uncertain':False,'verification':{'runtime_not_admitted':True}})
                     raise
-                except Exception:
+                except Exception as error:
+                    verification={'cleanup_confirmed':True}
+                    diagnostic=(runtime_failure(vars(error).get('runtime_failure'))
+                        if type(error) is RuntimeControlError else None)
+                    if diagnostic is not None:verification['runtime_failure']=diagnostic
                     self.store.finish_turn(turn_id, {'status': 'blocked', 'reason': 'runtime_start_requires_review',
-                        'text': '', 'uncertain': True, 'verification': {'cleanup_confirmed': True}})
+                        'text': '', 'uncertain': True, 'verification': verification})
                     raise
 
             def cancelled():
@@ -77,8 +79,7 @@ class PersonalRunner:
                     **prompt_guard,
                 )
             except Exception:
-                # The transport owns process cleanup in its finally block.
-                # Preserve an honest interrupted record without raw diagnostics.
+                # Transport owns cleanup; retain no raw diagnostic on failure.
                 result = {'status': 'blocked', 'reason': 'runner_error',
                           'session_id': None, 'text': ''}
             self.store.finish_turn(turn_id, result)

@@ -108,7 +108,7 @@ TARGET_FAILURE_CODES=frozenset({
     'continuation_review_material_too_large', 'continuation_review_owner_changed',
     'continuation_review_paths_changed', 'continuation_review_pending',
     'continuation_review_preparation_unknown', 'continuation_review_publication_changed',
-    'continuation_review_registry_conflict', 'continuation_review_roots_overlap',
+    'continuation_review_registry_conflict', 'continuation_review_result_failed', 'continuation_review_roots_overlap',
     'continuation_review_selection_changed', 'continuation_review_source_required',
     'continuation_review_stopped', 'continuation_review_tools_changed', 'continuation_revision_conflict',
     'continuation_runner_requires_review', 'continuation_runtime_unknown', 'continuation_scope_changed',

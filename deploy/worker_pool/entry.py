@@ -137,15 +137,30 @@ def continuation_entry(args,manifest,release,account):
     if not path.is_relative_to(root/'config'):p.fail('pool_configuration_path_refused')
     if args.action=='run-continuation-once':in_continuation_unit(manifest,release,account)
     sys.path.insert(0,str(release/'source'))
+    from blackoutburst_agents.development_pool_selection import file_document
+    from blackoutburst_agents.dev_journal import decode
+    document=decode(file_document(path,512*1024)[0])
+    schema=document.get('schema') if type(document) is dict else None
+    recovering=schema in ('linux-cloud-review-recovery-v1','linux-cloud-review-recovery-v2')
+    if recovering:
+        minimum=(0,49,1) if schema=='linux-cloud-review-recovery-v2' else (0,49,0)
+        if tuple(map(int,manifest['adapter_version'].split('.'))) < minimum:p.fail('pool_review_recovery_version_required')
+        if args.action=='continuation-plan':
+            from blackoutburst_agents.review_recovery_service import review_recovery_plan
+            return review_recovery_plan(path,root=root,owner_id=manifest['board_owner'],
+                board_endpoint=manifest['board_endpoint'],max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
     if args.action=='continuation-plan':
         from blackoutburst_agents.continuation_pool_configuration import continuation_plan
         return continuation_plan(path,root=root,owner_id=manifest['board_owner'],
             board_endpoint=manifest['board_endpoint'],max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
-    from blackoutburst_agents.continuation_pool_service import ContinuationPoolService
+    if recovering:
+        from blackoutburst_agents.review_recovery_service import ReviewRecoveryService as Service
+    else:
+        from blackoutburst_agents.continuation_pool_service import ContinuationPoolService as Service
     stop=threading.Event()
     previous={number:signal.signal(number,lambda *_:stop.set()) for number in (signal.SIGTERM,signal.SIGINT)}
     try:
-        service=ContinuationPoolService(root,configuration_path=path,owner_id=manifest['board_owner'],
+        service=Service(root,configuration_path=path,owner_id=manifest['board_owner'],
             board_endpoint=manifest['board_endpoint'],executable=release/'tools/codex',
             cli_version='codex-cli '+manifest['codex_version'],interpreter=manifest['python']['path'],
             unshare='/usr/bin/unshare',gh_executable=release/'tools/gh',
@@ -203,6 +218,16 @@ def ensure_development_anchor(account):
         return {'status':'anchor_directories_ready','anchor':str(path),'created':created,'changed_existing':False}
     finally:
         for descriptor in reversed(descriptors):os.close(descriptor)
+
+
+def _entry_refusal_reason(error):
+    """Exact protected exception types only; never inspect private exceptions."""
+    module=sys.modules.get('blackoutburst_agents.dev_manifest')
+    sdk_error=vars(module).get('DevelopmentError') if module is not None else None
+    if type(error) is p.PackageError or sdk_error is not None and type(error) is sdk_error:
+        code=vars(error).get('code')
+        if type(code) is str and re.fullmatch('[a-z][a-z0-9_]{0,119}',code):return code
+    return 'finite_pool_entry_refused'
 
 
 def main(argv=None):
@@ -272,9 +297,7 @@ def main(argv=None):
         print(json.dumps(result,sort_keys=True,separators=(',',':')))
         return 0 if result['status'] in ('complete','plan') else 3
     except Exception as error:
-        reason='finite_pool_entry_refused'
-        if isinstance(error,p.PackageError) or 'DevelopmentError' in locals() and isinstance(error,DevelopmentError):
-            if type(error.code) is str and re.fullmatch('[a-z][a-z0-9_]{0,119}',error.code):reason=error.code
+        reason=_entry_refusal_reason(error)
         print(json.dumps({'status':'needs_review','reason':reason},sort_keys=True,separators=(',',':')))
         if 'PlannerPolicyError' in locals() and type(error) is PlannerPolicyError:
             diagnostic = _planner_qualification_diagnostic(error)

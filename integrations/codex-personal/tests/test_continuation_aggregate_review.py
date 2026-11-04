@@ -160,6 +160,84 @@ def test_declared_publication_metadata_is_not_a_reviewer_source(tmp_path):
     assert not (tmp_path/'new').exists()
 
 
+@pytest.mark.parametrize('fault,expected',[
+    ('blocked_clean','continuation_review_result_failed'),
+    ('invalid_opinion_clean','continuation_review_result_failed'),
+    ('blocked_unclean','continuation_review_cleanup_unknown'),
+    ('active',None),
+])
+def test_failed_review_and_uncertain_cleanup_have_distinct_refusals(
+        tmp_path,monkeypatch,linux_lock_observation,fault,expected):
+    def check(f,aggregate,helper,source,calls,turns,author_turns,public,root):
+        from blackoutburst_agents import linux_review_binding
+        execute=linux_review_binding.execute_turn
+        def transport(*args,**kwargs):
+            if fault=='active':
+                # The actual Pool thread is live: a prospective successful
+                # opinion cannot bypass the existing cleanup prerequisite.
+                with pytest.raises(DevelopmentError,match='continuation_review_cleanup_unknown'):
+                    helper._clean()
+            result=execute(*args,**kwargs)
+            if fault.startswith('blocked_'):
+                result.update(status='blocked',reason='timeout')
+            elif fault=='invalid_opinion_clean':
+                result['text']='synthetic invalid opinion'
+            if fault=='blocked_unclean':
+                result['verification']['cleanup_confirmed']=False
+            return result
+        monkeypatch.setattr(linux_review_binding,'execute_turn',transport)
+        if expected is None:
+            assert helper.run()['status']=='complete'
+        else:
+            with pytest.raises(DevelopmentError,match=expected):helper.run()
+            # A clean refusal closes its Pool handle. Inspect the durable
+            # result rather than reopening or mutating that retired handle.
+            state=json.loads((helper.directory/'pool/pool-state.json').read_bytes())
+            job=state['jobs'][0]
+            if fault=='blocked_unclean':
+                assert helper.pool.status()['capacity_held']==1 and job['cleanup_confirmed'] is False
+            else:
+                assert helper.pool.closed
+                assert (job['state'],job['outcome'],job['cleanup_confirmed'])==('settled','needs_review',True)
+            assert not any(name=='update_ticket' for name,_ in calls)
+            with pytest.raises(DevelopmentError,match='continuation_review_pending'):helper.run()
+        assert len(turns)==1 and len(author_turns)==3
+        assert public['posts']==public['pushes']==1
+    run_fixture(tmp_path,monkeypatch,linux_lock_observation,check)
+
+
+def test_settled_cleanup_flag_still_requires_fresh_driver_verification(tmp_path):
+    from types import SimpleNamespace
+    from blackoutburst_agents.worker_pool import WorkerPool
+    from test_worker_pool import Harness
+    harness=Harness()
+    pool=WorkerPool(tmp_path/'pool',concurrency=1,drivers={'synthetic':harness.binding()})
+    try:
+        job=pool.submit(request_id='fresh-cleanup-required',driver_id='synthetic',payload={})
+        pool.dispatch_pending();pool.threads[job['id']].join(timeout=3)
+        assert not pool.threads[job['id']].is_alive()
+        before=pool.status();settled=before['jobs'][0]
+        assert (settled['state'],settled['outcome'],settled['cleanup_confirmed'])==('settled','complete',True)
+        assert len(harness.verify_calls)==1
+        # Pool's prior positive proof is dated. Revoking the fresh inspection
+        # must remain a cleanup refusal before outcome classification.
+        harness.verified=False
+        helper=object.__new__(ContinuationAggregateReviewer)
+        helper.pool,helper.job=pool,job
+        helper.driver=SimpleNamespace(_verify_cleanup=harness.verify)
+        with pytest.raises(DevelopmentError,match='continuation_review_cleanup_unknown'):helper._clean()
+        assert len(harness.verify_calls)==2
+        assert pool.status()==before and len(harness.run_calls)==1
+    finally:
+        pool.shutdown(3);pool.close()
+
+
+def test_failed_review_code_survives_closed_service_diagnostic_projection():
+    from blackoutburst_agents.continuation_pool_service import _target_failure
+    result=_target_failure(DevelopmentError('continuation_review_result_failed'),None)
+    assert (result['category'],result['code'])==('development_error','continuation_review_result_failed')
+
+
 @pytest.mark.parametrize('field,value',[('resource','repo:other'),('model','other-model'),('reasoning_effort','high')])
 def test_selection_rejects_mismatched_author_configuration_before_source_access(tmp_path,field,value):
     # Negative-only unit check of scalar selection; these unissued metadata

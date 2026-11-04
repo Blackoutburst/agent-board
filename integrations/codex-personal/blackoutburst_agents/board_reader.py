@@ -1,8 +1,4 @@
-"""Explicit, bounded reads through the board's existing paired MCP connection.
-
-This adapter never pairs a device, edits credentials, claims work or publishes
-messages. Registration records this read-only chat with autonomous=False.
-"""
+"""Bounded reads through an existing pairing; registration is never autonomous."""
 from __future__ import annotations
 
 import copy
@@ -204,8 +200,7 @@ def _tls_context():
     """Retain normal verification and add macOS's system PEM roots when present."""
     try:
         context = ssl.create_default_context()
-        # Python.org installations may not have run Install Certificates.command.
-        # Add the OS trust store; never disable verification or retry untrusted TLS.
+        # Add macOS system roots without disabling TLS verification.
         if sys.platform == "darwin" and Path("/etc/ssl/cert.pem").is_file():
             context.load_verify_locations(cafile="/etc/ssl/cert.pem")
         return context
@@ -281,8 +276,7 @@ class BoardReader:
     def _rpc(self, method, params):
         if self._closed:raise BoardReadError('connection_closed')
         deadline = time.monotonic() + self.timeout
-        # Freeze the semantic request/actor once. Only the JSON-RPC ID changes
-        # on the single application-level read retry; the transport never retries.
+        # Freeze request/actor across the single eligible read retry.
         try:
             method_json = json.dumps(method, allow_nan=False)
             params_json = json.dumps(params, allow_nan=False)
@@ -302,15 +296,13 @@ class BoardReader:
             try:
                 return self._rpc_once(method_json, params_json, headers, endpoint, opener, deadline)
             except _InterruptedExchange as error:
-                # This marker comes only from exact local network exceptions.
-                # An arbitrary BoardReadError/remote response cannot request it.
+                # Only a locally issued interruption can enable this read retry.
                 if (type(error) is not _InterruptedExchange or error.issuer is not _INTERRUPTION_ISSUER
                         or not repeatable or attempt != 0):
                     raise _connection_failure(_interruption_kind(error)) from None
                 if self._closed:raise BoardReadError('connection_closed') from None
                 if time.monotonic() >= deadline:raise BoardReadError('timeout') from None
-                # Drop the failed HTTP connection, retaining the same verified
-                # TLS context, MCP session, owner and remaining wall budget.
+                # Retain TLS/session/owner/deadline when dropping the connection.
                 self._discard_connection()
 
     def _rpc_once(self, method_json, params_json, headers, endpoint, opener, deadline):
@@ -342,8 +334,7 @@ class BoardReader:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise BoardReadError("timeout")
-                    # HTTPResponse.read1 performs at most one underlying read.
-                    # Shrink the socket deadline as well to bound a slow stream.
+                    # Bound each read and the socket to the remaining deadline.
                     sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
                     if sock is not None:
                         sock.settimeout(remaining)
@@ -407,10 +398,7 @@ class BoardReader:
         self._initialized = True
 
     def _tool(self, name, args):
-        # These callers seal full source text and validate claim/dependency
-        # fields. Explicitly opt into the legacy full representation; never
-        # mistake an MCP preview for the original source. The strict caller
-        # argument allowlists still run before this trusted injection.
+        # Sealing callers need full source, not a preview. Caller allowlists run first.
         if name in {'get_ticket','get_thread','get_project','get_work','claim_ticket',
                     'claim_next_ticket','lookup_ticket_selection','renew_ticket',
                     'update_ticket','release_ticket','request_human_input','lookup_human_request','register_agent','get_message',
@@ -422,7 +410,7 @@ class BoardReader:
         if not isinstance(result, dict) or ("isError" in result and type(result["isError"]) is not bool):
             raise BoardReadError("invalid_response")
         if result.get("isError"):
-            raise BoardReadError("tool_rejected")
+            raise self._tool_failure(name, result)
         if "structuredContent" in result:
             value = result["structuredContent"]
         else:
@@ -438,6 +426,9 @@ class BoardReader:
         if not isinstance(value, dict):
             raise BoardReadError("invalid_response")
         return value
+
+    def _tool_failure(self, name, result):
+        return BoardReadError("tool_rejected")
 
     def register(self):
         self._registered = False
