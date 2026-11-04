@@ -21,7 +21,7 @@ from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import DevelopmentError, canonical, digest,sha256
 from .dev_planner import _directory_pin
 from .git_delivery import LocalGitDeliveryController
-from .git_publication import GitHubDraftPublisher, GitHubPublicationGrant, HOST, API, REMOTE
+from .git_publication import GitHubDraftPublisher, GitHubPublicationGrant, HOST, API, REMOTE, sha
 from .git_workspace import LocalGitWorkspaceController, LocalRepositoryGrant
 from .pool_journal import PoolJournal,uuid_value
 from .review_lifecycle_client import DeliveryReviewLifecycleClient
@@ -60,7 +60,11 @@ def rows(path,query,parameters=()):
 
 
 class HistoricalAggregateReadView:
-    """Reuse the bounded transport, exposing only exact GET/ls-remote argv."""
+    """Read the exact published head while the target branch may advance.
+
+    Receipt/material base_sha remains the immutable sealed base, never the
+    current branch tip or evidence that a merge into that tip was tested.
+    """
     def __init_subclass__(cls,**kwargs):raise TypeError('Closed historical read view')
 
     def __init__(self,source,publication_root,gh,interpreter):
@@ -83,11 +87,34 @@ class HistoricalAggregateReadView:
     _api=GitHubDraftPublisher._api
     _auth=GitHubDraftPublisher._auth
     _read=GitHubDraftPublisher._read
-    _remote=GitHubDraftPublisher._remote
     _transport=GitHubDraftPublisher._transport
     _body=staticmethod(GitHubDraftPublisher._body)
-    _pr=GitHubDraftPublisher._pr
     _lookup_pr=GitHubDraftPublisher._lookup_pr
+
+    def _remote(self,private,value):
+        path=self._transport(private,value)
+        base='refs/heads/'+self.grant['base_branch'];head='refs/heads/'+value['request']['branch']
+        code,out,_=self._command([str(self.git),'ls-remote','--refs',REMOTE,base,head],cwd=path,git=True)
+        require(code==0 and out,'git_publication_remote_unavailable')
+        seen={}
+        try:
+            for line in out.decode('ascii','strict').splitlines():
+                oid,ref=line.split('\t')
+                require(ref in (base,head) and ref not in seen,'git_publication_remote_invalid')
+                seen[ref]=sha(oid)
+        except (ValueError,UnicodeError):raise DevelopmentError('git_publication_remote_invalid') from None
+        require(base in seen,'git_publication_remote_invalid')
+        require(seen.get(head)==value['request']['delivery_sha'],'git_publication_branch_unconfirmed')
+        return seen[head]
+
+    def _pr(self,value,row):
+        # The observed base tip may differ from ls-remote or the sealed base.
+        # Normalize only a private copy for the existing strict identity checks;
+        # neither that observation nor the copy updates any historical receipt.
+        require(type(row) is dict and type(row.get('base')) is dict,'git_publication_pr_mismatch')
+        sha(row['base'].get('sha'))
+        historical=deepcopy(row);historical['base']['sha']=self.grant['base_commit']
+        return GitHubDraftPublisher._pr(self,value,historical)
 
     def _roots(self):
         self.source._local()

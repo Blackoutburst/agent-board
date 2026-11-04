@@ -10,11 +10,13 @@ from blackoutburst_agents.review_pool import DeliveryReviewPoolDriver
 from blackoutburst_agents.review_lifecycle import DeliveryReviewLifecycle
 from blackoutburst_agents.worker_pool import WorkerPool
 from blackoutburst_agents.dev_manifest import DevelopmentError,canonical,digest
+from blackoutburst_agents.dev_journal import PrivateDirectory
 from blackoutburst_agents.development_pool_selection import file_document
 from blackoutburst_agents.git_publication import GitHubDraftPublisher
 from test_continuation_aggregate_review import run_fixture
 from test_runtime_integration import ControlClient
 from test_development_aggregate_delivery import linux_lock_observation
+from test_git_workspace import git as git_command
 
 
 def manager(f):
@@ -71,6 +73,20 @@ def test_pretransport_refusal_can_receive_one_new_review_of_same_published_deliv
         old_files.extend(prior_worker/name for name in ('runtime/runtime.sqlite3','runs/runs.sqlite3','work/work-journal.sqlite3'))
         snapshot={str(p):p.read_bytes() for p in old_files}
         publisher=source.publisher
+        remote=f.base/'remote.git'
+        def advance_main(label):
+            parent=git_command(remote,'rev-parse','refs/heads/main')
+            tip=git_command(remote,'-c','user.name=Synthetic later author','-c','user.email=later@example.invalid',
+                'commit-tree',f.commit+'^{tree}','-p',parent,'-m',label)
+            git_command(remote,'update-ref','refs/heads/main',tip,parent)
+            return tip
+        # A real descendant exists on main before the historical admission. The
+        # PR API still reports its original base, as it may during a ref update.
+        first_tip=advance_main('A companion change after the sealed delivery')
+        assert first_tip!=source.receipt['original_public_base']
+        with PrivateDirectory(publisher.root/source.operation_id) as private:
+            with pytest.raises(DevelopmentError,match='git_publication_base_changed'):
+                publisher._remote(private,publisher._read(private))
         from blackoutburst_agents.development_worker import DevelopmentBoardWorker
         from blackoutburst_agents.development_aggregate_delivery import AggregateDevelopmentDeliveryController
         from blackoutburst_agents.linux_test_backend import SupervisedLinuxNamedPythonBackend
@@ -141,9 +157,49 @@ def test_pretransport_refusal_can_receive_one_new_review_of_same_published_deliv
             assert history.receipt==original_public and history.admission['previous']['kind']=='retired_before_transport'
             assert history.admission['original_frame_sha256']==source.frame_sha256
             assert history.new_job['session_id']!=old_job['session_id']
+            material=history.material()
+            def during_read():
+                public['during_lookup']=None
+                public['prs'][0]['base']['sha']=advance_main('Another change during the historical public read')
+            public['during_lookup']=during_read
+            assert history.status(history.operation_id)==original_public
+            assert history.material()==material and history.receipt['original_public_base']==f.commit
+            assert public['prs'][0]['base']['sha'] not in (f.commit,first_tip)
+            # All identity fields except the current base tip remain exact.
+            row=deepcopy(public['prs'][0]);reader=history.reader
+            for path,value in [(('head','sha'),'0'*40),(('head','ref'),'other-head'),
+                    (('head','repo','full_name'),'Other/repo'),(('base','ref'),'other-main'),
+                    (('base','repo','full_name'),'Other/repo'),(('base','sha'),'not-a-sha'),
+                    (('title',),'Other title'),(('body',),'Other body'),(('user','login'),'OtherAuthor'),
+                    (('draft',),False),(('state',),'closed'),(('html_url',),'https://example.invalid/pull/17')]:
+                altered=deepcopy(row);part=altered
+                for key in path[:-1]:part=part[key]
+                part[path[-1]]=value
+                with pytest.raises(DevelopmentError):reader._pr(reader.publication,altered)
+            assert reader._pr(reader.publication,row)==original_public['pull_request']
+            assert row==public['prs'][0]
+            with pytest.raises(DevelopmentError,match='git_publication_pr_mismatch'):
+                publisher._pr(reader.publication,row)
+            # Missing, malformed, duplicate or unexpected refs never qualify a
+            # historical read. The command still passes its closed argv check.
+            branch=reader.request['branch'];base_ref='refs/heads/main';head_ref='refs/heads/'+branch
+            valid_base=(public['prs'][0]['base']['sha']+'\t'+base_ref+'\n').encode()
+            valid_head=(history.receipt['delivery_sha']+'\t'+head_ref+'\n').encode()
+            normal_read=reader._command
+            for raw in (valid_head,valid_base,b'bad\t'+base_ref.encode()+b'\n'+valid_head,
+                    valid_base+valid_base+valid_head,valid_base+valid_head+b'0'*40+b'\trefs/heads/unselected\n',
+                    valid_base+b'0'*40+b'\t'+head_ref.encode()+b'\n'):
+                def broken_refs(argv,*,cwd,git=False):
+                    reader._confirm_launch(argv,cwd=cwd,git=git)
+                    return (0,raw,b'') if git else normal_read(argv,cwd=cwd,git=git)
+                with monkeypatch.context() as refs:
+                    refs.setattr(reader,'_command',broken_refs)
+                    with PrivateDirectory(reader.root/history.operation_id) as private:
+                        with pytest.raises(DevelopmentError):reader._remote(private,reader.publication)
+            assert sum(n=='claim_ticket' for n,_ in calls)==before and not turns
             lifecycle=DeliveryReviewLifecycle(f.base/'new-review-lifecycle',pool=pool,driver=driver,source=history,
                 executable=f.tools['codex'],cli_version='codex-cli 0.163.0',interpreter=f.tools['python'])
-            material=history.material();assert material==history.old['material']
+            assert material==history.old['material']
             prepared=lifecycle.prepare(job,source_operation_id=history.operation_id,instruction='Review the same immutable delivery.',
                 material=material,model='explicit-independent-review-model',timeout=120)
             assert prepared['status']=='prepared'

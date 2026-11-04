@@ -2,7 +2,7 @@
 
 Adapter 0.49 can prepare a new independent review of the exact published aggregate. The source is read as historical evidence. New Board permissions, a fresh ticket claim, context, session, qualified Linux policy and Runtime admission control the new review.
 
-The host verifies the original sealed snapshot, final test evidence, publication record, complete selected file material and current draft PR head/base/destination. A changed artifact, PR or scope refuses recovery. The original author worker, planner, test backend and publication operation are not executed again.
+The host verifies the original sealed snapshot, final test evidence, publication record, complete selected file material and current draft PR identity. Its head, branches, repositories, title, body, author and draft state must still match. The target branch must exist with a valid commit SHA, but its current tip and the PR's observed base SHA may advance. The receipt and review material retain the original sealed base and exact delivery; they do not claim that a merge into the current target was tested or reviewed. A changed artifact, PR identity or scope refuses recovery. The original author worker, planner, test backend and publication operation are not executed again; new publication keeps its strict unchanged-base requirement.
 
 A previous review must be closed before admission. An execution that really ran needs a correlated finished Runtime cleanup receipt. A failure before transport with no reservation uses the separate attributed claim-release gate, followed by an exact negative Runtime lookup after revocation. The old journal and retained pool remain historical; this branch does not manufacture an execution cleanup receipt.
 
