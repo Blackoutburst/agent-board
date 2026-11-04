@@ -173,13 +173,14 @@ class ContinuationAggregateReviewer:
         status=self.pool.status();require(len(status['jobs'])==1 and status['jobs'][0]['id']==self.job['id'])
         job=status['jobs'][0]
         require(not status['live_threads'] and not status['capacity_held']
-            and job['state']=='settled' and job['outcome']=='complete'
+            and job['state']=='settled'
             and job['execution_active'] is False and job['cleanup_confirmed'] is True,
             'continuation_review_cleanup_unknown')
         with self.pool.mutex:job=deepcopy(self.pool._job(self.pool.journal.read(),job['id']))
         context=self.pool._context(job,create=False)
-        require(self.driver._verify_cleanup(context,PoolOutcome(job['id'],job['session_id'],'complete',True)) is True,
+        require(self.driver._verify_cleanup(context,PoolOutcome(job['id'],job['session_id'],job['outcome'],True)) is True,
             'continuation_review_cleanup_unknown')
+        require(job['outcome']=='complete','continuation_review_result_failed')
 
     def _open(self):
         self.driver=DeliveryReviewPoolDriver(self.directory/'selections',connection_file=self.reviewer['connection_file'],

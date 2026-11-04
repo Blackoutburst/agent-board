@@ -1,0 +1,15 @@
+# Published delivery review recovery
+
+Adapter 0.49 can prepare a new independent review of the exact published aggregate. The source is read as historical evidence. New Board permissions, a fresh ticket claim, context, session, qualified Linux policy and Runtime admission control the new review.
+
+The host verifies the original sealed snapshot, final test evidence, publication record, complete selected file material and current draft PR head/base/destination. A changed artifact, PR or scope refuses recovery. The original author worker, planner, test backend and publication operation are not executed again.
+
+A previous review must be closed before admission. An execution that really ran needs a correlated finished Runtime cleanup receipt. A failure before transport with no reservation uses the separate attributed claim-release gate, followed by an exact negative Runtime lookup after revocation. The old journal and retained pool remain historical; this branch does not manufacture an execution cleanup receipt.
+
+The selected owner prepares a private recovery configuration. Planning reads configuration and reports its pins without registration, claim, qualification or model calls. Execution requires the installed continuation unit and its unchanged account, environment and resource limits. Preparation records intent before the new admission. Unknown or interrupted effects remain pending rather than launching another model.
+
+The service publishes the review using the existing compare-and-swap lifecycle. A review requesting corrections is still an independent opinion; publishing it neither merges the PR nor completes the project. Only confirmed publication and fresh cleanup permit the separate recovery acknowledgement and old queue archival. A later normal queue pass must observe the empty queue itself before zero-model idle behavior is claimed.
+
+Runtime admission failures before transport also have a narrow cleanup path. Its ephemeral proof is issued only by the SQL noncached branch of RunStore.begin_turn while the exact work lock remains held. A new RuntimeJournal, a cached turn, copied data or a model result cannot supply it. Cleanup never sets start_confirmed or permits an opinion. Missing reservations and lost cleanup confirmations remain explicit uncertainty.
+
+The immutable candidate commit and public bundle identify a release. Native and family source pins, authorization lifetimes, owner permissions and unit resource limits remain enforced. This document describes source behavior; real deployment and acceptance evidence are recorded separately on the board.

@@ -39,6 +39,13 @@ def fail(code='review_pool_selection_changed'):
     raise DevelopmentError(code)
 
 
+def aggregate_review_source(source):
+    from .development_aggregate_review_source import PublishedAggregateReviewSource
+    if type(source) is PublishedAggregateReviewSource:return True
+    from .historical_review_source import HistoricalAggregateReviewSource
+    return type(source) is HistoricalAggregateReviewSource
+
+
 class HistoricalPoolDeliveryTests:
     """Concrete read-only historical test guard for the completed source.
 
@@ -46,14 +53,12 @@ class HistoricalPoolDeliveryTests:
     its independent, current claim and Runtime authority through its own client.
     """
     def __init__(self, source, operation_id, receipt):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
-        if type(source) not in (DevelopmentPoolResultDelivery,PublishedAggregateReviewSource):
+        if type(source) is not DevelopmentPoolResultDelivery and not aggregate_review_source(source):
             fail('review_pool_concrete_source_required')
         self.source,self.operation_id,self.receipt = source,operation_id,deepcopy(receipt)
 
     def __call__(self, *, operation_id, scope, snapshot, evidence):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
-        if type(self.source) is PublishedAggregateReviewSource:
+        if aggregate_review_source(self.source):
             return self.source.verify_tests(operation_id=operation_id,scope=scope,snapshot=snapshot,
                 evidence=evidence,expected_receipt=self.receipt)
         if operation_id != self.operation_id or self.source.status(operation_id) != self.receipt:
@@ -118,8 +123,7 @@ class DeliveryReviewPoolDriver:
 
     @staticmethod
     def _descriptor(source, operation_id):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
-        if type(source) is PublishedAggregateReviewSource:return source.descriptor(operation_id)
+        if aggregate_review_source(source):return source.descriptor(operation_id)
         if type(source) is not DevelopmentPoolResultDelivery:fail('review_pool_concrete_source_required')
         receipt=source.status(operation_id)
         if receipt.get('status')!='complete':fail('review_pool_source_incomplete')
