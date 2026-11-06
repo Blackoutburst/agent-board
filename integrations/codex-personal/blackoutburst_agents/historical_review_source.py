@@ -494,10 +494,11 @@ attributed transactional claim revocation. No old record is repaired/adopted.
         if self.previous['kind'] in ('retired_before_transport','retired_pending_recovery_before_transport'):
             require(self._old_control(self.previous_runtime)=={'found':False},
                 'historical_review_previous_unresolved')
-        return {'event_id':event['id'],'ticket_version':ticket['version'],
-            'manager_agent_id':actor.get('agent_id') if managed else None,
-            'source_session_id':self.old_scope['board_session_id'],
-            'release_kind':'managed_agent_claim_released' if managed else 'human_release_same_owner'}
+        proof={'event_id':event['id'],'ticket_version':ticket['version'],
+            'manager_agent_id':actor['agent_id'] if managed else None,
+            'source_session_id':self.old_scope['board_session_id']}
+        if owner_release:proof['release_kind']='human_release_same_owner'
+        return proof
 
     def admission_version(self,client,scope):
         require(scope==self.scope and file_document(self.connection_file)[1]==self.connection_pin)

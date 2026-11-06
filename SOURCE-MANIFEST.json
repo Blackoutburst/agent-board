@@ -197,7 +197,7 @@
     "integrations/codex-personal/blackoutburst_agents/git_publication.py": "fcd1f148425b4f99d1702d88d67e9c86fa1f77f03487cda397308962b909c585",
     "integrations/codex-personal/blackoutburst_agents/git_publication_guardian.py": "ca302e4ead1a41130b55b37519c3b09d0449ff18ea9e282320ffafd26dab1eaa",
     "integrations/codex-personal/blackoutburst_agents/git_workspace.py": "2356116ba3cafa4afc2846ddf84e6d74c7843f0abc9337192e856f1abf3b5dd0",
-    "integrations/codex-personal/blackoutburst_agents/historical_review_source.py": "b6e01ec3c34f56ed0fba2c94ff6e12b0d462190f198733240ff121761cd2948a",
+    "integrations/codex-personal/blackoutburst_agents/historical_review_source.py": "b76e2b9199e38d2e91e31dc7152675a72cab8851b2b1fbfd612d99f3c9fe330e",
     "integrations/codex-personal/blackoutburst_agents/host_append_stage.py": "ef316e1447b5e93fb3091dc6e840038f1ec902a446464e44999a648eb04f5812",
     "integrations/codex-personal/blackoutburst_agents/host_cli.py": "6aa609f6483590e1fa495713694b3c3e4d1f90f0a5c08a9237bcb9cd421a4088",
     "integrations/codex-personal/blackoutburst_agents/host_config.py": "735005c3ed5ed4705526d0709746cfeef32ec87dbb56a2a11c75161ee0a32c1b",
