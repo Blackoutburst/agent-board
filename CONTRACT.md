@@ -7,6 +7,8 @@ The browser REST API and MCP act on one database. The companion source candidate
 See [companion identity and migration](docs/COMPANIONS.md) and the exhaustive
 [human-gate audit](docs/COMPANION-GATE-AUDIT.md). Human-created companions retain
 their own agent transport identity and audited owner linkage. They may dispatch,
+edit/assign tickets, set owner holds or restore Todo, record unworked owner
+closures (reason only, generated non-verification evidence),
 answer their owner's requests, decide reviews and pause/resume ordinary agents or
 project automation. They never claim/work tickets or gain permission, identity,
 pairing, account or device-management powers. The added MCP operations are
@@ -211,7 +213,7 @@ Use project tickets for normal collaborative work. The legacy action-task API re
 
 MCP reads default to compact, byte-bounded pages. Omitted prose is labelled with previews and hashes; use `get_text` or explicit `view="full"` for original source. Collection reads follow `next_cursor`, and threads use `next_before`. See [the bounded read and migration contract](docs/MCP-READS.md).
 
-`read_inbox` defaults to `messages`, `cursor`, `session` only. Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
+`read_inbox` defaults to `messages`, `cursor`, `session`; a page that does not drain the backlog adds `backlog` (`unread`, `remaining_after_page`, `oldest_at`, `newest_at`), and a cursorless read with a backlog adds `priority`: up to five of the newest human messages, or replies to the agent's own messages, beyond the page (a preview: they are still delivered and acknowledged in order). Messages the reading identity already followed on the same thread, meaning any of its sessions posted there afterwards, are not delivered (#56). Persist the whole page and cursor before processing; presenting the compact cursor acknowledges the prior page, and cursorless retries replay it. Explicit full mode retains legacy optimistic progression. Compact `include_work=true` returns a labelled `get_work` pointer; workers discover work separately. Polling never claims work.
 
 ## Fixed development observation frame
 
@@ -272,6 +274,8 @@ Persisted statuses remain `todo`, `in_progress`, `blocked`, `review`, `done`. De
 ## Verifiable blocks (2.11, schema 13)
 
 A stored `blocked` status must be explained by an open human request, an unfinished dependency, or an explicit `blocked_reason`. Agents setting `status=blocked` through `update_ticket` must supply `blocked_reason` unless one of the first two applies; `recheck_after_seconds` (300–1209600, default 86400) sets `recheck_at`, and `unblock_owner` defaults to the agent profile. `release_ticket(status="blocked")` stores its `reason` the same way with the default recheck. A human editor may block without a reason; it is recorded as a manual block without recheck and is never released automatically.
+
+An explicit human or authorized companion hold remains blocked until a human or companion reopens it. An inherited or explicitly supplied recheck date on that hold is informational and never makes it ready automatically. Completing dependencies or answering human requests also preserves the hold. Workers may report or release their existing claim without changing the hold; they cannot reopen it or replace its block metadata. Authenticated owner hold/set-clear decisions are retained in `ticket_owner_hold` events in the existing audit journal, without a schema change. Proven legacy owner holds are retained before request/claim maintenance can obscure their provenance; unaudited historical writes are not reconstructed. Plain discussion messages do not create status holds.
 
 `blocked_reason`, `unblock_owner`, `recheck_at` and the derived `block_reasons` (`human_request`, `dependency`, `explicit`, `runtime_cleanup`, `delegation`) are returned with each task. A dependency in `review` has delivered its result: it no longer appears in `blocked_by`, is listed in `delivered_dependencies`, and only prevents the dependent from reaching `done`.
 

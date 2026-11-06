@@ -249,7 +249,8 @@ class CoordinationMixin(ProjectsMixin):
         result['assignee_presence'] = self._agent_presence(db, row['assignee_agent_id']) if identity else None
         result['assignment_stale'] = self._stale_agent_assignment(db, row)
         result['ready'] = result['work_state'] == 'ready'
-        result['block_reasons'] = (self._block_reasons(row, result) + execution if row['status'] == 'blocked'
+        result['block_reasons'] = (self._block_reasons(row, result,
+            owner_hold=bool(self._owner_block_author(db, row['id']))) + execution if row['status'] == 'blocked'
                                    else execution if derived_block else [])
         return result
 
@@ -276,28 +277,28 @@ class CoordinationMixin(ProjectsMixin):
         return reasons
 
     @staticmethod
-    def _block_reasons(row, ticket, now=None):
+    def _block_reasons(row, ticket, now=None, owner_hold=False):
         """Verifiable reasons keeping a stored block; empty means a ghost."""
         reasons = []
         if ticket['waiting_on_human']:
             reasons.append('human_request')
         if ticket['blocked_by']:
             reasons.append('dependency')
-        if row['blocked_reason'] and (row['recheck_at'] is None or row['recheck_at'] > (now or time.time())):
+        if owner_hold or (row['blocked_reason'] and (row['recheck_at'] is None or row['recheck_at'] > (now or time.time()))):
             reasons.append('explicit')
         return reasons
 
-    # Ticket events that never change a ticket's status.
+    # These events never establish or lift a Blocked status.
     _STATUS_NEUTRAL_EVENTS = frozenset({
         'ticket_message_posted', 'ticket_progress', 'review_reminder', 'review_requested',
         'agent_block_recorded', 'block_escalated', 'execution_reserved', 'execution_started',
         'execution_finished', 'execution_stop_requested', 'message_execution_reserved',
-        'ticket_idle_assignment_released',
+        'ticket_idle_assignment_released', 'managed_agent_claim_released',
         'runtime_provider_block_observed', 'runtime_limits_changed', 'ticket_profile_refreshed',
         'ticket_profile_claim_reconciled', 'legacy_block_classified'})
 
     def _legacy_human_block(self, db, ticket_id):
-        """Author of a reasonless pre-schema-13 block when the audit shows a human set it."""
+        """Owner author of a legacy block when status-changing history proves it."""
         for event in db.execute('SELECT actor,event,detail FROM ticket_events WHERE ticket_id=? ORDER BY id DESC',
                                 (ticket_id,)):
             if event['event'] in self._STATUS_NEUTRAL_EVENTS:
@@ -310,8 +311,27 @@ class CoordinationMixin(ProjectsMixin):
             if event['event'] == 'ticket_released' and not detail.get('status'):
                 continue
             author = json.loads(event['actor'] or '{}')
-            return author if event['event'] == 'ticket_updated' and author.get('kind') == 'human' else None
+            return author if event['event'] == 'ticket_updated' and has_owner_power(author, 'dispatch') else None
         return None
+
+    def _owner_block_author(self, db, ticket_id):
+        """An explicit owner hold survives timer and request maintenance."""
+        event = db.execute("""SELECT detail FROM ticket_events WHERE ticket_id=?
+            AND event='ticket_owner_hold' ORDER BY id DESC LIMIT 1""", (ticket_id,)).fetchone()
+        if event:
+            detail = json.loads(event['detail'])
+            author = detail.get('holder', {})
+            return author if detail.get('active') and has_owner_power(author, 'dispatch') else None
+        return self._legacy_human_block(db, ticket_id)
+
+    def _retain_owner_block(self, db, actor, row):
+        """Preserve proven old holds before another event can obscure their provenance."""
+        author = self._owner_block_author(db, row['id']) if row['status'] == 'blocked' else None
+        if author and not db.execute("SELECT 1 FROM ticket_events WHERE ticket_id=? AND event='ticket_owner_hold'",
+                                     (row['id'],)).fetchone():
+            self._audit(db, actor, 'ticket_owner_hold', {
+                'ticket_id': row['id'], 'active': True, 'holder': author, 'legacy': True})
+        return author
 
     def _classify_legacy_block(self, db, actor, row):
         """Give a reasonless block set by a human before schema 13 its manual reason.
@@ -321,7 +341,7 @@ class CoordinationMixin(ProjectsMixin):
         """
         if row['blocked_reason'] or row['recheck_at'] is not None:
             return row
-        author = self._legacy_human_block(db, row['id'])
+        author = self._owner_block_author(db, row['id'])
         if not author:
             return row
         reason = 'Blocked manually by ' + (author.get('display_name') or author.get('owner_id') or 'a human')
@@ -341,6 +361,7 @@ class CoordinationMixin(ProjectsMixin):
                     or not db.execute('SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?',
                                       (row['project_id'], actor['owner_id'])).fetchone()):
                 continue
+            self._retain_owner_block(db, actor, row)
             row = self._classify_legacy_block(db, actor, row)
             if self._ticket(row, db)['block_reasons']:
                 continue
@@ -635,7 +656,7 @@ class CoordinationMixin(ProjectsMixin):
             if not companion and (row['assignee_owner_id'] not in (None, actor['owner_id']) or row['assignee_agent_id'] not in (None, identity)):
                 _fail('Task has been assigned elsewhere', 403)
             if companion:
-                if status and status not in ('todo', row['status']):
+                if status and status not in ('todo', 'blocked', row['status']):
                     _fail('Companions may release work but cannot deliver it for review', 403)
             elif claimant:
                 if not _same_claim(claimant, actor):
@@ -649,12 +670,15 @@ class CoordinationMixin(ProjectsMixin):
             project = self._project_member(db, actor, row['project_id'])
             if project['archived'] and status:
                 _fail('Project is archived; release without changing its status', 409)
+            held = self._retain_owner_block(db, actor, row)
+            if held and not companion and status and status != row['status']:
+                _fail('Only a human or companion may reopen an owner-held task; release without changing its status', 403)
             ticket = self._ticket(row, db)
             next_status = status or ('todo' if row['status'] == 'in_progress' else row['status'])
             if next_status == 'review' and (ticket['blocked_by'] or ticket['waiting_on_human']):
                 _fail('Resolve prerequisite tasks and human requests before review', 409)
             now = time.time()
-            explicit = next_status == 'blocked' and status == 'blocked'
+            explicit = next_status == 'blocked' and status == 'blocked' and not held
             db.execute('''UPDATE tickets SET status=?,claimant=NULL,claim_started_version=NULL,
                 lease_expires_at=NULL,assignee_agent_id=?,waiting_for_dependencies=?,
                 blocked_reason=?,unblock_owner=?,recheck_at=?,version=version+1,
@@ -662,15 +686,18 @@ class CoordinationMixin(ProjectsMixin):
                 (next_status, None if unassign_self else (row['assignee_agent_id'] if companion else identity),
                  0 if status else row['waiting_for_dependencies'],
                  reason[:2000] if explicit else (row['blocked_reason'] if next_status == 'blocked' else ''),
-                 identity if explicit else (row['unblock_owner'] if next_status == 'blocked' else None),
-                 now + _DEFAULT_RECHECK_SECONDS if explicit else (row['recheck_at'] if next_status == 'blocked' else None),
+                 (actor['owner_id'] if companion else identity) if explicit else (row['unblock_owner'] if next_status == 'blocked' else None),
+                 (None if companion else now + _DEFAULT_RECHECK_SECONDS) if explicit else (row['recheck_at'] if next_status == 'blocked' else None),
                  now, ticket_id, expected_version))
             db.execute('UPDATE projects SET updated_at=? WHERE id=?', (now, row['project_id']))
             self._remember(db, actor, 'release_ticket', idempotency_key, payload, ticket_id)
             self._audit(db, actor, 'ticket_released', dict(payload, version=expected_version+1))
+            if companion and status:
+                self._audit(db, actor, 'ticket_owner_hold', {'ticket_id': ticket_id,
+                    'active': next_status == 'blocked', 'holder': self._author(db, actor)})
             if next_status == 'review' and row['status'] != 'review':
                 self._record_review_request(db, actor, ticket_id)
-            if explicit:
+            if explicit and not companion:
                 self._audit(db, actor, 'agent_block_recorded', {'ticket_id': ticket_id})
                 self._escalate_repeated_blocks(db, actor, db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone())
             if next_status in ('review', 'done'):
@@ -1127,6 +1154,7 @@ class CoordinationMixin(ProjectsMixin):
                 _fail('Claim this task before requesting a human handoff', 403)
             if actor['kind'] == 'agent' and (row['lease_expires_at'] or 0) <= time.time():
                 _fail('Claim expired; inspect and recover the task first', 409)
+            self._retain_owner_block(db, actor, row)
             request_id, now = secrets.token_hex(16), time.time()
             author = self._author(db, actor)
             db.execute('INSERT INTO human_requests(id,ticket_id,owner_id,question,kind,requested_by,created_at) VALUES(?,?,?,?,?,?,?)',
@@ -1169,6 +1197,7 @@ class CoordinationMixin(ProjectsMixin):
                 _fail('Only the requested human can resolve this request', 403)
             if request['status'] == 'resolved':
                 return self._request(request, db)
+            self._retain_owner_block(db, actor, row)
             now = time.time()
             db.execute("UPDATE human_requests SET status='resolved',answer=?,resolved_at=? WHERE id=?", (answer, now, request_id))
             label = 'Companion response: ' if actor.get('companion_for') else 'Human response: '
@@ -1234,6 +1263,7 @@ class CoordinationMixin(ProjectsMixin):
             claimant=json.loads(parent['claimant']) if parent['claimant'] else None
             if actor['kind']=='agent' and (not _same_claim(claimant,actor) or (parent['lease_expires_at'] or 0)<=time.time()):
                 _fail('Delegate from your own active task claim',403)
+            self._retain_owner_block(db, actor, parent)
             child_id,thread_id,now=secrets.token_hex(16),secrets.token_hex(16),time.time()
             number=project['next_ticket_number']
             db.execute('INSERT INTO threads(id,title,created_at,updated_at) VALUES(?,?,?,?)',

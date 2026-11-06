@@ -138,13 +138,22 @@ class CommunicationMixin:
         # A companion acts for its owner, so it also reads messages that @mention the owner (and can answer or pass them on).
         return ['agent:'+row['agent_id']]+([actor['owner_id']] if row['agent_kind']=='agent' or row['profile_kind']=='companion' else [])
 
-    def _addressed_messages(self, db, actor, *, boundary=0, unread=False, limit=200):
+    def _inbox_agent_id(self, db, actor):
+        if actor['kind']!='agent' or not actor.get('session_id'):return None
+        row=db.execute('SELECT agent_id FROM sessions WHERE id=?',(actor['session_id'],)).fetchone()
+        return row['agent_id'] if row and row['agent_id'] else None
+
+    def _addressed_messages(self, db, actor, *, boundary=0, unread=False, limit=200, answered_by=None):
+        # answered_by: an agent identity; a message that identity already followed on the same thread
+        # (any of its sessions posted there afterwards) is handled and no longer delivered (#56).
         targets=self._inbox_targets(db,actor)
         placeholders=','.join('?' for _ in targets)
         rows=db.execute(f'''SELECT x.* FROM messages x JOIN thread_members m ON m.thread_id=x.thread_id
             WHERE m.owner_id=? AND x.seq>? AND EXISTS(SELECT 1 FROM json_each(x.mentions) j WHERE j.value IN ({placeholders}))
             AND (?=0 OR x.seq>COALESCE((SELECT r.seq FROM read_state r WHERE r.owner_id=? AND r.thread_id=x.thread_id),0))
-            ORDER BY x.seq''',(actor['owner_id'],boundary,*targets,int(unread),actor['owner_id']))
+            AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM messages y WHERE y.thread_id=x.thread_id AND y.seq>x.seq
+                AND json_extract(y.author,'$.agent_id')=?))
+            ORDER BY x.seq''',(actor['owner_id'],boundary,*targets,int(unread),actor['owner_id'],answered_by,answered_by))
         selected=[]
         for row in rows:
             if not self._profile_thread_allowed(db,actor,row['thread_id']):continue
