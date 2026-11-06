@@ -11,6 +11,26 @@ REASONS = frozenset({'', 'completed', 'cancelled', 'quota_or_rate_limit', 'authe
     'execution_failed', 'unavailable', 'timeout', 'cleanup_unconfirmed', 'cleanup_failed',
     'runner_error', 'protocol_error', 'policy_changed', 'claim_lost', 'stop_requested', 'owner_paused'})
 
+RESERVATION_FAILURES = frozenset({'owner_paused', 'capacity_exhausted', 'active_ticket_claim_required',
+    'profile_changed', 'review_skills_changed', 'distinct_live_review_claim_required', 'ordinary_review_required',
+    'review_prerequisites_changed', 'review_prerequisites_history_unavailable', 'review_policy_history_unavailable',
+    'review_scope_changed', 'execution_admission_refused', 'execution_key_conflict', 'execution_turn_conflict',
+    'project_archived', 'ticket_project_mismatch', 'agent_authentication_required'})
+RUNTIME_FAILURE_CODES = RESERVATION_FAILURES | frozenset({'unrecognized_code', 'tool_rejected',
+    'authentication_failed', 'permission_denied', 'http_error', 'rpc_rejected', 'invalid_response',
+    'connection_failed', 'timeout', 'protocol_mismatch', 'runtime_receipt_invalid', 'runtime_scope_mismatch',
+    'runtime_identity_changed', 'runtime_reservation_unconfirmed', 'runtime_reservation_requires_review',
+    'runtime_start_unconfirmed'})
+
+
+def runtime_failure(value):
+    """Closed telemetry only; never admission, cleanup or retry evidence."""
+    if (type(value) is dict and set(value)=={'stage','code'}
+            and type(value['stage']) is str and value['stage'] in ('reserve','receipt','start')
+            and type(value['code']) is str and value['code'] in RUNTIME_FAILURE_CODES):
+        return dict(value)
+    return None
+
 
 def _identifier(value):
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', value):
@@ -18,11 +38,7 @@ def _identifier(value):
 
 
 class RuntimeBoardClient(BoardReader):
-    """The worker registered this exact session before invoking this channel.
-
-    Registration here would refresh a changed profile and defeat cancellation.
-    All calls therefore use the original session without calling register().
-    """
+    """Use the original registered session; refreshing its profile would defeat Stop."""
     @classmethod
     def from_worker(cls, client):
         return cls(copy.deepcopy(client._config), client.session_id, 3)
@@ -33,6 +49,19 @@ class RuntimeBoardClient(BoardReader):
 
     def register(self):
         raise BoardReadError('runtime_registration_forbidden')
+
+    def _tool_failure(self, name, result):
+        error=super()._tool_failure(name,result)
+        content=result.get('content')
+        if (name in ('reserve_execution','start_execution') and 'structuredContent' not in result
+                and type(content) is list and len(content)==1):
+            block=content[0]
+            if type(block) is dict and set(block)=={'type','text'} and block['type']=='text' and type(block['text']) is str:
+                prefix='Error executing tool '+name+': '
+                text=block['text']
+                code=text[len(prefix):] if text.startswith(prefix) else None
+                if code in RESERVATION_FAILURES:error._runtime_tool_code=code
+        return error
 
     def call(self, name, args):
         if name not in RUNTIME_TOOLS:

@@ -41,7 +41,9 @@ def required_sdk_modules(version):
         ('team_ticket_cli','team_ticket_client','team_ticket_plan') if
         tuple(int(part) for part in version.split('.')) >= (0,46,0) else ()) + (
         ('development_queue','development_queue_client','development_queue_cli') if
-        tuple(int(part) for part in version.split('.')) >= (0,47,0) else ())
+        tuple(int(part) for part in version.split('.')) >= (0,47,0) else ()) + (
+        ('runtime_uninvoked','historical_review_source','review_recovery_service') if
+        tuple(int(part) for part in version.split('.')) >= (0,49,0) else ())
 
 
 class PackageError(Exception):

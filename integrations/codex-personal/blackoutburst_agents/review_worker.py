@@ -1,14 +1,5 @@
-"""One controller-selected delivery review, with a private durable opinion.
-
-This is deliberately separate from coding/queue workers. The controller must
-already hold the live review claim and supply a fresh, read-only delivery guard.
-That guard is trusted local code, never Board/model text or a declared hash. It
-must verify the exact delivery commit, material and independent reviewer copy.
-The current Git workspace component alone does not supply that proof.
-
-No Git inspection, claim acquisition, ticket mutation, publication or merge is
-implemented here. Runtime's existing authenticated reserve/start/control channel
-authorizes the review and pins its server-side delivery and permission epochs.
+"""Guarded, tool-free review with private opinions and existing claim/Runtime.
+Authority details: ../RUNTIME-ADMISSION-DIAGNOSTICS.md.
 """
 from copy import deepcopy
 import hashlib
@@ -61,11 +52,7 @@ def _agent_id(scope, selection, operation_id):
 
 
 class ReviewRuntimeGuard(RuntimeGuard):
-    """Existing Runtime authority, with a distinct private review work identity.
-
-No new wire argument or self-declared review receipt is introduced. The server
-selects and continuously checks its review_scope from the actual live ticket.
-"""
+    """Distinct local review identity; the server owns the live review_scope."""
     def __init__(self, journal, client, scope, selection, operation_id):
         super().__init__(journal, client, scope)
         self.selection, self.operation_id = deepcopy(selection), operation_id
@@ -77,12 +64,7 @@ selects and continuously checks its review_scope from the actual live ticket.
         return RuntimeJournal.configuration(self.scope, work['id'], turn_id, work['model'])
 
     def confirm_review(self, work, turn_id):
-        """Reauthorize the original server pin, including historical revocations.
-
-        A finished cleanup view is not current review authority: its stop reason
-        is merely `finished`. Replay of the exact existing reservation runs the
-        server's original expected_scope check without starting another turn.
-        """
+        """Recheck the original server pin without inference; cleanup is not authority."""
         try:
             config = self.configuration(work, turn_id)
             self.operation = self.journal.find(config)
@@ -148,13 +130,8 @@ def _receipt(op=None, *, reason=None, pending=False, cached=False):
 
 
 class DeliveryReviewWorker:
-    """Review supplied material only; return metadata and retain the opinion locally.
-
-    ``delivery_guard`` must be a protected local callback accepting keyword
-    arguments scope, selection, context, material and workspace. Returning exactly
-    True attests its fresh read-only inspection. Missing/failed/unknown evidence
-    refuses execution. Hashes in selection are data and never grant authority.
-    Consumers must revalidate this guard before publishing a retained opinion.
+    """Require a fresh protected delivery_guard; hashes grant nothing.
+    Revalidate before publishing the separately retained opinion.
     """
     def __init__(self, journal, run_store, client, runtime_journal, runtime_client, *,
                  delivery_guard=None, runner_factory=PersonalRunner):

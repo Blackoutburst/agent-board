@@ -903,6 +903,16 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
         return _view(board.claim_ticket(session_actor(session_id), ticket_id, expected_version, recovery_evidence),view)
 
     @mcp.tool()
+    async def claim_clean_review_ticket(session_id: str, ticket_id: str, expected_version: Version) -> dict:
+        """Claim an exact unclaimed review with a transactional whole-ticket Runtime cleanup check.
+
+        Returns clean-review-claim-v1 bound to the prior version and session.
+        Refuses any unfinished or uncleaned execution on any key of the ticket.
+        Does not stop executions or authorize deployment. Retries require the same new claim.
+        """
+        return board.claim_clean_review_ticket(session_actor(session_id),ticket_id,expected_version)
+
+    @mcp.tool()
     async def release_ticket(session_id: str, ticket_id: str, expected_version: Version,
                              idempotency_key: str, reason: str,
                              status: Literal["", "todo", "blocked", "review"] = "",

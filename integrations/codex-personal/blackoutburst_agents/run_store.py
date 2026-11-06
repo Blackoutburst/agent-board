@@ -20,6 +20,8 @@ import time
 import threading
 import uuid
 
+_RUNTIME_ENTRY_ISSUER=object()
+
 CONTINUATION_APPLICATION_ID = 0x42425243
 CONTINUATION_MAX_TURNS = 64
 CONTINUATION_MAX_BYTES = 16 * 1024 * 1024
@@ -536,7 +538,7 @@ class RunStore:
                 raise StoreError("work_busy") from None
             except OSError:
                 raise StoreError("work_lock_unavailable") from None
-            self._locks[work_id] = fd
+            self._locks[work_id] = object()
             # A legitimate live coordinator owns this lock until it finalizes.
             # Finding running state after acquiring it is an interrupted run.
             with self._transaction() as db:
@@ -556,7 +558,7 @@ class RunStore:
             self._locks.pop(work_id, None)
             os.close(fd)
 
-    def begin_turn(self, work_id, request_id, prompt):
+    def begin_turn(self, work_id, request_id, prompt, *, _runtime_guard=None):
         self._require_lock(work_id)
         if self.continuation_v1 and self.continuation_enrollment(work_id) is None:
             raise StoreError('continuation_enrollment_required')
@@ -583,7 +585,11 @@ class RunStore:
                 provider_session_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)""",
                 (turn_id, work_id, request_id, digest, "running", work["provider_session_id"], now, now))
             db.execute("UPDATE works SET updated_at=? WHERE id=?", (now, work_id))
-            return {"cached": False, "turn": self._turn_metadata(self._turn(turn_id))}
+            result={"cached": False, "turn": self._turn_metadata(self._turn(turn_id))}
+            if _runtime_guard is not None:
+                from .runtime_uninvoked import _Entry
+                result["_runtime_entry"]=_Entry(self,_runtime_guard,turn_id,_RUNTIME_ENTRY_ISSUER)
+            return result
 
     def on_process(self, turn_id, pid):
         if type(pid) is not int or pid <= 0:

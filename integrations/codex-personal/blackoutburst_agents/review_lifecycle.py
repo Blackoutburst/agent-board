@@ -23,7 +23,7 @@ from .git_delivery import LocalGitDeliveryController,_inventory
 from .linux_planner_policy import LinuxPlannerPolicy,prepare_linux_planner_policy
 from .pool_journal import uuid_value
 from .review_lifecycle_client import DeliveryReviewLifecycleClient
-from .review_pool import DeliveryReviewPoolDriver,HistoricalPoolDeliveryTests,REVISION
+from .review_pool import DeliveryReviewPoolDriver,HistoricalPoolDeliveryTests,REVISION,aggregate_review_source
 from .review_worker import _opinion,_agent_id,ReviewRuntimeGuard
 from .worker_pool import WorkerPool
 
@@ -36,9 +36,8 @@ def fail(code='review_lifecycle_unconfirmed'):
 
 class DeliveryReviewLifecycle:
     def __init__(self,directory,*,pool,driver,source,executable,cli_version,interpreter='/usr/bin/python3.10'):
-        from .development_aggregate_review_source import PublishedAggregateReviewSource
         if (type(pool) is not WorkerPool or type(driver) is not DeliveryReviewPoolDriver
-                or type(source) not in (DevelopmentPoolResultDelivery,PublishedAggregateReviewSource)):
+                or type(source) is not DevelopmentPoolResultDelivery and not aggregate_review_source(source)):
             fail('review_lifecycle_concrete_handles_required')
         self.pool,self.driver,self.source=pool,driver,source
         self.directory=Path(directory).absolute()
@@ -181,13 +180,16 @@ class DeliveryReviewLifecycle:
                 project,_selected=_ticket_sources(response,ContextScope(**{key:scope[key] for key in ('owner_id','agent_id','project_id','ticket_id')}))
                 ticket=response['ticket']
                 receipt=request['source']['receipt']
+                version=(self.source.admission_version(client,scope) if
+                    request['source'].get('kind')=='historical-aggregate-review-source-v1' else receipt['handoff']['version'])
                 if (project.get('archived') is not False or ticket.get('status')!='review' or ticket.get('claimant') is not None
                         or ticket.get('blocked_by') or ticket.get('waiting_on_human')
-                        or ticket.get('version')!=receipt['handoff']['version']):fail('review_lifecycle_source_ticket_changed')
+                        or ticket.get('version')!=version):fail('review_lifecycle_source_ticket_changed')
                 claim=dict(ticket_id=scope['ticket_id'],expected_version=ticket['version'])
                 self._remember(private,'claim-intent',claim);held();self._local(private,operation_id)
                 if self.driver._descriptor(self.source,source_operation_id)!=request['source']:fail('review_lifecycle_source_changed')
-                claimed=client.call('claim_ticket',claim)
+                claimed=(self.source.claim_review(client,claim) if
+                    request['source'].get('kind')=='historical-aggregate-review-source-v1' else client.call('claim_ticket',claim))
                 if claimed.get('version')!=ticket['version']+1:fail('review_lifecycle_claim_unconfirmed')
                 self._remember(private,'claimed',claimed)
                 context=build_context(client.call,scope=ContextScope(**{key:scope[key] for key in ('owner_id','agent_id','project_id','ticket_id')}),registration=registration)

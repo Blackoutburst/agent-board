@@ -130,7 +130,7 @@ def test_timeout_or_legacy_tool_error_stays_uncertain_even_after_capacity_change
     assert value.message_runs.turn_result(turn['id'])['uncertain'] is True
     increase(value)
     result=value.tick_host();assert result['status']=='pending' and result['reason']=='message_runtime_reconciliation'
-    assert value.control.calls==['reserve_message_execution','lookup_execution']
+    assert value.control.calls==['reserve_message_execution','lookup_execution','lookup_execution']
     assert local(value)[2]['phase']=='needs_review'
     assert value.message_runtime.db.execute('PRAGMA user_version').fetchone()[0]==1
     assert_untouched(value)
@@ -142,15 +142,15 @@ def test_lost_reply_does_not_adopt_negative_and_positive_cleanup_targets_real_sl
     if room:increase(value)
     value.control.fault='after';value.post();value.enable()
     assert value.tick_host()['status']=='pending'
-    assert local(value)[2]['phase']=='needs_review'
+    assert local(value)[2]['phase']==('finished' if room else 'needs_review')
     result=value.tick_host()
     if room:
         assert result['status']=='needs_review' and result['reason']=='message_result_requires_review'
-        assert value.control.calls==['reserve_message_execution','lookup_execution','finish_execution']
+        assert value.control.calls==['reserve_message_execution','lookup_execution','finish_execution','lookup_execution']
         assert local(value)[2]['phase']=='finished'
     else:
         assert result['status']=='pending' and result['reason']=='message_runtime_reconciliation'
-        assert value.control.calls==['reserve_message_execution','lookup_execution']
+        assert value.control.calls==['reserve_message_execution','lookup_execution','lookup_execution']
         assert local(value)[2]['receipt'] is None
         with value.board._connection() as db:
             assert db.execute('SELECT COUNT(*) FROM runtime_admission_refusals').fetchone()[0]==1

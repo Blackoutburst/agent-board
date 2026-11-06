@@ -137,12 +137,13 @@ class RuntimeGuardSecurityTests(unittest.TestCase):
         self.assertEqual([name for name, _ in self.client.calls[before:]], ['lookup_execution'])
         self.assert_no_sensitive_runtime_fields()
 
-    def test_lost_reservation_response_with_effect_reconciles_reserved_only(self):
+    def test_lost_reservation_response_closes_unused_slot_before_returning(self):
         self.client.lose = 'reserve_execution'
         with self.assertRaises(RuntimeControlError):
             self.run_turn()
         self.assertEqual(self.model_calls, 0)
-        self.assertEqual(self.execution()['state'], 'reserved')
+        self.assertEqual(self.execution()['state'], 'finished')
+        self.assertEqual([name for name, _ in self.client.calls].count('finish_execution'), 1)
         cached = self.run_turn()
         self.assertTrue(cached['cached'])
         self.assertEqual(cached['result']['status'], 'blocked')
@@ -165,16 +166,15 @@ class RuntimeGuardSecurityTests(unittest.TestCase):
         row = self.journal.db.execute('SELECT * FROM executions').fetchone()
         self.assertEqual(row['phase'], 'needs_review')
 
-    def test_lost_start_response_does_not_launch_or_free_running_slot(self):
+    def test_lost_start_response_closes_only_the_never_invoked_slot(self):
         self.client.lose = 'start_execution'
         with self.assertRaises(RuntimeControlError):
             self.run_turn()
-        with self.assertRaises(RuntimeControlError):
-            self.run_turn()
+        self.assertTrue(self.run_turn()['cached'])
         self.assertEqual(self.model_calls, 0)
-        self.assertEqual(self.execution()['state'], 'running')
-        self.assertEqual(self.board.get_runtime(self.human)['active_count'], 1)
-        self.assertNotIn('finish_execution', [name for name, _ in self.client.calls])
+        self.assertEqual(self.execution()['state'], 'finished')
+        self.assertEqual(self.board.get_runtime(self.human)['active_count'], 0)
+        self.assertEqual([name for name, _ in self.client.calls].count('finish_execution'), 1)
         row = self.journal.db.execute('SELECT * FROM executions').fetchone()
         self.assertEqual(row['start_confirmed'], 0)
 
@@ -187,11 +187,11 @@ class RuntimeGuardSecurityTests(unittest.TestCase):
         with patch.object(self.journal, 'update', side_effect=fail_active):
             with self.assertRaises(RuntimeControlError):
                 self.run_turn()
-        with self.assertRaises(RuntimeControlError):
-            self.run_turn()
+        self.assertTrue(self.run_turn()['cached'])
         self.assertEqual(self.model_calls, 0)
-        self.assertEqual(self.execution()['state'], 'running')
-        self.assertNotIn('finish_execution', [name for name, _ in self.client.calls])
+        self.assertEqual(self.execution()['state'], 'finished')
+        self.assertEqual([name for name, _ in self.client.calls].count('finish_execution'), 1)
+        self.assertEqual(self.journal.db.execute('SELECT start_confirmed FROM executions').fetchone()[0], 0)
         self.assert_no_sensitive_runtime_fields()
 
     def test_lost_finish_response_is_reconciled_from_cache_without_start(self):
@@ -281,7 +281,8 @@ class RuntimeGuardSecurityTests(unittest.TestCase):
             with self.assertRaises(RuntimeControlError):
                 self.run_turn()
         self.assertEqual(self.model_calls, 0)
-        self.assertEqual(self.execution()['state'], 'reserved')
+        self.assertEqual(self.execution()['state'], 'finished')
+        self.assertEqual(self.execution()['owner_id'], self.scope['owner_id'])
         self.assertNotIn('start_execution', [name for name, _ in self.client.calls])
 
     def test_confirmed_start_is_monotone_and_cannot_return_from_review_to_active(self):
@@ -325,7 +326,8 @@ class RuntimeGuardSecurityTests(unittest.TestCase):
             with self.assertRaises(RuntimeControlError):
                 self.run_turn()
         self.assertEqual(self.model_calls, 0)
-        self.assertEqual(self.execution()['state'], 'running')
+        self.assertEqual(self.execution()['state'], 'finished')
+        self.assertEqual(self.execution()['profile_version'], self.registration['profile']['version'])
         self.assertEqual(self.journal.db.execute('SELECT start_confirmed FROM executions').fetchone()[0], 0)
 
     def runtime_cli_reconcile(self, operation):
