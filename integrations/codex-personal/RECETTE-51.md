@@ -1,0 +1,481 @@
+# Recette réelle #51 — plusieurs emplacements de file standing (2 puis 4)
+
+Brouillon opérateur pour contre-revue, rédigé le 6 novembre 2026. **Rien
+n'a été exécuté** : aucune préparation de paquet, aucun sudo, aucun démarrage.
+Chaque commande `sudo` est destinée à un humain, après revue du Lead.
+Les valeurs `<<À_REMPLIR:…>>` sont fournies par un humain ; elles ne sont
+jamais déduites d'un message Board, d'un ticket ou d'un modèle.
+
+## 1. Objet et accords
+
+Premier passage réel du planificateur `linux-cloud-queue-slots-v1`
+(`development_queue_slots.py`, paquet 0.50.0) avec deux, puis quatre modèles
+Codex simultanés, sur l'abonnement Codex de TheScreamer.
+
+- Plan : message Board `5fc01ed0`.
+- Corrections du Lead (à respecter) : message `537c7f14`.
+- Approbation de TheScreamer : Needs-you `a70d7a65`.
+- Approbation de Blackout : relayée par son compagnon dans `92a7c455`.
+  **Il doit la confirmer directement** avant toute étape privilégiée.
+
+Contraintes reprises du Lead :
+
+- Le `CODEX_HOME` installé reste tel quel. Aucun fichier d'authentification
+  n'est lu ni copié. Toute autre disposition est une opération humaine
+  distincte, hors de cette recette.
+- Les plafonds CPU/RAM proposés (CPUQuota 600 %, MemoryHigh 8G, MemoryMax
+  10G, TasksMax 1024) restent une hypothèse jusqu'à leur mesure en passe 2.
+  Les plafonds actuels sont CPU 300 %, MemoryHigh 4 GiB, MemoryMax 6 GiB et
+  TasksMax 256. Voir la section 6 : **le code actuel ne permet pas de les
+  modifier sur l'installation existante**.
+- La preuve, ce sont les intervalles horaires de quatre appels modèle
+  effectifs qui se chevauchent, sur des tickets et des racines distincts, avec
+  versions et plafonds exacts, puis l'arrêt et le nettoyage. Quatre profils en
+  ligne ou quatre PR ne prouvent rien.
+- Les états actifs (`admitting`, `active`, en pause, `needs_you`) restent
+  comptés dans le plafond. C'est le comportement du code :
+  `_Scheduler.holders` compte tout pointeur `tick.json` non idle.
+
+## 2. État actuel relevé (6 novembre 2026, sans sudo)
+
+| Élément | Observation | Commande |
+| --- | --- | --- |
+| Release active | `66cce93319dbd72e392d3b5bb2495910dfc9a284762a9a6e0e87a5561a5f23be` : adapter 0.49.1, révision `122af32c501f3b2817a096e3a7574bed082493a7`, codex 0.163.0, gh 2.94.0, `/usr/bin/python3.10` sha `a2f33a6e…c56ae`, propriétaire Board `thescreamer`, endpoint `https://board.blackoutburst.com/mcp` | `python3 -c 'import json;print(json.load(open("/opt/blackoutburst-agent-pool/releases/66cce933…/manifest.json"))["adapter_version"])'` |
+| `unit_limits` du manifeste | `cpu_percent` 300, `memory_high_bytes` 4294967296, `memory_bytes` 6442450944, `tasks` 256, `lifetime_seconds` 3600, `stop_seconds` 45 | idem |
+| Releases présentes | 25 répertoires sous `/opt/blackoutburst-agent-pool/releases/`. La plus récente est `66cce933…` (4 nov. 14:56), précédée de `4d3c80c6…` (0.49.0) | `ls -la /opt/blackoutburst-agent-pool/releases/` |
+| Reçus root | `66cce933….complete.json` et `66cce933….continuation.complete.json` présents (mode 0600 root, contenu non lu) | `ls -la /var/lib/blackoutburst-agent-pool/installations/` |
+| Unités | `blackoutburst-agent-pool-bb-agent-thescreamer.service`, `blackoutburst-agent-continuation-bb-agent-thescreamer.service` et `.timer` : loaded, inactive/dead, **disabled**, sans drop-in, ExecStart sur la release `66cce933…`. Les deux unités Host sont également disabled | `systemctl list-unit-files 'blackoutburst-agent*'` ; `systemctl show -p LoadState,ActiveState,SubState,UnitFileState,DropInPaths,FragmentPath <unité>` |
+| Plafonds effectifs | `CPUQuotaPerSecUSec=3s`, `MemoryHigh=4294967296`, `MemoryMax=6442450944`, `TasksMax=256`, `RuntimeMaxUSec=1h` | `systemctl show -p … <service>` |
+| Unité de continuation | `--continuation /var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/config/continuation.json` (chemin fixe dans le modèle) | `systemctl cat blackoutburst-agent-continuation-bb-agent-thescreamer.service` |
+| Dernière passe | 4 nov. 15:45:13, terminée avec succès. Aucun timer actif | `journalctl -u blackoutburst-agent-continuation-bb-agent-thescreamer.service -n 6` ; `systemctl list-timers --all` |
+| Hôte | 8 CPU, 15 GiB de RAM (environ 12 disponibles), 3 GiB de swap dont 2 utilisés, systemd 249, noyau 5.15.0-198, cgroup v2 | `nproc` ; `free -g` ; `systemctl --version` |
+| `codex` du PATH ubuntu | `codex-cli 0.166.0`. **Sans objet** : l'unité utilise `release/tools/codex` 0.163.0 | `codex --version` |
+
+À relever par un humain (permission refusée sans sudo) :
+
+```sh
+sudo ls -la /var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/ \
+  /var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/config \
+  /var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/admissions
+# Schéma (et seulement le schéma) du document de continuation actuel :
+sudo -u bb-agent-thescreamer -H /usr/bin/python3.10 -I -B -c 'import json;print(json.load(open("/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/config/continuation.json"))["schema"])'
+# Phase de chaque pointeur de file de la racine (aucun autre champ affiché) :
+sudo -u bb-agent-thescreamer -H /usr/bin/python3.10 -I -B -c 'import glob,json;[print(p,json.load(open(p)).get("phase"),json.load(open(p)).get("active") is None) for p in glob.glob("/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/admissions/queue-*/tick.json")]'
+```
+
+Bloquant : si un pointeur `RACINE/admissions/queue-*/tick.json` n'est pas
+`idle` avec `active` nul, la passe slots est refusée en entier
+(`continuation_pool_configuration_invalid`) avant tout claim. Il faut alors
+terminer ce travail #73, et non l'effacer. Si `continuation.json` porte
+encore la reprise de revue v2 (0.49.1) et que celle-ci n'est pas terminée,
+le Lead décide avant de le remplacer.
+
+`MemoryPeak` n'existe pas sous systemd 249 et `memory.peak` est absent sous
+le noyau 5.15. Le pic mémoire doit donc être **échantillonné** (section 8).
+
+## 3. Prérequis humains (aucun n'est fait par cette recette)
+
+1. Codex : le login officiel existant du compte `bb-agent-thescreamer`
+   (abonnement de TheScreamer), sous son HOME normal
+   `/var/lib/blackoutburst-agent-host/owners/bb-agent-thescreamer`. On ne le
+   modifie pas et on ne le copie pas. Les quatre processus Codex partagent ce
+   même `.codex` (risque à observer, section 9).
+2. Board : quatre profils codeurs distincts (le Board n'admet qu'un travail de
+   file non terminé par profil, et le chargeur refuse deux emplacements sur le
+   même `agent_id`) et un reviewer distinct, créés et appairés par des humains.
+   Il faut aussi l'autorisation de file (`claim_selected_queue_ticket`) pour
+   chaque codeur, les grants des ressources exactes et une capacité Runtime
+   propriétaire libre d'au moins quatre exécutions codeur plus les revues. Une
+   exécution incertaine ancienne reste comptée.
+3. Connexions : une connexion codeur par emplacement, appairée **directement**
+   dans `RACINE/slots/<nom>/connections/`. Le reviewer doit aussi avoir une
+   connexion **sous la racine de chaque emplacement**, car le workflow exige
+   `reviewer.connection_file` sous `<racine d'emplacement>/connections`. Cela
+   fait quatre appairages du même reviewer, ou bien un reviewer par
+   emplacement. Une copie de fichier de connexion est exclue. L'humain qui
+   appaire vérifie que le flux d'appairage ne réécrit pas `~/.codex`
+   (`connect.py` vise `~/.codex/config.toml` par défaut).
+4. Projet bac à sable avec quatre tickets Todo. Chaque ticket est assigné
+   explicitement au codeur de son emplacement et porte une ressource distincte
+   (par exemple `repo:t51-a` … `repo:t51-d`). Sinon, l'exclusion de ressource
+   sérialise les emplacements.
+5. **Dépôt : écart avec le plan.** Il n'existe pas de « dépôt de test »
+   possible. La destination de publication est figée dans le code
+   (`git_publication.py` : `Blackoutburst/agent-board`, base `main`). Les
+   quatre PR brouillon seront donc ouvertes sur `Blackoutburst/agent-board`.
+   Chaque emplacement a son propre clone local de ce dépôt sous
+   `repositories/`, à un commit de base approuvé, avec des chemins existants et
+   disjoints par ticket. Un vrai dépôt de test demanderait un changement de code
+   et une nouvelle revue. Les propriétaires doivent accepter cet écart.
+6. gh : la connexion gh officielle existante du même compte, avec droit
+   d'écriture sur ce dépôt, sans jeton copié.
+7. Racines d'emplacement : créées par l'humain sous l'UID du propriétaire, en
+   mode 0700. La racine est **dérivée** (`RACINE/slots/<nom>`) et n'est jamais
+   lue depuis un document :
+
+```sh
+R=/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer
+for s in dev-1 dev-2 dev-3 dev-4; do
+  for d in config connections repositories checkouts verifiers batches git-state; do
+    sudo -u bb-agent-thescreamer -H install -d -m 0700 "$R/slots/$s/$d"
+  done
+done
+# Ne pas créer RACINE/slots/<nom>/admissions, ni RACINE/continuations : le code les crée.
+```
+
+## 4. Paquet 0.50.0
+
+- Source : branche `claude/t51-parallel-slots`. Le code est à
+  `b913acf5b882d9b199182fccd45dbb7c57be2174`, empilé sur la PR #98
+  (`2d067f33f7f471adcc9c3a78027f1dd7d0526c49`). Le commit qui ajoute ce
+  document ne modifie aucun fichier empaqueté, mais il change `revision`, donc
+  l'identifiant du bundle. **Préparer depuis la tête finale revue et noter son
+  SHA.**
+- `pyproject.toml` : `version = "0.50.0"`.
+- Modèles d'unité identiques octet pour octet à la release `66cce933…`.
+  Valeurs sha256 : `unit.service.in` `4aca3364…2ebe`, `continuation.service.in`
+  `054e80e3…2d35`, `continuation.timer.in` `bf66f944…2ff`. La continuité exigée
+  par `upgrade` et `upgrade-continuation` est donc respectée.
+- Scripts publics attendus dans le bundle (sha256 de la source) :
+  `pool_manage.py` `eaebab321bcd760c4f07a034bc09ad6e702aa8c037b818ed3f5996c98f2ed859`
+  (inchangé depuis 0.49.1),
+  `pool_package.py` `f929527ce8f1910ddf50e9206bfa79be9b04813b6c2c77b4da2410ca2e43b9eb`,
+  `pool_entry.py` `5485166f0c8c5d7b272458cb14ff4883b347a419898d03a2afafa1e4eacf13f3`.
+
+Préparation hors ligne, non root, sous l'utilisateur ubuntu :
+
+```sh
+HEAD_SHA=<<À_REMPLIR:tête finale revue, 40 hex>>
+CAND=/home/ubuntu/agent-pool-candidates/t51-slots-${HEAD_SHA:0:8}-2026110X
+install -d -m 0700 "$CAND"
+git clone --no-hardlinks /home/ubuntu/src/ab-wt51 "$CAND/source"
+git -C "$CAND/source" checkout --detach "$HEAD_SHA"
+git -C "$CAND/source" status --porcelain   # doit être vide
+```
+
+`$CAND/public-spec.json` (0600). Il est identique au spec 0.49.1, avec les
+mêmes outils copiés depuis la release active, ce qui garde les octets
+`tools/*` égaux comme `upgrade` l'exige :
+
+```json
+{"board_endpoint":"https://board.blackoutburst.com/mcp","board_owner":"thescreamer",
+ "bwrap":"/opt/blackoutburst-agent-pool/releases/66cce93319dbd72e392d3b5bb2495910dfc9a284762a9a6e0e87a5561a5f23be/tools/codex-resources/bwrap",
+ "codex":"/opt/blackoutburst-agent-pool/releases/66cce93319dbd72e392d3b5bb2495910dfc9a284762a9a6e0e87a5561a5f23be/tools/codex",
+ "codex_version":"0.163.0",
+ "gh":"/opt/blackoutburst-agent-pool/releases/66cce93319dbd72e392d3b5bb2495910dfc9a284762a9a6e0e87a5561a5f23be/tools/gh",
+ "gh_version":"2.94.0",
+ "python_pin":{"path":"/usr/bin/python3.10","sha256":"a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae"},
+ "unit_limits":{"cpu_percent":300,"lifetime_seconds":3600,"memory_bytes":6442450944,"memory_high_bytes":4294967296,"stop_seconds":45,"tasks":256},
+ "unix_owner":"bb-agent-thescreamer"}
+```
+
+```sh
+cd "$CAND/source" && python3 -B -m deploy.worker_pool.manage prepare --source "$CAND/source" --output "$CAND/bundle" --spec "$CAND/public-spec.json"
+python3 -I -B "$CAND/bundle/pool_manage.py" plan "$CAND/bundle"
+sha256sum "$CAND/bundle/manifest.json" "$CAND/bundle/pool_manage.py" "$CAND/bundle/pool_package.py" "$CAND/bundle/pool_entry.py"
+```
+
+Le `bundle_id` affiché par `plan` doit être égal au sha256 de
+`bundle/manifest.json` (`manifest_id` = sha256 du manifeste canonique écrit).
+Vérifier aussi que `adapter_version` vaut 0.50.0, que `revision` vaut
+`$HEAD_SHA`, que `unit_limits` correspond au spec et que les trois scripts ont
+les sha256 ci-dessus. Le Lead consigne `NEW_BUNDLE_ID` avant tout sudo.
+
+## 5. Documents à créer (propriétaire 0600, aucun lien dur ni symbolique)
+
+Tous les chemins sont sous `R=/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer`.
+Le service lit **toujours** `R/config/continuation.json` : le document slots
+doit finir à ce chemin exact.
+
+### 5.1 Document slots, passe 2 puis passe 4
+
+`R/config/slots-51-p2.json` :
+
+```json
+{"schema":"linux-cloud-queue-slots-v1","concurrency":2,"slots":[
+ {"name":"dev-1","continuation_file":"/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/slots/dev-1/config/standing.json"},
+ {"name":"dev-2","continuation_file":"/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/slots/dev-2/config/standing.json"}]}
+```
+
+`R/config/slots-51-p4.json` : même structure avec `"concurrency":4` et
+`dev-1` … `dev-4`. Règles du code : `concurrency` vaut de 1 à 8 et au plus le
+nombre d'emplacements ; 16 emplacements au maximum ; noms
+`[A-Za-z0-9_.:-]{1,200}` ; aucun autre champ.
+
+Passer de 2 à 4 en ajoutant `dev-3` et `dev-4` garde `dev-1` et `dev-2`
+configurés. L'inventaire durable `R/slots/inventory.json` refuse un emplacement
+occupé dont le profil, le catalogue ou l'approbation change. Conformément au
+plan, la passe 4 ne commence qu'après la fin et le nettoyage réels du travail
+de la passe 2, ou sur de **nouveaux** tickets.
+
+### 5.2 Par emplacement `<n>` (dev-1 … dev-4)
+
+`R/slots/<n>/config/standing.json` :
+
+```json
+{"schema":"linux-cloud-queue-continuation-v1",
+ "catalog_file":"/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/slots/<n>/config/catalog.json",
+ "workflow_file":"/var/lib/blackoutburst-agent-pool/owners/bb-agent-thescreamer/slots/<n>/config/workflow-standing.json",
+ "approved_sha256":"<<À_REMPLIR:approval_sha256 du preview --workflow>>",
+ "checkpoint_after_actions":3,"provider_backoff_seconds":60}
+```
+
+`R/slots/<n>/config/catalog.json` (`development-queue-catalog-v1`, voir
+DEVELOPMENT-QUEUE.md) :
+
+- `owner_id` `thescreamer`, `board_endpoint` `https://board.blackoutburst.com/mcp` ;
+- `agent_id` et `profile_version` : `<<À_REMPLIR:codeur n>>`, distincts par
+  emplacement ;
+- `project_id` : `<<À_REMPLIR:projet bac à sable>>` ;
+- `connection_file` : `R/slots/<n>/connections/coder.json` ;
+- `timeout_seconds` au plus égal à 3510 (`lifetime_seconds` − 90) ;
+- une entrée `entry_id` `t51-<n>`, avec la ressource distincte du ticket,
+  `repository` `{repository_id:"agent-board", repository: R/slots/<n>/repositories/agent-board, base_commit:<<À_REMPLIR>>}`,
+  des `paths` existants disjoints, `actions`
+  `["repo.read_file","repo.patch_file","repo.run_test"]`, un vérificateur sous
+  `R/slots/<n>/verifiers/` avec son sha256, `model` et `reasoning_effort`
+  explicites (`<<À_REMPLIR:modèle de l'abonnement>>`, par exemple `low`) ;
+- `planner_budgets` : `PlannerBudgets().document()`, soit 16 tours, 16
+  actions et 1800 s ; `max_wall_seconds` doit rester au plus égal à
+  `timeout_seconds`, et `checkpoint_after_actions` (3) au plus égal à
+  `min(max_actions, max_turns)`. `broker_budgets` : `Budgets().document()`.
+
+Le catalogue s'écrit comme dans DEVELOPMENT-QUEUE.md, sous l'UID propriétaire,
+avec `PrivateDirectory(...).create`. On lance Python avec
+`sys.path.insert(0, RELEASE + '/source')` depuis la release installée.
+
+`R/slots/<n>/config/workflow-standing.json` (`linux-cloud-workflow-v1`) :
+`batch_id` UUID modèle, un job `name` égal à `t51-<n>`, `paths` identiques à
+l'entrée, et `commit_message`, `pr_title` et `pr_body` fixes. Le
+`reviewer` porte `agent_id` (reviewer), `connection_file`
+(`R/slots/<n>/connections/reviewer.json`, différent de celui du codeur),
+`instruction`, `model`, `skills` et `timeout`.
+
+`approved_sha256` s'obtient sans claim ni modèle, puis se recopie dans
+`standing.json` :
+
+```sh
+RELEASE=/opt/blackoutburst-agent-pool/releases/$NEW_BUNDLE_ID
+cd "$RELEASE/source" && sudo -u bb-agent-thescreamer -H /usr/bin/python3.10 -B -m blackoutburst_agents development-queue preview \
+  --root "$R/slots/<n>" --catalog "$R/slots/<n>/config/catalog.json" \
+  --workflow "$R/slots/<n>/config/workflow-standing.json" --session t51-<n>-preview
+```
+
+Ce preview ouvre la connexion de découverte du codeur. Il ne fait aucun claim
+et aucun appel modèle ; la valeur retournée est calculée localement à partir
+des empreintes. `cd` dans la release root sert uniquement à importer la source
+publiée ; à adapter si le Lead préfère une autre invocation.
+
+## 6. Diff d'unité (plafonds) : non applicable par le code actuel
+
+Diff proposé, identique pour le service fini et le service de continuation :
+
+```diff
+-TasksMax=256
+-MemoryMax=6442450944
+-MemoryHigh=4294967296
+-CPUQuota=300%
++TasksMax=1024
++MemoryMax=10737418240
++MemoryHigh=8589934592
++CPUQuota=600%
+```
+
+Le seul moyen prévu de produire ces lignes est le spec du paquet
+(`unit_limits` : `tasks` 1024, `memory_bytes` 10737418240,
+`memory_high_bytes` 8589934592, `cpu_percent` 600). Ces valeurs restent dans
+les bornes de `package.limits()`. Elles ne peuvent pourtant pas être
+**installées** sur l'existant :
+
+- `upgrade` et `upgrade-continuation` exigent des `unit_limits` identiques à
+  la release précédente ; sinon refus `pool_upgrade_scope_changed` ;
+- `install` refuse une racine propriétaire ou une unité déjà présentes
+  (`pool_existing_layout_refused`, `pool_unit_already_exists`) ;
+- toute édition manuelle, tout drop-in et `systemctl set-property` sont
+  exclus. L'entrée compare les octets du fichier d'unité, et les mises à jour
+  suivantes refusent un `DropInPaths` non vide.
+
+Conséquence pour la recette :
+
+- La passe 2 se fait **avec les plafonds actuels**, ce qui est cohérent avec
+  « hypothèse jusqu'à mesure ».
+- La passe 4 n'a lieu sous les plafonds actuels que si les mesures de la
+  passe 2, extrapolées à quatre emplacements, restent nettement sous MemoryHigh
+  4 GiB et TasksMax 256. Sinon, il faut d'abord un changement de code revu (par
+  exemple une mise à jour arrêtée qui accepte explicitement un changement de
+  `unit_limits` pour les trois unités), puis un nouveau bundle.
+- Sur cet hôte de 15 GiB, MemoryMax 10G ne laisse qu'environ 5 GiB au reste du
+  serveur. Le Lead valide cette valeur après mesure.
+
+## 7. Commandes (pour un humain, après contre-revue)
+
+Noms : `SVC=blackoutburst-agent-continuation-bb-agent-thescreamer.service`,
+`TMR=blackoutburst-agent-continuation-bb-agent-thescreamer.timer`,
+`PREV=66cce93319dbd72e392d3b5bb2495910dfc9a284762a9a6e0e87a5561a5f23be`.
+
+### 7.1 Mise à jour arrêtée vers 0.50.0
+
+```sh
+systemctl show -p ActiveState,UnitFileState,DropInPaths "$SVC" "$TMR" blackoutburst-agent-pool-bb-agent-thescreamer.service
+# attendu : inactive / disabled / vide pour les trois
+python3 -I -B "$CAND/bundle/pool_manage.py" upgrade "$CAND/bundle" --previous-bundle-id "$PREV"
+sudo /usr/bin/python3.10 -I -B "$CAND/bundle/pool_manage.py" upgrade "$CAND/bundle" --previous-bundle-id "$PREV" --expected-bundle-id "$NEW_BUNDLE_ID" --apply
+RELEASE=/opt/blackoutburst-agent-pool/releases/$NEW_BUNDLE_ID
+python3 -I -B "$RELEASE/pool_manage.py" upgrade-continuation "$RELEASE" --previous-bundle-id "$PREV"
+sudo /usr/bin/python3.10 -I -B "$RELEASE/pool_manage.py" upgrade-continuation "$RELEASE" --previous-bundle-id "$PREV" --expected-bundle-id "$NEW_BUNDLE_ID" --apply
+systemctl cat "$SVC" | grep -E 'ExecStart|TasksMax|Memory|CPUQuota'   # release = NEW, plafonds inchangés
+```
+
+Les deux commandes `--apply` laissent les unités désactivées. Elles ne lisent
+pas la racine privée.
+
+### 7.2 Mise en place des documents (unités arrêtées)
+
+```sh
+sudo -u bb-agent-thescreamer -H cp -p "$R/config/continuation.json" "$R/config/continuation.pre51.json"   # sauvegarde
+sudo -u bb-agent-thescreamer -H /usr/bin/python3.10 -I -B "$RELEASE/pool_entry.py" --release "$RELEASE" --owner bb-agent-thescreamer continuation-plan --continuation "$R/config/slots-51-p2.json"
+# Revue : configuration_sha256, concurrency, et par emplacement agent_id / project_id / entries / resources / sha.
+sudo -u bb-agent-thescreamer -H install -m 0600 "$R/config/slots-51-p2.json" "$R/config/continuation.json"
+sudo -u bb-agent-thescreamer -H /usr/bin/python3.10 -I -B "$RELEASE/pool_entry.py" --release "$RELEASE" --owner bb-agent-thescreamer continuation-plan --continuation "$R/config/continuation.json"
+```
+
+`install` écrit une copie et non un lien (nlink 1 exigé). Le plan affiche
+`activated:false` et `launchable:false`.
+
+### 7.3 Démarrage d'une passe
+
+```sh
+sudo /usr/bin/systemctl start "$TMR"   # start sans enable : pas d'activation au boot
+```
+
+Le timer lance une passe 30 s plus tard, puis 30 s après chaque fin de passe.
+Une passe dure au plus 3510 s. Démarrer l'échantillonneur de la section 8
+**avant** cette commande.
+
+### 7.4 Stop (test manuel, puis arrêt normal)
+
+Toujours arrêter le timer **d'abord**, sinon une nouvelle passe redémarre 30 s
+plus tard :
+
+```sh
+sudo /usr/bin/systemctl stop "$TMR"
+sudo /usr/bin/systemctl stop "$SVC"     # SIGTERM -> should_stop de chaque tick, puis Stop du Core ; TimeoutStopSec 45
+systemctl show -p ActiveState,Result,ExecMainStatus "$SVC"
+journalctl -u "$SVC" --since "-10min" --no-pager | tail -40
+```
+
+Test manuel pendant que les appels modèle se chevauchent : on attend une
+sortie JSON `continuation-pool-slots-pass-v1` de statut `stopped`, avec les
+lignes d'emplacement `stopped`/`not_started` ou le Core en état arrêté, et
+**aucun** `continuation_pool_cleanup_unknown`. La reprise se fait avec
+`systemctl start "$TMR"`. Les mêmes Cores doivent être rouverts, sans nouveau
+claim ni nouvelle clé (à vérifier sur le Board). Le Stop Board d'une exécution
+reste le chemin du Core existant ; ce module ne le rejoue pas.
+
+### 7.5 Passage à 4
+
+Après la fin réelle de la passe 2 et la vérification du nettoyage (section 10),
+ou sur de nouveaux tickets, appliquer 7.4, puis 7.2 avec `slots-51-p4.json`,
+puis 7.3. Ne jamais modifier `continuation.json` pendant une passe : le
+changement arrête la passe (`continuation_pool_configuration_changed`).
+
+### 7.6 Retour arrière
+
+- Fonctionnel : appliquer 7.4, puis
+  `sudo -u bb-agent-thescreamer -H install -m 0600 "$R/config/continuation.pre51.json" "$R/config/continuation.json"`.
+  0.50.0 conserve les schémas antérieurs : continuation, file standing, reprise
+  de revue v1/v2. Ce retour n'est possible que si tous les pointeurs
+  `R/slots/*/admissions/queue-*` sont idle, car un pointeur occupé que plus
+  rien ne reprend fait refuser les passes slots.
+- Binaire : **aucun chemin de code ne revient à la release 0.49.1**.
+  `upgrade` refuse une release déjà publiée (`pool_existing_layout_refused`),
+  et `rollback` ne fait que supprimer le fichier de l'unité finie (reçu
+  `installed_disabled`), en laissant les unités de continuation. Ne pas
+  utiliser `rollback` ici. Un vrai retour exige un nouveau bundle (nouvelle
+  révision) passé par `upgrade` et `upgrade-continuation`.
+
+## 8. Mesures et preuves à collecter
+
+L'échantillonneur est en lecture seule, lancé par un humain avec sudo (pour
+`/proc/<pid>/cwd` d'un autre UID), toutes les 5 s :
+
+```sh
+SVC=blackoutburst-agent-continuation-bb-agent-thescreamer.service
+CG=/sys/fs/cgroup/system.slice/$SVC
+OUT=/home/ubuntu/recette-51/$(date -u +%Y%m%dT%H%M%SZ)-samples.log
+install -d -m 0700 /home/ubuntu/recette-51
+sudo bash -c 'while sleep 5; do ts=$(date -u +%FT%T.%3NZ)
+  echo "$ts unit $(systemctl show -p ActiveState -p MemoryCurrent -p TasksCurrent -p CPUUsageNSec '"$SVC"' | paste -sd" ")"
+  echo "$ts memevents $(paste -sd" " '"$CG"'/memory.events 2>/dev/null) pids $(cat '"$CG"'/pids.current 2>/dev/null)"
+  for pid in $(cat '"$CG"'/cgroup.procs 2>/dev/null); do
+    [ "$(cat /proc/$pid/comm 2>/dev/null)" = codex ] || continue
+    echo "$ts codex pid=$pid ppid=$(ps -o ppid= -p $pid) start=\"$(ps -o lstart= -p $pid)\" etimes=$(ps -o etimes= -p $pid) rss_kb=$(ps -o rss= -p $pid) cwd=$(readlink /proc/$pid/cwd)"
+  done; done' >> "$OUT"
+```
+
+Seuls le PID, l'heure, le RSS et le cwd sont relevés, pas les arguments : ils
+peuvent contenir des consignes.
+
+Le code n'écrit **pas** d'enregistrement dédié « début/fin d'appel modèle ».
+La preuve se construit par recoupement :
+
+1. Intervalles de processus `codex` dans le cgroup du service : par PID,
+   première et dernière apparition, rattachées à un emplacement par le cwd
+   (`…/slots/<n>/checkouts/…`). Si le cwd est masqué par l'espace de noms
+   bwrap, on rattache par l'arbre `ppid`. Il faut distinguer codeur et
+   reviewer.
+2. Board : pour chaque ticket, l'exécution Runtime (`lookup_execution`) avec
+   ses horodatages de début et de fin, le claim `claim_selected_queue_ticket`
+   et sa clé, l'ID de ticket et le profil.
+3. Journaux du planificateur sous chaque `R/slots/<n>/` : `started_at` et
+   `deadline` de chaque génération, en corroboration.
+4. Sortie JSON de chaque passe (`journalctl -u "$SVC"`) : `concurrency`, la
+   ligne de chaque emplacement (`phase`, `request_id`, `logical_task_id`) et
+   `waiting_capacity`/`resource_busy` le cas échéant.
+
+Le critère de preuve de la passe 4 : quatre intervalles d'appels modèle
+codeur, sur quatre emplacements, quatre tickets et quatre racines distincts,
+avec max(début) < min(fin). Pour la passe 2, le même critère avec deux
+intervalles. À consigner avec la tête source, `NEW_BUNDLE_ID`, codex 0.163.0,
+gh 2.94.0, le sha de Python, les `unit_limits` et les propriétés effectives
+(`systemctl show -p CPUQuotaPerSecUSec,MemoryHigh,MemoryMax,TasksMax "$SVC"`).
+
+Mesures à rapporter : MemoryCurrent maximal échantillonné, compteurs
+`memory.events` (`high`, `max`, `oom`, `oom_kill`) avant et après, maximum de
+TasksCurrent/pids.current, CPUUsageNSec par passe, RSS par processus codex.
+Ces chiffres servent à décider des plafonds de la passe 4 (section 6).
+
+## 9. Critères d'arrêt immédiat (appliquer 7.4)
+
+- `memory.events` : `max`, `oom` ou `oom_kill` augmente ; ou `high` augmente
+  de façon continue avec plus de 90 % de MemoryHigh.
+- TasksCurrent au-delà de 230 (90 % de 256).
+- Moins de 2 GiB disponibles sur l'hôte, ou swap en croissance.
+- Un emplacement passe en `needs_you` ou `connection_expired`, ou on observe
+  `continuation_pool_cleanup_unknown` ou `continuation_pool_configuration_invalid`.
+- Un claim, une PR ou un fichier hors des quatre tickets bac à sable et de
+  leurs chemins approuvés.
+- Une erreur d'authentification Codex, signe possible d'une concurrence sur le
+  `.codex` partagé, ou `paused_quota` sur le compte de TheScreamer. On s'arrête
+  et on consigne, sans modifier l'auth.
+- Une exécution Runtime ou un claim incertain sur le Board.
+
+## 10. Nettoyage
+
+1. Appliquer 7.4 et vérifier `ActiveState=inactive` pour le service et le
+   timer, `UnitFileState=disabled` et l'absence de processus dans
+   `$CG/cgroup.procs`.
+2. Vérifier que chaque `R/slots/<n>/admissions/queue-*/tick.json` est en phase
+   `idle` avec `active` nul (commande de la section 2, adaptée). Rien n'est
+   effacé : les racines d'emplacement et les journaux restent comme preuves.
+3. Board, par le Lead : aucune exécution Runtime ouverte ni réservation
+   restante, aucun claim actif sur les tickets bac à sable, état final de
+   chaque ticket (revue, et non accepté par défaut).
+4. GitHub, par un humain : fermer les quatre (ou deux) PR brouillon sur
+   `Blackoutburst/agent-board` et supprimer leurs branches.
+5. Remettre `continuation.json` à partir de `continuation.pre51.json` si
+   l'on n'enchaîne pas, ou laisser le document slots avec le timer arrêté, sur
+   décision du Lead.
+6. Profils et appairages de test : archivés ou conservés par les humains.
+7. Publier sur le ticket #51 les preuves de la section 8 et le résultat du
+   nettoyage, en séparant ce qui est observé de ce qui est supposé.
