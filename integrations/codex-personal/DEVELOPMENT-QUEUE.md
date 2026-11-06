@@ -132,3 +132,9 @@ The loser stops without a model call. Historical v1/v2 batches retain their
 existing explicit claim/renew path and contain no queue admission metadata.
 Quota recovery, automatic rescheduling and ambiguous-interruption reconciliation
 remain explicit #73 work; no completion or cleanup is inferred here.
+
+Since 0.50, a `linux-cloud-queue-slots-v1` continuation composes several such
+standing queues, one coder profile and private root per slot, under an owner cap
+of 1–8. Each slot still admits through this exact boundary; see
+[CONTINUATION.md](CONTINUATION.md#plusieurs-emplacements-de-développement-51).
+The real run with four simultaneous subscription models has not been performed.

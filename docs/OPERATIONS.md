@@ -1,6 +1,6 @@
 # Operations and release procedure
 
-Current source is Board 2.19.1/schema 19 with adapter 0.49.1.
+Current source is Board 2.19.1/schema 19 with adapter 0.50.0.
 
 The review recovery candidate reuses a published delivery through a fresh review admission. Keep the repository base fixed until that review finishes: changing main also changes the GitHub PR base reference. A reviewed candidate commit may be packaged before merge; its immutable commit and bundle identify exactly what was deployed. Historical source records and failed attempts are retained. See [the review recovery contract](../integrations/codex-personal/REVIEW-RECOVERY.md).
 

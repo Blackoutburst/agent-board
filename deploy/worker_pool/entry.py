@@ -142,6 +142,13 @@ def continuation_entry(args,manifest,release,account):
     document=decode(file_document(path,512*1024)[0])
     schema=document.get('schema') if type(document) is dict else None
     recovering=schema in ('linux-cloud-review-recovery-v1','linux-cloud-review-recovery-v2')
+    slots=schema=='linux-cloud-queue-slots-v1'
+    if slots:
+        if tuple(map(int,manifest['adapter_version'].split('.'))) < (0,50,0):p.fail('pool_queue_slots_version_required')
+        if args.action=='continuation-plan':
+            from blackoutburst_agents.development_queue_slots import queue_slots_plan
+            return queue_slots_plan(path,root=root,owner_id=manifest['board_owner'],
+                board_endpoint=manifest['board_endpoint'],max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
     if recovering:
         minimum=(0,49,1) if schema=='linux-cloud-review-recovery-v2' else (0,49,0)
         if tuple(map(int,manifest['adapter_version'].split('.'))) < minimum:p.fail('pool_review_recovery_version_required')
@@ -155,6 +162,8 @@ def continuation_entry(args,manifest,release,account):
             board_endpoint=manifest['board_endpoint'],max_seconds=manifest['unit_limits']['lifetime_seconds']-90)
     if recovering:
         from blackoutburst_agents.review_recovery_service import ReviewRecoveryService as Service
+    elif slots:
+        from blackoutburst_agents.development_queue_slots import QueueSlotsService as Service
     else:
         from blackoutburst_agents.continuation_pool_service import ContinuationPoolService as Service
     stop=threading.Event()

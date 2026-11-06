@@ -1,4 +1,4 @@
-# Reprise du travail par cycles — adaptateur 0.48.3
+# Reprise du travail par cycles — adaptateur 0.50.0
 
 Entre deux invocations du même Core, seuls les identifiants du mapping des
 namespaces Linux peuvent changer. L'ancien plan reste une preuve historique
@@ -64,6 +64,73 @@ est déterministe pour la configuration et le profil ; les sessions de chaque
 génération restent neuves. Le Core généré conserve l'ancien schéma, ce qui
 sépare explicitement sa reprise de la découverte et évite toute récursion.
 L'ancien schéma d'une tâche Core sélectionnée garde son parcours de reprise.
+
+## Plusieurs emplacements de développement (#51)
+
+La source 0.50 permet à une passe de remplir jusqu'à N emplacements libres.
+Chaque emplacement compose une file standing existante ; aucune nouvelle
+frontière d'admission n'est créée. Le document opérateur, sous `config` de la
+racine propriétaire, ne contient que la liste et le plafond :
+
+```json
+{
+  "schema": "linux-cloud-queue-slots-v1",
+  "concurrency": 4,
+  "slots": [
+    {"name": "dev-1", "continuation_file": "/RACINE/slots/dev-1/config/standing.json"},
+    {"name": "dev-2", "continuation_file": "/RACINE/slots/dev-2/config/standing.json"}
+  ]
+}
+```
+
+La racine d'un emplacement est toujours `RACINE/slots/<name>` ; elle n'est
+jamais lue dans le document. Elle contient ses propres `config`,
+`connections`, `repositories`, `checkouts`, `verifiers`, admissions, Core,
+journaux et verrou. Son `continuation_file` est un document
+`linux-cloud-queue-continuation-v1` normal, avec un catalogue lié à un profil
+codeur distinct : le board n'accepte qu'un travail de file non terminé par
+profil. `concurrency` vaut 1 à 8 et au plus le nombre d'emplacements (16
+maximum). Ce plafond est un contrôle local du propriétaire ; il ne prouve
+aucune capacité fournisseur ou abonnement. Les schémas existants et leur
+`concurrency: 1` sont inchangés.
+
+Une passe prend le verrou de la racine propriétaire, relit les pointeurs
+durables `tick.json` de chaque emplacement, puis lance au plus N `tick` en
+parallèle, chacun dans son fil, avec sa session de découverte. Les emplacements
+qui tiennent déjà un travail passent d'abord et rouvrent le même Core, sans
+découverte ni nouvelle clé de claim. Un emplacement libre ne découvre que si les
+emplacements occupés, comptés depuis ces pointeurs et non depuis la mémoire,
+restent sous le plafond ; sinon il reste `waiting_capacity`, sans RPC. La
+découverte d'un emplacement libre ne voit pas les tickets dont la ressource est
+tenue ou réservée par un autre emplacement ; cette exclusion est figée pour son
+`tick`, avant toute intention. S'il ne reste rien, l'emplacement affiche
+`resource_busy` et son pointeur reste idle. Une admission interrompue sans
+intention lisible tient prudemment toutes les ressources de son catalogue. Le
+claim atomique `claim_selected_queue_ticket`, les conflits de ressource du board
+et les admissions Runtime restent les autorités finales. Le module
+`development_queue_slots` reste hors des listes de sources natives Linux ;
+l'entrée installée y route ce schéma à partir d'un paquet 0.50.0.
+
+Stop, l'échéance de la passe ou un changement du document atteignent chaque
+emplacement par le `should_stop` de son propre `tick`, puis par le Stop
+existant du Core, du Worker et des tests. Un redémarrage relit chaque pointeur :
+une admission `admitting` reprend sa demande, un Core `active` est rouvert ;
+aucun ticket n'est réclamé, lancé ou publié une seconde fois par cette couche.
+Une file vide ou un plafond atteint n'appelle aucun modèle. Les pauses
+`paused_quota`/`paused_provider` restent propres à leur emplacement, avec leur
+`next_observation_at` ; les autres continuent. Une connexion refusée
+(`authentication_failed`, `permission_denied`) devient `connection_expired` et
+demande une action humaine ; une panne de transport devient
+`connection_unavailable`. Dans les deux cas, le pointeur de l'emplacement n'est
+pas modifié et la passe suivante réessaie la même frontière.
+
+Les tests `test_queue_slots.py` utilisent le vrai `DevelopmentQueueAdmission`,
+ses intentions, reçus et pointeurs, avec une découverte board et un Core
+simulés en mémoire. Ils couvrent quatre emplacements simultanés, le plafond, le
+conflit de ressource, Stop, la reprise, la file vide, le quota et la connexion
+expirée. **La recette réelle avec quatre modèles d'abonnement simultanés n'a pas
+été exécutée** : aucun résultat synthétique ne vaut preuve d'abonnement ou de
+capacité fournisseur.
 
 Pour ces workflows complets, `checkpoint_after_actions` doit être au moins 2 :
 le test nommé et l’action finale doivent pouvoir se suivre dans une génération.

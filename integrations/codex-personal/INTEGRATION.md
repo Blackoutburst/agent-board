@@ -1,6 +1,6 @@
 # Contrat de l’adaptateur Codex personnel
 
-Référence de cette source : board **2.19.0**, schéma **19**, adaptateur **0.49.1**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
+Référence de cette source : board **2.19.0**, schéma **19**, adaptateur **0.50.0**. Le contrat public des champs, permissions, erreurs, migrations et outils MCP se trouve dans [CONTRACT.md](../../CONTRACT.md). Cette page définit la frontière entre ce serveur et l’exécutant personnel ; elle ne crée aucun registre d’agents ou fournisseur parallèle.
 
 La source 0.49 distingue une revue refusée d’un nettoyage incertain. Une admission Runtime échouée avant le transport peut clôturer uniquement sa propre réservation, avec la preuve éphémère du nouveau tour RunStore encore verrouillé. Elle ne transforme pas ce refus en avis accepté. La reprise de revue utilise une nouvelle admission sur les artefacts déjà publiés et conserve les anciens résultats ; voir [le contrat de reprise](REVIEW-RECOVERY.md). L’installation et la recette réelles de cette source restent séparées de sa version de distribution.
 
