@@ -124,6 +124,21 @@ demande une action humaine ; une panne de transport devient
 `connection_unavailable`. Dans les deux cas, le pointeur de l'emplacement n'est
 pas modifié et la passe suivante réessaie la même frontière.
 
+Avant toute découverte, et sous le même verrou, la passe relit tous les
+pointeurs de file de la racine propriétaire, pas seulement ceux du document :
+`RACINE/admissions/queue-*` (une continuation standing seule sur cette racine)
+et `RACINE/slots/*/admissions/queue-*`. Si un pointeur tient encore un travail
+qu'aucun emplacement configuré ne reprendra (emplacement retiré, profil changé,
+continuation seule), la passe entière est refusée avec
+`continuation_pool_configuration_invalid`, sans claim ni appel modèle. Il en va
+de même si un emplacement occupé change de liaison (profil, catalogue ou
+approbation), d'après l'inventaire durable `RACINE/slots/inventory.json`. Un
+lien symbolique ou une entrée inattendue sous `RACINE/slots` est aussi refusé.
+Rien n'est réparé ni effacé : l'opérateur remet l'ancien document ou laisse le
+travail se terminer. Un emplacement en pause ou `needs_you` reste ainsi compté
+dans le plafond jusqu'à ce que son pointeur redevienne idle ; il est visible
+dans la ligne de son emplacement.
+
 Les tests `test_queue_slots.py` utilisent le vrai `DevelopmentQueueAdmission`,
 ses intentions, reçus et pointeurs, avec une découverte board et un Core
 simulés en mémoire. Ils couvrent quatre emplacements simultanés, le plafond, le

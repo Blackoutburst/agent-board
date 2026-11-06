@@ -22,7 +22,7 @@ from .board_reader import BoardReadError
 from .continuation_pool_configuration import load_queue_continuation, MAX_CONFIGURATION
 from .continuation_pool_service import (ContinuationPoolService, JOIN_SECONDS, MAX_RECORD, STATES,
     _TARGET_OBSERVATION, _TargetObservation, _target_failure)
-from .dev_journal import decode
+from .dev_journal import PrivateDirectory, decode
 from .dev_manifest import DevelopmentError, canonical, digest, opaque, signature
 from .development_pool_selection import file_document
 from .finite_pool_batch import child
@@ -140,6 +140,90 @@ def slot_holding(slot):
         return True, (frozenset({selected['resource']}) & everything) or everything
     except Exception:
         return True, everything
+
+
+INVENTORY = 'inventory.json'
+INVENTORY_SCHEMA = 'linux-cloud-queue-slots-inventory-v1'
+
+
+def _binding(slot):
+    catalog = slot['loaded']['plan']['catalog']
+    return {'agent_id': catalog['agent_id'], 'catalog_sha256': slot['pins']['catalog']['sha256'],
+            'approval_sha256': slot['loaded']['plan']['approval_sha256'],
+            'resources': sorted(_catalog_resources(slot))}
+
+
+def _pointer_holds(pointer):
+    """Whether one durable tick pointer still holds work. Unreadable = holds."""
+    try: os.lstat(pointer)
+    except FileNotFoundError: return False
+    except OSError: return True
+    try:
+        state = decode(file_document(pointer, MAX_RECORD)[0])
+        return not (type(state) is dict and state.get('phase') == 'idle' and state.get('active') is None)
+    except Exception:
+        return True
+
+
+def _queue_pointers(admissions):
+    """Every `queue-*/tick.json` under one admissions directory; odd entries hold."""
+    try: entries = sorted(os.scandir(admissions), key=lambda entry: entry.name)
+    except FileNotFoundError: return []
+    except OSError: fail('continuation_pool_configuration_invalid')
+    found = []
+    for entry in entries:
+        if not entry.name.startswith('queue-'): continue
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False): fail('continuation_pool_configuration_invalid')
+        found.append(Path(admissions) / entry.name / 'tick.json')
+    return found
+
+
+def _current_pointer(slot):
+    catalog = slot['loaded']['plan']['catalog']
+    key = digest(canonical({k: catalog[k] for k in ('owner_id', 'agent_id')}))
+    return Path(slot['root']) / 'admissions' / ('queue-' + key) / 'tick.json'
+
+
+def reconcile_inventory(root, slots):
+    """Refuse a pass whose configuration would forget durable held work.
+
+    Called under the owner-root lease, before any slot discovers. Every queue
+    pointer under the owner root is inspected, not only those of configured
+    slots: a held pointer that no configured slot will resume (a removed slot,
+    a slot whose profile changed, or a single standing continuation on the
+    owner root itself) refuses the pass, as does a configured slot whose
+    recorded binding (profile, catalog, approval) changed while it still holds
+    work. Nothing is repaired or deleted; the operator restores the previous
+    configuration or finishes the work. Only then is the inventory rewritten.
+    """
+    root = Path(root); base = root / 'slots'
+    current = {str(_current_pointer(slot)) for slot in slots}
+    pointers = list(_queue_pointers(root / 'admissions'))
+    try: entries = sorted(os.scandir(base), key=lambda entry: entry.name)
+    except FileNotFoundError: entries = []
+    for entry in entries:
+        if entry.name == INVENTORY and entry.is_file(follow_symlinks=False): continue
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False): fail('continuation_pool_configuration_invalid')
+        pointers.extend(_queue_pointers(base / entry.name / 'admissions'))
+    for pointer in pointers:
+        if str(pointer) not in current and _pointer_holds(pointer): fail('continuation_pool_configuration_invalid')
+    recorded = {}
+    try:
+        os.lstat(base / INVENTORY)
+        value = decode(file_document(base / INVENTORY, MAX_RECORD)[0])
+        require(type(value) is dict and value.get('schema') == INVENTORY_SCHEMA and type(value.get('slots')) is dict,
+                'continuation_pool_configuration_invalid')
+        recorded = value['slots']
+    except FileNotFoundError: pass
+    for slot in slots:
+        previous = recorded.get(slot['name'])
+        if previous is not None and previous != _binding(slot) and _pointer_holds(_current_pointer(slot)):
+            fail('continuation_pool_configuration_invalid')
+    inventory = {'schema': INVENTORY_SCHEMA, 'slots': {slot['name']: _binding(slot) for slot in slots}}
+    if recorded != inventory['slots']:
+        with PrivateDirectory(base, create=True) as private:
+            exists = INVENTORY in os.listdir(base)
+            (private.replace if exists else private.create)(INVENTORY, canonical(inventory))
 
 
 class _Scheduler:
@@ -276,6 +360,7 @@ class QueueSlotsService:
             slots = self.loaded['slots']; cap = self.loaded['configuration']['concurrency']
             # The same owner-root lease as a single continuation pass.
             with ContinuationPoolService._lease(self) as (_, held):
+                reconcile_inventory(self.root, slots)
                 deadline = time.monotonic() + self.max_seconds
                 cancel = threading.Event(); failed = []; results = {}; threads = {}
                 scheduler = _Scheduler(slots)

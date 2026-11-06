@@ -463,3 +463,87 @@ def test_slot_module_stays_outside_the_native_source_rosters():
     assert 'development_queue_slots.py' not in LINUX_EXECUTION_SOURCES
     # The bounded family roster must still be collectable from this source.
     assert controller_sources()['files']
+
+
+def _refused(result):
+    return (result['status'] == 'needs_you' and result['slots'] == []
+            and result['failure']['code'] == 'continuation_pool_configuration_invalid')
+
+
+def test_removing_a_held_slot_is_refused_and_keeps_capacity(slots):
+    # Lead review of 4f91cb5: replacing a held slot a by b under cap 1 must not
+    # admit b while a's durable pointer is still active.
+    for n in ('a', 'b'):
+        slots.slot(n, ['repo:' + n]); slots.board.add('t-' + n, 'coder-' + n, 'repo:' + n)
+    first = by_name(slots.service(slots.configure(1, ['a'])).run_once())
+    assert first['a']['phase'] == 'paused_cycle' and pointer(slots.made['a'])['phase'] == 'active'
+    held = pointer(slots.made['a'])
+    result = slots.service(slots.configure(1, ['b'])).run_once()
+    assert _refused(result), result
+    assert slots.board.claims == {'t-a': 1} and pointer(slots.made['b']) is None
+    assert pointer(slots.made['a']) == held  # Old pointer kept, nothing repaired.
+    assert not any(slot == 'b' for slot, *_ in slots.board.calls)
+    # Restoring a, even next to b, resumes a first; b waits for capacity.
+    both = by_name(slots.service(slots.configure(1, ['a', 'b'])).run_once())
+    assert both['a']['request_id'] == first['a']['request_id'] and both['b']['phase'] == 'waiting_capacity'
+    # Once a finished, removing it is allowed and b may admit.
+    slots.board.behaviour['t-a'] = ['independent_review_published']
+    slots.service(slots.configure(1, ['a'])).run_once()
+    assert pointer(slots.made['a'])['active'] is None
+    last = by_name(slots.service(slots.configure(1, ['b'])).run_once())
+    assert last['b']['phase'] == 'paused_cycle' and slots.board.claims == {'t-a': 1, 't-b': 1}
+
+
+def test_removed_slot_holding_a_shared_resource_blocks_its_replacement(slots):
+    for n in ('a', 'b'):
+        slots.slot(n, ['repo:shared']); slots.board.add('t-' + n, 'coder-' + n, 'repo:shared')
+    slots.slot('c', ['repo:c'])  # Idle neighbour, so the cap of 2 stays valid.
+    slots.service(slots.configure(2, ['a', 'c'])).run_once()
+    assert _refused(slots.service(slots.configure(2, ['b', 'c'])).run_once())
+    assert slots.board.claims == {'t-a': 1} and pointer(slots.made['b']) is None
+
+
+def test_changing_the_binding_of_a_held_slot_is_refused(slots):
+    a = slots.slot('a', ['repo:a']); slots.board.add('t-a', 'coder-a', 'repo:a')
+    path = slots.configure(1, ['a'])
+    slots.service(path).run_once(); held = pointer(a)
+    # Same profile, substituted catalog and approval for the same slot name.
+    catalog = deepcopy(a['catalog']); catalog['entries'][0]['resource'] = 'repo:other'
+    write(a['root'] / 'config' / 'catalog.json', catalog)
+    plan = queue_tick_plan(a['root'], str(a['root'] / 'config' / 'catalog.json'), str(a['root'] / 'config' / 'workflow.json'))
+    standing = decode(a['standing'].read_bytes()); standing['approved_sha256'] = plan['approval_sha256']
+    write(a['standing'], standing)
+    assert _refused(slots.service(path).run_once())
+    assert pointer(a) == held and slots.board.claims == {'t-a': 1}
+
+
+def test_changing_the_profile_of_a_held_slot_is_refused(slots):
+    a = slots.slot('a', ['repo:a']); slots.board.add('t-a', 'coder-a', 'repo:a')
+    path = slots.configure(1, ['a'])
+    slots.service(path).run_once(); held = pointer(a)
+    # The new profile would get a fresh pointer; the old one still holds work.
+    catalog = deepcopy(a['catalog']); catalog['agent_id'] = 'coder-a2'
+    write(a['root'] / 'config' / 'catalog.json', catalog)
+    plan = queue_tick_plan(a['root'], str(a['root'] / 'config' / 'catalog.json'), str(a['root'] / 'config' / 'workflow.json'))
+    standing = decode(a['standing'].read_bytes()); standing['approved_sha256'] = plan['approval_sha256']
+    write(a['standing'], standing)
+    assert _refused(slots.service(path).run_once())
+    assert pointer(a) == held and slots.board.claims == {'t-a': 1}
+
+
+def test_a_held_single_continuation_on_the_owner_root_refuses_slots(slots):
+    slots.slot('a', ['repo:a']); slots.board.add('t-a', 'coder-a', 'repo:a')
+    legacy = slots.root / 'admissions' / ('queue-' + 'f' * 64)
+    legacy.parent.mkdir(mode=0o700); legacy.mkdir(mode=0o700)
+    write(legacy / 'tick.json', dict(schema='development-queue-tick-state-v1', phase='active',
+        active=dict(request_id=str(uuid.uuid4()))))
+    assert _refused(slots.service(slots.configure(1, ['a'])).run_once())
+    assert slots.board.claims == {} and model_calls(slots.board) == 0
+
+
+def test_symlinked_slot_directory_is_refused(slots, tmp_path):
+    slots.slot('a', ['repo:a']); slots.board.add('t-a', 'coder-a', 'repo:a')
+    elsewhere = tmp_path / 'elsewhere'; elsewhere.mkdir(mode=0o700)
+    (slots.root / 'slots' / 'ghost').symlink_to(elsewhere)
+    assert _refused(slots.service(slots.configure(1, ['a'])).run_once())
+    assert slots.board.claims == {}
