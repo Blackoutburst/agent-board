@@ -37,8 +37,8 @@ class DeliveryReviewLifecycleClient(DeliveryReviewBoardClient):
                     or type(args['limit']) is not int or not 1<=args['limit']<=10 or args['order'] not in ('asc','desc')):
                 raise BoardReadError('invalid_arguments')
             values=deepcopy(args)
-        elif name in ('claim_ticket','claim_clean_review_ticket','update_ticket'):
-            values=_arguments('claim_ticket' if name=='claim_clean_review_ticket' else name,args)
+        elif name in ('claim_ticket','update_ticket'):
+            values=_arguments(name,args)
             if name=='update_ticket':
                 changes=values['changes']
                 if (set(changes)!={'status','outcome','evidence','release_claim'}
@@ -46,21 +46,5 @@ class DeliveryReviewLifecycleClient(DeliveryReviewBoardClient):
                     raise BoardReadError('review_publication_only')
         else:raise BoardReadError('review_controller_tool_not_allowed')
         self._initialize()
-        if name in ('claim_ticket','claim_clean_review_ticket','update_ticket'):self._before_effect()
-        response=self._tool(name,{**values,'session_id':self.session_id})
-        if name=='claim_clean_review_ticket':
-            # An old server/tool must never silently downgrade this contract.
-            if (type(response) is not dict or set(response)!={'schema','prior_version','session_id','ticket'}
-                    or response.get('schema')!='clean-review-claim-v1'
-                    or type(response.get('prior_version')) is not int
-                    or response['prior_version']!=values['expected_version']
-                    or response.get('session_id')!=self.session_id):
-                raise BoardReadError('review_cleanup_claim_unconfirmed')
-            ticket=response['ticket'];claim=ticket.get('claimant',{}) if type(ticket) is dict else {}
-            if (type(ticket) is not dict or ticket.get('id')!=values['ticket_id']
-                    or ticket.get('status')!='review' or ticket.get('version')!=values['expected_version']+1
-                    or type(claim) is not dict or claim.get('session_id')!=self.session_id
-                    or claim.get('kind')!='agent'):
-                raise BoardReadError('review_cleanup_claim_unconfirmed')
-            return ticket
-        return response
+        if name in ('claim_ticket','update_ticket'):self._before_effect()
+        return self._tool(name,{**values,'session_id':self.session_id})

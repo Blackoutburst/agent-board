@@ -62,6 +62,31 @@ def _owner_release(event,chain,claimed,ticket,scope,old_scope):
         and prior.get('created_at',float('inf'))<=event['created_at']<claimed['lease_expires_at'])
 
 
+def _claim_clean_review(client,args):
+    """Host-only fixed transport; never extend the native client's allowlist."""
+    from .board_reader import BoardReadError
+    from .review_lifecycle_client import DeliveryReviewLifecycleClient
+    from .worker_client import _arguments
+    if type(client) is not DeliveryReviewLifecycleClient or not client._registered:
+        raise BoardReadError('reviewer_registration_required')
+    values=_arguments('claim_ticket',args)
+    client._initialize();client._before_effect()
+    response=client._tool('claim_clean_review_ticket',{**values,'session_id':client.session_id})
+    if (type(response) is not dict or set(response)!={'schema','prior_version','session_id','ticket'}
+            or response.get('schema')!='clean-review-claim-v1'
+            or type(response.get('prior_version')) is not int
+            or response['prior_version']!=values['expected_version']
+            or response.get('session_id')!=client.session_id):
+        raise BoardReadError('review_cleanup_claim_unconfirmed')
+    ticket=response['ticket'];claim=ticket.get('claimant',{}) if type(ticket) is dict else {}
+    if (type(ticket) is not dict or ticket.get('id')!=values['ticket_id']
+            or ticket.get('status')!='review' or ticket.get('version')!=values['expected_version']+1
+            or type(claim) is not dict or claim.get('session_id')!=client.session_id
+            or claim.get('kind')!='agent'):
+        raise BoardReadError('review_cleanup_claim_unconfirmed')
+    return ticket
+
+
 def document(path,maximum=MAX_RECORD):
     raw,pin=file_document(path,maximum);value=decode(raw)
     require(canonical(value)==raw)
@@ -499,6 +524,13 @@ attributed transactional claim revocation. No old record is repaired/adopted.
             'source_session_id':self.old_scope['board_session_id']}
         if owner_release:proof['release_kind']='human_release_same_owner'
         return proof
+
+    def claim_review(self,client,claim):
+        require(client.session_id==self.scope['board_session_id']
+            and claim=={'ticket_id':self.scope['ticket_id'],'expected_version':self.admission['ticket_version']})
+        if self.claim_gate.get('release_kind')=='human_release_same_owner':
+            return _claim_clean_review(client,claim)
+        return client.call('claim_ticket',claim)
 
     def admission_version(self,client,scope):
         require(scope==self.scope and file_document(self.connection_file)[1]==self.connection_pin)
