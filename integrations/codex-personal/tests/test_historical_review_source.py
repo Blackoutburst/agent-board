@@ -32,8 +32,9 @@ def manager(f):
     return f.board.actor_session(raw,'recovery-lead')
 
 
+@pytest.mark.parametrize("release_kind", ["managed", "owner"])
 def test_pretransport_refusal_can_receive_one_new_review_of_same_published_delivery(
-        tmp_path,monkeypatch,linux_lock_observation):
+        tmp_path,monkeypatch,linux_lock_observation,release_kind):
     def check(f,aggregate,helper,source,calls,turns,author_turns,public,root):
         profile=f.board.get_agent_profile(f.human,helper.reviewer['agent_id'])
         f.board.update_agent_profile(f.human,profile['id'],profile['version'],
@@ -53,13 +54,16 @@ def test_pretransport_refusal_can_receive_one_new_review_of_same_published_deliv
         original_public=source.receipt
         current=f.board.get_ticket(f.human,source.receipt['author_scope']['ticket_id'])['ticket']
         now=time.time()
-        with monkeypatch.context() as clock:
-            clock.setattr(time,'time',lambda:now+3600)
-            released=f.board.release_managed_agent_claim(lead,current['id'],current['version'],
-                'retire-prior-pretransport','Inspect refusal before transport','No old reservation; preserve all old state.')
+        if release_kind=='owner':
+            released=f.board.update_ticket(f.human,current['id'],current['version'],release_claim=True)
+        else:
+            with monkeypatch.context() as clock:
+                clock.setattr(time,'time',lambda:now+3600)
+                released=f.board.release_managed_agent_claim(lead,current['id'],current['version'],
+                    'retire-prior-pretransport','Inspect refusal before transport','No old reservation; preserve all old state.')
         assert released['claimant'] is None and released['version']==current['version']+1
         events=f.board.list_activity(f.human,ticket_id=current['id'],limit=10,order='desc')
-        gate=next(e for e in events if e['event']=='managed_agent_claim_released')
+        gate=next(e for e in events if e['event']==('ticket_updated' if release_kind=='owner' else 'managed_agent_claim_released'))
         # The old source stops being live. Its historical artifacts remain the
         # same source/test/publication, and are not made into an old permit.
         state=aggregate.task.snapshot()['state']
