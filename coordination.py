@@ -578,6 +578,32 @@ class CoordinationMixin(ProjectsMixin):
             actor = self._actor(db, actor, 'allow_requests')
             return self._claim_ticket_tx(db, actor, self._ticket_member(db, actor, ticket_id), expected_version, recovery_evidence)
 
+    def claim_clean_review_ticket(self, actor, ticket_id, expected_version):
+        """Claim a review only after all old ticket executions are cleaned.
+
+        The runtime predicate and ordinary claim CAS share one transaction.
+        A lost response may be retried only for this exact newly issued claim.
+        """
+        _version(expected_version)
+        with self._tx() as db:
+            actor=self._actor(db,actor,'allow_requests')
+            row=self._ticket_member(db,actor,ticket_id)
+            claimant=json.loads(row['claimant']) if row['claimant'] else None
+            retry=(_same_claim(claimant,actor) and row['version']==expected_version+1
+                and row['claim_started_version']==row['version']
+                and (row['lease_expires_at'] or 0)>time.time())
+            if (actor['kind']!='agent' or actor.get('companion_for') is not None
+                    or row['status']!='review'
+                    or not retry and (claimant is not None or row['version']!=expected_version)):
+                _fail('Clean review claim requires an exact unclaimed review',409)
+            if db.execute("""SELECT 1 FROM runtime_executions WHERE ticket_id=?
+                    AND (state IS NOT 'finished' OR cleanup_confirmed IS NOT 1) LIMIT 1""",
+                    (ticket_id,)).fetchone():
+                _fail('Review ticket still has an unresolved execution',409)
+            ticket=self._claim_ticket_tx(db,actor,row,expected_version)
+            return {'schema':'clean-review-claim-v1','prior_version':expected_version,
+                'session_id':actor['session_id'],'ticket':ticket}
+
     def release_ticket(self, actor, ticket_id, expected_version, idempotency_key, reason,
                        status='', unassign_self=False):
         """Release only this session's live claim or this profile's unclaimed task.
