@@ -43,6 +43,7 @@ class Board:
         self.claims = {}; self.launches = {}; self.expired = set(); self.behaviour = {}
         self.running = 0; self.peak = 0; self.started = []; self.stops = []
         self.barrier = None; self.release = threading.Event(); self.inside = threading.Event()
+        self.hooks = {}; self.attempts = {}  # (slot, tool) -> callable; ticket -> claim attempts
 
     def add(self, ticket_id, agent, resource, version=3):
         self.tickets[ticket_id] = dict(id=ticket_id, project_id='project', version=version, status='todo',
@@ -74,6 +75,8 @@ class Discovery:
 
     def call(self, name, args):
         assert name in ('get_work', 'get_ticket', 'get_project'), 'Discovery has no effects'
+        hook = self.board.hooks.get((self.slot['name'], name))
+        if hook is not None: hook()  # e.g. Stop arriving while this read is in flight.
         with self.board.mutex:
             self.board.calls.append((self.slot['name'], name, deepcopy(args)))
             if name == 'get_project':
@@ -150,9 +153,23 @@ def slots(tmp_path, monkeypatch):
 
         def run_once(self, *, should_stop):
             task = self.config['tasks'][0]['logical_task_id']
+            step = board.behaviour.get(self.ticket, ['paused_cycle'])
+            if step[0] in ('claim_refused', 'claim_ambiguous'):
+                # The Core's own selected claim, simulated: refused, or sent
+                # with an unknown answer. The real Core keeps its claim key.
+                phase = step.pop(0) if len(step) > 1 else step[0]
+                with board.mutex:
+                    board.launches.setdefault(task, 0); board.launches[task] += 1
+                    board.attempts[self.ticket] = board.attempts.get(self.ticket, 0) + 1
+                if phase == 'claim_ambiguous': raise BoardReadError('timeout')
+                return dict(schema='continuation-pool-pass-v1', status='needs_you', tasks=[dict(
+                    name=self.batch['jobs'][0]['name'], logical_task_id=task, phase='needs_you',
+                    operation_id=str(uuid.uuid4()), state_sha256='a' * 64, reason='claim_refused',
+                    next_observation_at=None, launchable=False)], activated=True,
+                    pass_complete_is_project_completion=False)
             with board.mutex:
                 board.launches.setdefault(task, 0); board.launches[task] += 1
-                if board.launches[task] == 1:  # One selected claim per logical task.
+                if board.launches[task] == 1 or self.ticket not in board.claims:  # One selected claim per logical task.
                     board.claims[self.ticket] = board.claims.get(self.ticket, 0) + 1
                     board.tickets[self.ticket].update(status='in_progress', claimant={'agent': self.ticket})
                 board.running += 1; board.peak = max(board.peak, board.running); board.started.append(self.ticket)
@@ -547,3 +564,80 @@ def test_symlinked_slot_directory_is_refused(slots, tmp_path):
     (slots.root / 'slots' / 'ghost').symlink_to(elsewhere)
     assert _refused(slots.service(slots.configure(1, ['a'])).run_once())
     assert slots.board.claims == {}
+
+
+# Lead review of 7ed36f2: Stop DURING discovery/admission, and a selected claim
+# refused or with an unknown answer. Scope: the Board transport and the Core's
+# claim are simulated; the tick pointer, intent and admission files are real.
+
+def _get_work(board, name):
+    return [c for c in board.calls if c[0] == name and c[1] == 'get_work']
+
+
+def test_stop_during_discovery_keeps_the_same_intent_without_rediscovery(slots):
+    for n in ('a', 'b'):
+        slots.slot(n, ['repo:' + n]); slots.board.add('t-' + n, 'coder-' + n, 'repo:' + n)
+    stop = threading.Event()
+    slots.board.hooks[('a', 'get_work')] = stop.set  # Stop lands while a's discovery read is in flight.
+    path = slots.configure(2, ['a', 'b'])
+    first = by_name(slots.service(path).run_once(should_stop=stop.is_set))
+    assert first['a']['phase'] == 'stopped' and model_calls(slots.board) <= 1
+    state = pointer(slots.made['a'])
+    # The selection was recorded as an intent, then Stop was observed before admit().
+    assert state['phase'] == 'admitting' and admissions(slots.made['a']) == []
+    assert first['a']['request_id'] == state['active']['request_id'] and 't-a' not in slots.board.claims
+    seen = len(_get_work(slots.board, 'a')); del slots.board.hooks[('a', 'get_work')]
+    again = by_name(slots.service(path).run_once())
+    assert again['a']['phase'] == 'paused_cycle'
+    assert again['a']['request_id'] == state['active']['request_id']  # Same intent, not a new one.
+    assert len(admissions(slots.made['a'])) == 1 and slots.board.claims['t-a'] == 1
+    assert len(_get_work(slots.board, 'a')) - seen <= 2  # One admission's previews, no rediscovery loop.
+    assert sum(1 for t, n in slots.board.launches.items() if n) == len(slots.board.claims)
+
+
+def test_stop_during_admission_resumes_the_same_request_once(slots):
+    slots.slot('a', ['repo:a']); slots.board.add('t-a', 'coder-a', 'repo:a')
+    stop = threading.Event(); reads = []
+    def second_discovery_read():
+        # The tick's preview is the first get_work; the admission's own
+        # re-check is the second. Stop lands inside admit(), which has no
+        # Stop point of its own, so the admission completes and the tick
+        # stops before the Core.
+        reads.append(1)
+        if len(reads) == 2: stop.set()
+    slots.board.hooks[('a', 'get_work')] = second_discovery_read
+    path = slots.configure(1, ['a'])
+    first = by_name(slots.service(path).run_once(should_stop=stop.is_set))
+    assert stop.is_set() and first['a']['phase'] == 'stopped' and model_calls(slots.board) == 0
+    state = pointer(slots.made['a']); assert state['phase'] == 'active'
+    request = state['active']['request_id']; made = admissions(slots.made['a'])
+    assert first['a']['request_id'] == request and len(made) == 1 and 't-a' not in slots.board.claims
+    del slots.board.hooks[('a', 'get_work')]; seen = len(_get_work(slots.board, 'a'))
+    again = by_name(slots.service(path).run_once())
+    assert again['a']['phase'] == 'paused_cycle' and again['a']['request_id'] == request
+    assert admissions(slots.made['a']) == made and len(_get_work(slots.board, 'a')) == seen  # No rediscovery.
+    assert slots.board.claims == {'t-a': 1} and list(slots.board.launches.values()) == [1]
+
+
+@pytest.mark.parametrize('outcome', ['claim_refused', 'claim_ambiguous'])
+def test_refused_or_ambiguous_claim_keeps_the_intent_without_rediscovery_or_double_launch(slots, outcome):
+    for n in ('a', 'b'):
+        slots.slot(n, ['repo:' + n]); slots.board.add('t-' + n, 'coder-' + n, 'repo:' + n)
+    slots.board.behaviour['t-a'] = [outcome, 'paused_cycle']
+    path = slots.configure(2, ['a', 'b'])
+    first = by_name(slots.service(path).run_once())
+    assert first['a']['phase'] == 'needs_you' and first['b']['phase'] == 'paused_cycle'
+    if outcome == 'claim_ambiguous': assert first['a']['failure']['stage'] == 'queue_tick'
+    state = pointer(slots.made['a']); assert state['phase'] == 'active'
+    before = (state, admissions(slots.made['a'])); seen = len(_get_work(slots.board, 'a'))
+    assert 't-a' not in slots.board.claims and slots.board.attempts == {'t-a': 1}
+    # No fallback: discovery tools only (Discovery asserts this), no manual
+    # claim, and the next pass reopens the same Core and logical task.
+    again = by_name(slots.service(path).run_once())
+    assert again['a']['phase'] == 'paused_cycle' and again['a']['request_id'] == state['active']['request_id']
+    assert (pointer(slots.made['a']), admissions(slots.made['a'])) == before
+    assert len(_get_work(slots.board, 'a')) == seen  # No rediscovery.
+    assert slots.board.claims == {'t-a': 1, 't-b': 1}
+    task = state['active']['logical_task_id']
+    assert slots.board.launches[task] == 2 and len(slots.board.launches) == 2  # One logical task per slot.
+    assert not any(c[1] not in ('register', 'get_work', 'get_ticket', 'get_project') for c in slots.board.calls)

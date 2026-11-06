@@ -263,12 +263,17 @@ class _GuardedDiscovery:
         self.endpoint, self.session_id = client.endpoint, client.session_id
         self.connection_path, self.connection_pin = client.connection_path, client.connection_pin
         self._excluded = None; self.filtered = False
+        self.transport_error = None  # Only this client's own refusals count as connection states.
 
     def registration(self, *, autonomous=False):
-        return self._client.registration(autonomous=autonomous)
+        try: return self._client.registration(autonomous=autonomous)
+        except BoardReadError as error:
+            self.transport_error = error; raise
 
     def call(self, name, args):
-        result = self._client.call(name, args)
+        try: result = self._client.call(name, args)
+        except BoardReadError as error:
+            self.transport_error = error; raise
         if name != 'get_work' or type(result) is not dict or type(result.get('ready')) is not list:
             return result  # The admission validates every shape itself.
         if self._excluded is None: self._excluded = self._scheduler.reserve(self._slot, result['ready'])
@@ -330,15 +335,23 @@ class QueueSlotsService:
         # Same deterministic session as the single standing facade for this file.
         session = 'continuation-queue-' + digest(canonical({'owner_id': self.owner_id,
             'agent_id': catalog['agent_id'], 'configuration_path': slot['path']}))
-        with DevelopmentQueueDiscoveryClient.from_connection_file(catalog['connection_file'], session_id=session) as client:
-            guarded = _GuardedDiscovery(client, slot, scheduler)
-            result = DevelopmentQueueAdmission(Path(slot['root']), guarded).tick(config['catalog_file'],
-                config['workflow_file'], approved_sha256=config['approved_sha256'],
-                executable=self.tools['executable']['path'], cli_version=self.cli_version,
-                interpreter=self.tools['interpreter']['path'], unshare=self.tools['unshare']['path'],
-                gh_executable=self.tools['gh']['path'], max_seconds=self.max_seconds,
-                checkpoint_after_actions=config['checkpoint_after_actions'],
-                provider_backoff_seconds=config['provider_backoff_seconds'], should_stop=stopping)
+        guarded = None
+        try:
+            with DevelopmentQueueDiscoveryClient.from_connection_file(catalog['connection_file'], session_id=session) as client:
+                guarded = _GuardedDiscovery(client, slot, scheduler)
+                result = DevelopmentQueueAdmission(Path(slot['root']), guarded).tick(config['catalog_file'],
+                    config['workflow_file'], approved_sha256=config['approved_sha256'],
+                    executable=self.tools['executable']['path'], cli_version=self.cli_version,
+                    interpreter=self.tools['interpreter']['path'], unshare=self.tools['unshare']['path'],
+                    gh_executable=self.tools['gh']['path'], max_seconds=self.max_seconds,
+                    checkpoint_after_actions=config['checkpoint_after_actions'],
+                    provider_backoff_seconds=config['provider_backoff_seconds'], should_stop=stopping)
+        except BoardReadError as error:
+            # Only this slot's own discovery connection becomes a connection
+            # state; a Board error raised inside the Core (for example an
+            # unanswered selected claim) stays needs_you with its evidence.
+            if guarded is None or error is guarded.transport_error: error.slot_connection = True
+            raise
         return _result(slot, result, guarded.filtered)
 
     def run_once(self, *, should_stop=None):
@@ -380,7 +393,8 @@ class QueueSlotsService:
                     token = _TARGET_OBSERVATION.set(observation)
                     try: results[slot['name']] = self._tick(slot, stopping, scheduler)
                     except Exception as error:
-                        code = vars(error).get('code') if type(error) is BoardReadError else None
+                        code = (vars(error).get('code') if type(error) is BoardReadError
+                                and vars(error).get('slot_connection') else None)
                         phase = ('connection_expired' if code in CONNECTION_EXPIRED else
                                  'connection_unavailable' if code in CONNECTION_UNAVAILABLE else 'needs_you')
                         results[slot['name']] = {**_row(slot, phase), 'failure': _target_failure(error, observation)}

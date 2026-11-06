@@ -122,7 +122,18 @@ Une file vide ou un plafond atteint n'appelle aucun modèle. Les pauses
 (`authentication_failed`, `permission_denied`) devient `connection_expired` et
 demande une action humaine ; une panne de transport devient
 `connection_unavailable`. Dans les deux cas, le pointeur de l'emplacement n'est
-pas modifié et la passe suivante réessaie la même frontière.
+pas modifié et la passe suivante réessaie la même frontière. Ces deux états ne
+concernent que la connexion de découverte de l'emplacement : une erreur board
+levée dans le Core, par exemple un claim sélectionné refusé ou sans réponse,
+reste `needs_you` avec sa preuve, et la passe suivante rouvre le même Core et la
+même tâche logique, sans redécouverte ni claim de secours.
+
+Portée de Stop vérifiée par les tests : avant la passe, pendant la lecture de
+découverte (l'intention enregistrée `admitting` est reprise telle quelle), pendant
+l'admission (`admit` n'a pas de point d'arrêt propre : l'admission se termine,
+puis le `tick` s'arrête avant le Core), et pendant les phases modèle et test du
+Core simulé. Stop pendant un vrai appel modèle ou un vrai test passe ensuite par
+le Stop existant du Core, non rejoué ici.
 
 Avant toute découverte, et sous le même verrou, la passe relit tous les
 pointeurs de file de la racine propriétaire, pas seulement ceux du document :
