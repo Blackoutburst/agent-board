@@ -654,6 +654,7 @@
     "tests/test_blocked_reevaluation_scope_runtime.py": "28d0f13831e97cd9e58abfcd172ddddc68380714666b91a6542bb3d19e0ab943",
     "tests/test_board.py": "73df725b9ea0fdb287d1a3791bc9c53bee1bc368db76921b19512bb70bd67054",
     "tests/test_clean_review_claim.py": "256a25787bdb853e1b0ac02f7024f865b5de8445ea58cd68b906df5eaed63c4e",
+    "tests/test_clean_review_claim_api.py": "5d9aaa68db03a347c33e840d50d72317deb09eb9f8474c5f7fd51dae28e7a01e",
     "tests/test_companion_foundation.py": "998c965aaab1220a513c16bded567a28dca82aecae9f782bae5c7bf582c27fe7",
     "tests/test_companion_ui.cjs": "612b61a396c013255e277ffef050b5ea07564f971bda29fdcc01e976a1e4f68d",
     "tests/test_companion_workflow.py": "2e9542f42b345aa16c7dbfe65fcc60168a120b4240a5607b7796a0e1bb7e1971",
