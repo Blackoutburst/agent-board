@@ -8,6 +8,12 @@ jamais déduites d'un message Board, d'un ticket ou d'un modèle.
 
 ## 1. Objet et accords
 
+> **Statut : brouillon pour revue, non exécutable.** Contre-revue du Lead
+> (`6990b166`) : pas prêt pour approbation d'exécution. Les valeurs
+> `<<À_REMPLIR>>` (paquet, tickets, profils, documents) doivent être fixées
+> et revues avant toute commande privilégiée bornée. Rien dans ce document
+> n'autorise un sudo, une modification de HOME, une activation ou un grant.
+
 Premier passage réel du planificateur `linux-cloud-queue-slots-v1`
 (`development_queue_slots.py`, paquet 0.50.0) avec deux, puis quatre modèles
 Codex simultanés, sur l'abonnement Codex de TheScreamer.
@@ -31,7 +37,8 @@ Contraintes reprises du Lead :
 - La preuve, ce sont les intervalles horaires de quatre appels modèle
   effectifs qui se chevauchent, sur des tickets et des racines distincts, avec
   versions et plafonds exacts, puis l'arrêt et le nettoyage. Quatre profils en
-  ligne ou quatre PR ne prouvent rien.
+  ligne ou quatre PR ne prouvent rien. Voir 8.1 : en l'état du backend, ce
+  critère n'est pas acquérable sans la télémétrie de 8.2.
 - Les états actifs (`admitting`, `active`, en pause, `needs_you`) restent
   comptés dans le plafond. C'est le comportement du code :
   `_Scheduler.holders` compte tout pointeur `tick.json` non idle.
@@ -70,6 +77,12 @@ terminer ce travail #73, et non l'effacer. Si `continuation.json` porte
 encore la reprise de revue v2 (0.49.1) et que celle-ci n'est pas terminée,
 le Lead décide avant de le remplacer.
 
+**Conservation de #73.** L'ancienne récupération #73, sa configuration
+(`continuation.json` actuel) et ses historiques sont conservés tels quels tant
+que leur état exact n'est pas réconcilié et publié sur #51. La sauvegarde
+`continuation.pre51.json` (7.2) est une copie, jamais un remplacement de ces
+historiques.
+
 `MemoryPeak` n'existe pas sous systemd 249 et `memory.peak` est absent sous
 le noyau 5.15. Le pic mémoire doit donc être **échantillonné** (section 8).
 
@@ -107,6 +120,10 @@ le noyau 5.15. Le pic mémoire doit donc être **échantillonné** (section 8).
    `repositories/`, à un commit de base approuvé, avec des chemins existants et
    disjoints par ticket. Un vrai dépôt de test demanderait un changement de code
    et une nouvelle revue. Les propriétaires doivent accepter cet écart.
+   **Cette décision doit être enregistrée explicitement** (Needs-you ou
+   message Board de TheScreamer, référencé ici) avant toute préparation de
+   cette variante ; une approbation générale du plan ne vaut pas décision
+   sur le dépôt réel.
 6. gh : la connexion gh officielle existante du même compte, avec droit
    d'écriture sur ce dépôt, sans jeton copié.
 7. Racines d'emplacement : créées par l'humain sous l'UID du propriétaire, en
@@ -291,8 +308,9 @@ les bornes de `package.limits()`. Elles ne peuvent pourtant pas être
   la release précédente ; sinon refus `pool_upgrade_scope_changed` ;
 - `install` refuse une racine propriétaire ou une unité déjà présentes
   (`pool_existing_layout_refused`, `pool_unit_already_exists`) ;
-- toute édition manuelle, tout drop-in et `systemctl set-property` sont
-  exclus. L'entrée compare les octets du fichier d'unité, et les mises à jour
+- toute édition manuelle, tout drop-in, tout remplacement manuel de fichier
+  d'unité ou de release et `systemctl set-property` sont **interdits** pour
+  contourner ces gardes (et pour `pool_existing_layout_refused`). L'entrée compare les octets du fichier d'unité, et les mises à jour
   suivantes refusent un `DropInPaths` non vide.
 
 Conséquence pour la recette :
@@ -381,12 +399,40 @@ changement arrête la passe (`continuation_pool_configuration_changed`).
 
 ### 7.6 Retour arrière
 
-- Fonctionnel : appliquer 7.4, puis
-  `sudo -u bb-agent-thescreamer -H install -m 0600 "$R/config/continuation.pre51.json" "$R/config/continuation.json"`.
-  0.50.0 conserve les schémas antérieurs : continuation, file standing, reprise
-  de revue v1/v2. Ce retour n'est possible que si tous les pointeurs
-  `R/slots/*/admissions/queue-*` sont idle, car un pointeur occupé que plus
-  rien ne reprend fait refuser les passes slots.
+- Fonctionnel (retour au document de continuation mono-file) :
+  **le `ContinuationPoolService` mono n'appelle pas `reconcile_inventory`.**
+  Seul `QueueSlotsService` refuse une passe qui oublierait un pointeur
+  d'emplacement occupé. Restaurer `continuation.pre51.json` peut donc
+  abandonner silencieusement des emplacements encore actifs : il ne faut pas
+  supposer que l'ancienne configuration refusera d'elle-même.
+  Prévol obligatoire, vérifiable et consigné sur #51, **avant** tout
+  remplacement :
+  1. appliquer 7.4 : timer et service `inactive`, `$CG/cgroup.procs` vide ;
+  2. **sous le bail propriétaire** : le bail est le `flock` exclusif de
+     `R/continuations/owner.lock` (`ContinuationPoolService._lease`). L'humain
+     le prend sans attente, ce qui échoue si une passe le tient, et fait la
+     vérification **et** le remplacement dans le même bail :
+
+     ```sh
+     sudo -u bb-agent-thescreamer -H flock -n -E 75 "$R/continuations/owner.lock" \
+       /usr/bin/python3.10 -I -B "$R/config/preflight-76.py"   # code de sortie 75 = bail occupé : arrêter
+     ```
+
+     Le script `preflight-76.py` (<<À_REMPLIR>>, revu avant usage) relève
+     seulement chemin, `phase` et `active is None` pour **tous** les pointeurs
+     `R/slots/*/admissions/queue-*/tick.json` **et**
+     `R/admissions/queue-*/tick.json`. Il refuse tout lien symbolique ou toute
+     entrée inattendue. Il n'exécute
+     `install -m 0600 continuation.pre51.json continuation.json` que si tous
+     sont `idle` avec `active` nul, et seulement après l'attestation de
+     l'étape 3. Le relevé est publié sur #51 ;
+  3. Board, par le Lead, **avant** l'étape 2 : aucune exécution Runtime
+     ouverte ou incertaine, aucune réservation, aucun claim actif ou incertain
+     sur les tickets des emplacements.
+  Sinon : **rester arrêté** avec le document slots, ses racines
+  d'emplacement et leurs historiques, et ouvrir un Needs-you. 0.50.0 conserve
+  les schémas antérieurs (continuation, file standing, reprise de revue
+  v1/v2), mais cela ne protège pas les pointeurs d'emplacement.
 - Binaire : **aucun chemin de code ne revient à la release 0.49.1**.
   `upgrade` refuse une release déjà publiée (`pool_existing_layout_refused`),
   et `rollback` ne fait que supprimer le fichier de l'unité finie (reçu
@@ -416,28 +462,78 @@ sudo bash -c 'while sleep 5; do ts=$(date -u +%FT%T.%3NZ)
 Seuls le PID, l'heure, le RSS et le cwd sont relevés, pas les arguments : ils
 peuvent contenir des consignes.
 
-Le code n'écrit **pas** d'enregistrement dédié « début/fin d'appel modèle ».
-La preuve se construit par recoupement :
+### 8.1 Portée exacte de ce qui est observable
 
-1. Intervalles de processus `codex` dans le cgroup du service : par PID,
-   première et dernière apparition, rattachées à un emplacement par le cwd
-   (`…/slots/<n>/checkouts/…`). Si le cwd est masqué par l'espace de noms
-   bwrap, on rattache par l'arbre `ppid`. Il faut distinguer codeur et
-   reviewer.
-2. Board : pour chaque ticket, l'exécution Runtime (`lookup_execution`) avec
-   ses horodatages de début et de fin, le claim `claim_selected_queue_ticket`
-   et sa clé, l'ID de ticket et le profil.
-3. Journaux du planificateur sous chaque `R/slots/<n>/` : `started_at` et
-   `deadline` de chaque génération, en corroboration.
-4. Sortie JSON de chaque passe (`journalctl -u "$SVC"`) : `concurrency`, la
-   ligne de chaque emplacement (`phase`, `request_id`, `logical_task_id`) et
-   `waiting_capacity`/`resource_busy` le cas échéant.
+L'échantillonnage à 5 s et les intervalles de processus `codex` **ne
+prouvent pas** des appels modèle simultanés : un processus vivant peut
+attendre, lancer des outils ou être en revue. Ils ne servent qu'aux mesures
+de ressources et à la corroboration.
 
-Le critère de preuve de la passe 4 : quatre intervalles d'appels modèle
-codeur, sur quatre emplacements, quatre tickets et quatre racines distincts,
-avec max(début) < min(fin). Pour la passe 2, le même critère avec deux
-intervalles. À consigner avec la tête source, `NEW_BUNDLE_ID`, codex 0.163.0,
-gh 2.94.0, le sha de Python, les `unit_limits` et les propriétés effectives
+Ce que le backend installé rend observable, d'après le code :
+
+- chaque tour passe par `codex_turn.execute_turn` : un processus
+  `codex exec --json` par tour, sans outil (tout item autre que
+  `agent_message`/`reasoning` termine le tour en `unexpected_tool_event`).
+  Le flux JSON porte `thread.started`, `turn.started`, `turn.completed`,
+  mais **ni ces événements ni l'adaptateur n'enregistrent d'horodatage** ;
+- `RunStore` (`turns`) ne garde que `created_at` (avant lancement) et
+  `updated_at` (dernier changement : PID, puis règlement) : c'est une durée
+  d'enveloppe de processus, pas une frontière d'appel ;
+- le journal du planificateur ne garde que `started_at`/`deadline` de la
+  génération ;
+- aucune frontière d'appel HTTP au fournisseur n'est exposée par Codex
+  0.163.0 à l'adaptateur.
+
+**Conséquence : en l'état, le critère « quatre appels modèle simultanés »
+n'est pas acquérable.** La recette ne pourra publier que des chevauchements
+de **tours** (au mieux) ou d'enveloppes de processus, en le disant
+exactement, et le critère « appels modèle » reste **non acquis**.
+
+### 8.2 Télémétrie bornée requise pour viser le critère des tours
+
+Avant la passe 4 (et idéalement avant la passe 2), un changement de code
+revu, dans un nouveau paquet, ajouterait dans `execute_turn` un
+enregistrement borné, en ajout seul :
+
+- champs : opération (codeur/reviewer/planificateur), ID de ticket, profil
+  (`agent_id`), emplacement, `provider_session_id`, `request_id` ;
+- horodatages muraux et monotones de : lancement du processus, réception de
+  `turn.started`, réception de `turn.completed` (ou `turn.failed`/`error`/
+  timeout/annulation), sortie du processus et confirmation du nettoyage ;
+- résultat : `completed`, `failed`, `uncertain` (aucun terminal reçu,
+  processus tué, nettoyage non confirmé) ; un résultat incertain est
+  **conservé** tel quel, jamais réécrit ;
+- **aucun** prompt, réponse, raisonnement, argument de commande, chemin
+  d'authentification ou secret ; taille de chaque enregistrement bornée.
+
+Même alors, l'intervalle `turn.started` → `turn.completed` reste un **tour**
+Codex (inférence plus surcoût interne de Codex), pas un appel HTTP isolé.
+Le rapport l'écrira ainsi.
+
+### 8.3 Critère et recoupement
+
+Critère publiable de la passe 4, si 8.2 est livré : quatre intervalles
+`turn.started` → terminal de **tours codeur**, sur quatre emplacements,
+quatre tickets et quatre racines distincts, avec max(début) < min(fin), et
+aucun résultat `uncertain` dans la fenêtre. Passe 2 : même critère avec deux
+intervalles. Sans 8.2, seuls les chevauchements d'enveloppes sont publiés,
+étiquetés comme tels, et le critère reste non acquis.
+
+Recoupement (corroboration, pas preuve) :
+
+1. échantillons de processus `codex` (PID, cwd `…/slots/<n>/checkouts/…` ou
+   arbre `ppid` si bwrap masque le cwd), en séparant codeur et reviewer ;
+2. Board : exécution Runtime (`lookup_execution`) avec début/fin, claim
+   `claim_selected_queue_ticket` et sa clé, ticket, profil ;
+3. `RunStore`/journaux du planificateur sous chaque `R/slots/<n>/` : seulement
+   les colonnes d'horodatage, d'état et d'identifiants (jamais `result_json`
+   ni contenu) ;
+4. sortie JSON de chaque passe (`journalctl -u "$SVC"`) : `concurrency`,
+   par emplacement `phase`, `request_id`, `logical_task_id`, et
+   `waiting_capacity`/`resource_busy`.
+
+À consigner avec la tête source, `NEW_BUNDLE_ID`, codex 0.163.0, gh 2.94.0,
+le sha de Python, les `unit_limits` et les propriétés effectives
 (`systemctl show -p CPUQuotaPerSecUSec,MemoryHigh,MemoryMax,TasksMax "$SVC"`).
 
 Mesures à rapporter : MemoryCurrent maximal échantillonné, compteurs
@@ -471,10 +567,12 @@ Ces chiffres servent à décider des plafonds de la passe 4 (section 6).
 3. Board, par le Lead : aucune exécution Runtime ouverte ni réservation
    restante, aucun claim actif sur les tickets bac à sable, état final de
    chaque ticket (revue, et non accepté par défaut).
-4. GitHub, par un humain : fermer les quatre (ou deux) PR brouillon sur
-   `Blackoutburst/agent-board` et supprimer leurs branches.
-5. Remettre `continuation.json` à partir de `continuation.pre51.json` si
-   l'on n'enchaîne pas, ou laisser le document slots avec le timer arrêté, sur
+4. GitHub : les PR brouillon, leurs branches et les journaux historiques
+   sont **conservés**. Leur fermeture ou suppression est une décision humaine
+   distincte, prise après archivage, et **n'est pas** un prérequis de la
+   preuve.
+5. Laisser le document slots avec le timer arrêté par défaut. Le retour à
+   `continuation.pre51.json` ne se fait qu'après le prévol de 7.6, sur
    décision du Lead.
 6. Profils et appairages de test : archivés ou conservés par les humains.
 7. Publier sur le ticket #51 les preuves de la section 8 et le résultat du
