@@ -38,6 +38,55 @@ def require(value,code='historical_review_source_changed'):
     if not value:raise DevelopmentError(code)
 
 
+def _owner_release(event,chain,claimed,ticket,scope,old_scope):
+    """Fail closed on sparse, mixed or disconnected owner release evidence."""
+    actor=event.get('actor',{});data=event.get('detail',{})
+    if not (type(chain) is list and len(chain)==2 and chain[0]==event):return False
+    prior=chain[1];prior_actor=prior.get('actor',{});claim=claimed.get('claimant') or {}
+    return (event.get('event')=='ticket_updated' and actor.get('kind')=='human'
+        and actor.get('owner_id')==scope['owner_id']
+        and not any(actor.get(k) for k in ('agent_id','session_id','companion_for','acts_for'))
+        and actor.get('profile_kind') not in ('companion','agent')
+        and data.get('fields')==['release_claim'] and data.get('ticket_id')==scope['ticket_id']
+        and data.get('version')==ticket.get('version')==claimed.get('version',-2)+1
+        and ticket.get('status')==claimed.get('status')=='review' and ticket.get('claimant') is None
+        and claim.get('session_id')==old_scope['board_session_id']
+        and claim.get('agent_id')==old_scope['agent_id'] and claim.get('owner_id')==scope['owner_id']
+        and prior.get('event')=='ticket_claimed' and type(prior.get('id')) is int
+        and prior['id']<event['id'] and prior.get('ticket_id')==scope['ticket_id']
+        and prior.get('project_id')==scope['project_id']
+        and all(prior_actor.get(k)==claim.get(k) for k in ('agent_id','session_id','owner_id','profile_version'))
+        and prior_actor.get('kind')=='agent'
+        and type(event.get('created_at')) in (int,float)
+        and type(claimed.get('lease_expires_at')) in (int,float)
+        and prior.get('created_at',float('inf'))<=event['created_at']<claimed['lease_expires_at'])
+
+
+def _claim_clean_review(client,args):
+    """Host-only fixed transport; never extend the native client's allowlist."""
+    from .board_reader import BoardReadError
+    from .review_lifecycle_client import DeliveryReviewLifecycleClient
+    from .worker_client import _arguments
+    if type(client) is not DeliveryReviewLifecycleClient or not client._registered:
+        raise BoardReadError('reviewer_registration_required')
+    values=_arguments('claim_ticket',args)
+    client._initialize();client._before_effect()
+    response=client._tool('claim_clean_review_ticket',{**values,'session_id':client.session_id})
+    if (type(response) is not dict or set(response)!={'schema','prior_version','session_id','ticket'}
+            or response.get('schema')!='clean-review-claim-v1'
+            or type(response.get('prior_version')) is not int
+            or response['prior_version']!=values['expected_version']
+            or response.get('session_id')!=client.session_id):
+        raise BoardReadError('review_cleanup_claim_unconfirmed')
+    ticket=response['ticket'];claim=ticket.get('claimant',{}) if type(ticket) is dict else {}
+    if (type(ticket) is not dict or ticket.get('id')!=values['ticket_id']
+            or ticket.get('status')!='review' or ticket.get('version')!=values['expected_version']+1
+            or type(claim) is not dict or claim.get('session_id')!=client.session_id
+            or claim.get('kind')!='agent'):
+        raise BoardReadError('review_cleanup_claim_unconfirmed')
+    return ticket
+
+
 def document(path,maximum=MAX_RECORD):
     raw,pin=file_document(path,maximum);value=decode(raw)
     require(canonical(value)==raw)
@@ -445,21 +494,43 @@ attributed transactional claim revocation. No old record is repaired/adopted.
             'after':self.revocation_event_id-1,'limit':1,'order':'asc'})['items']
         require(len(events)==1,'historical_review_revocation_required')
         event=events[0];data=event.get('detail',{});actor=event.get('actor',{})
-        require(event.get('id')==self.revocation_event_id and event.get('event')=='managed_agent_claim_released'
+        require(event.get('id')==self.revocation_event_id
+            and event.get('ticket_id')==self.scope['ticket_id']
+            and event.get('project_id')==self.scope['project_id'],
+            'historical_review_revocation_required')
+        managed=(event.get('event')=='managed_agent_claim_released'
             and event.get('ticket_id')==self.scope['ticket_id'] and event.get('project_id')==self.scope['project_id']
             and data.get('source_session_id')==self.old_scope['board_session_id']
             and data.get('target_profile_id')==self.old_scope['agent_id']
             and data.get('source_profile_version')==self.old['selection']['registration']['profile']['version']
             and data.get('expected_version')==claimed['version'] and data.get('version')==ticket['version']
             and actor.get('kind')=='agent' and actor.get('owner_id')==self.scope['owner_id']
-            and actor.get('agent_id')==data.get('manager_profile_id'),'historical_review_revocation_required')
+            and actor.get('agent_id')==data.get('manager_profile_id'))
+        owner_release=False
+        if event.get('event')=='ticket_updated':
+            # The UI audit omits values. Accept only a release-only transition
+            # immediately following the sealed session's claim in this ticket.
+            chain=client.call('list_activity',{'ticket_id':self.scope['ticket_id'],
+                'after':0,'limit':2,'order':'desc'})['items']
+            owner_release=_owner_release(event,chain,claimed,ticket,self.scope,self.old_scope)
+        require(managed or owner_release,'historical_review_revocation_required')
         # Lookup follows the transactionally issued claim revocation and the
         # fresh unclaimed ticket read. The old session can no longer reserve.
         if self.previous['kind'] in ('retired_before_transport','retired_pending_recovery_before_transport'):
             require(self._old_control(self.previous_runtime)=={'found':False},
                 'historical_review_previous_unresolved')
-        return {'event_id':event['id'],'ticket_version':ticket['version'],
-            'manager_agent_id':actor['agent_id'],'source_session_id':data['source_session_id']}
+        proof={'event_id':event['id'],'ticket_version':ticket['version'],
+            'manager_agent_id':actor['agent_id'] if managed else None,
+            'source_session_id':self.old_scope['board_session_id']}
+        if owner_release:proof['release_kind']='human_release_same_owner'
+        return proof
+
+    def claim_review(self,client,claim):
+        require(client.session_id==self.scope['board_session_id']
+            and claim=={'ticket_id':self.scope['ticket_id'],'expected_version':self.admission['ticket_version']})
+        if self.claim_gate.get('release_kind')=='human_release_same_owner':
+            return _claim_clean_review(client,claim)
+        return client.call('claim_ticket',claim)
 
     def admission_version(self,client,scope):
         require(scope==self.scope and file_document(self.connection_file)[1]==self.connection_pin)

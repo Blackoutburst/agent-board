@@ -188,7 +188,8 @@ class DeliveryReviewLifecycle:
                 claim=dict(ticket_id=scope['ticket_id'],expected_version=ticket['version'])
                 self._remember(private,'claim-intent',claim);held();self._local(private,operation_id)
                 if self.driver._descriptor(self.source,source_operation_id)!=request['source']:fail('review_lifecycle_source_changed')
-                claimed=client.call('claim_ticket',claim)
+                claimed=(self.source.claim_review(client,claim) if
+                    request['source'].get('kind')=='historical-aggregate-review-source-v1' else client.call('claim_ticket',claim))
                 if claimed.get('version')!=ticket['version']+1:fail('review_lifecycle_claim_unconfirmed')
                 self._remember(private,'claimed',claimed)
                 context=build_context(client.call,scope=ContextScope(**{key:scope[key] for key in ('owner_id','agent_id','project_id','ticket_id')}),registration=registration)
