@@ -142,12 +142,13 @@ done
 
 ## 4. Paquet 0.50.0
 
-- Source : branche `claude/t51-parallel-slots`. Le code est à
-  `b913acf5b882d9b199182fccd45dbb7c57be2174`, empilé sur la PR #98
-  (`2d067f33f7f471adcc9c3a78027f1dd7d0526c49`). Le commit qui ajoute ce
-  document ne modifie aucun fichier empaqueté, mais il change `revision`, donc
-  l'identifiant du bundle. **Préparer depuis la tête finale revue et noter son
-  SHA.**
+- Source : branche `claude/t51-parallel-slots`, empilée sur la PR #98
+  (`2d067f33f7f471adcc9c3a78027f1dd7d0526c49`). Tête de code empaquetée :
+  `92a96a8dad125dcbc6ea36f5f25653b98d963edc` (emplacements, télémétrie des
+  tours codeur, script de prévol §7.6). Un commit qui ne touche que la
+  documentation ne modifie aucun fichier empaqueté, mais il change
+  `revision`, donc l'identifiant du bundle. **Préparer depuis la tête de code
+  revue et noter son SHA.**
 - `pyproject.toml` : `version = "0.50.0"`.
 - Modèles d'unité identiques octet pour octet à la release `66cce933…`.
   Valeurs sha256 : `unit.service.in` `4aca3364…2ebe`, `continuation.service.in`
@@ -162,7 +163,7 @@ done
 Préparation hors ligne, non root, sous l'utilisateur ubuntu :
 
 ```sh
-HEAD_SHA=<<À_REMPLIR:tête finale revue, 40 hex>>
+HEAD_SHA=92a96a8dad125dcbc6ea36f5f25653b98d963edc   # tête de code ; voir « Valeurs produites » ci-dessous
 CAND=/home/ubuntu/agent-pool-candidates/t51-slots-${HEAD_SHA:0:8}-2026110X
 install -d -m 0700 "$CAND"
 git clone --no-hardlinks /home/ubuntu/src/ab-wt51 "$CAND/source"
@@ -197,6 +198,48 @@ Le `bundle_id` affiché par `plan` doit être égal au sha256 de
 Vérifier aussi que `adapter_version` vaut 0.50.0, que `revision` vaut
 `$HEAD_SHA`, que `unit_limits` correspond au spec et que les trois scripts ont
 les sha256 ci-dessus. Le Lead consigne `NEW_BUNDLE_ID` avant tout sudo.
+
+**Valeurs produites (préparation à blanc, non root, 7 novembre 2026).**
+Construites par l'agent serveur sous ubuntu, entièrement dans son
+répertoire temporaire, depuis un clone de `ab-wt51` détaché sur
+`92a96a8dad125dcbc6ea36f5f25653b98d963edc`, sans lire `/opt`, `/var/lib`, ni
+aucune racine privée. Seule différence avec la procédure ci-dessus : les
+chemins `codex`/`bwrap`/`gh` du spec pointaient vers les copies du bundle
+candidat 0.49.1
+`/home/ubuntu/agent-pool-candidates/queue73-review0491-122af32c-20261104/bundle/tools/…`,
+dont le `manifest_id` vaut exactement `PREV` (`66cce933…f23be`) et dont les
+sha256 d'outils sont vérifiés contre ce manifeste. Le reste du spec est
+identique (mêmes valeurs que ci-dessus).
+
+- tête source (`revision`) : `92a96a8dad125dcbc6ea36f5f25653b98d963edc` ;
+- `adapter_version` : `0.50.0` ; codex `0.163.0`, gh `2.94.0`, python
+  `/usr/bin/python3.10` `a2f33a6e…fc56ae` ;
+- `bundle_id` affiché par `prepare` et `plan` = sha256 de
+  `bundle/manifest.json` :
+  `894824aa7b1aee9fdbd6ccf7f1309714a6edd38abeba52426a96eef8d473a1bb` ;
+- 166 fichiers ; outils : `tools/codex`
+  `399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215`,
+  `tools/codex-resources/bwrap`
+  `77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c`,
+  `tools/gh` `c2033c14259a3a3b7518a47535e57385a6d3faaba1759e9cf8c1c10dd21d3de9` ;
+- scripts et modèles : `pool_manage.py` `eaebab32…ed859`,
+  `pool_package.py` `f929527c…3b9eb`, `pool_entry.py` `5485166f…cf13f3`,
+  `unit.service.in` `4aca3364…2ebe`, `continuation.service.in`
+  `054e80e3…2d35`, `continuation.timer.in` `bf66f944…2ff` : tous égaux aux
+  valeurs attendues ci-dessus ;
+- `unit_limits` construits :
+  `{"cpu_percent":300,"lifetime_seconds":3600,"memory_bytes":6442450944,"memory_high_bytes":4294967296,"stop_seconds":45,"tasks":256}`.
+
+Le commit qui consigne ces valeurs ne touche que ce document et
+`SOURCE-MANIFEST.json`, qui ne sont pas empaquetés, mais il change la tête.
+Préparer donc **depuis `92a96a8…`** (le `checkout --detach` ci-dessus), pas
+depuis la tête de la branche, pour retrouver ce `bundle_id`.
+
+`NEW_BUNDLE_ID=<<À_REMPLIR>>` : à consigner par le Lead après que l'opérateur
+a refait `prepare` + `plan` avec le spec ci-dessus (outils lus dans la
+release active `/opt/…/66cce933…`) et obtenu le même `bundle_id`
+`894824aa…a1bb`. Une valeur différente veut dire que les outils installés
+diffèrent du bundle 0.49.1 : arrêter et comparer les sha256 d'outils.
 
 ## 5. Documents à créer (propriétaire 0600, aucun lien dur ni symbolique)
 
