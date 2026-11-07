@@ -9,6 +9,7 @@ simultaneous subscription models; that run remains a separate human recipe.
 """
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -190,6 +191,13 @@ def slots(tmp_path, monkeypatch):
                     board.inside.set(); assert board.release.wait(timeout=10); phase = 'paused_cycle'
                 elif phase == 'crash':
                     raise OSError('synthetic controller loss after the claim')
+                elif phase == 'telemetry':
+                    # The Core's planner would call this through execute_turn.
+                    board.barrier.wait(timeout=10)
+                    for kind in ('process_started', 'turn.started'):
+                        self.turn_event({'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(),
+                                         'session_id': None}, self.ticket, 'dev-model-' + self.ticket)
+                    phase = 'paused_cycle'
                 row = dict(name=self.batch['jobs'][0]['name'], logical_task_id=task, phase=phase,
                     operation_id=str(uuid.uuid4()), state_sha256='a' * 64, reason='quota' if phase == 'paused_quota' else '',
                     next_observation_at=1234 if phase in ('paused_quota', 'paused_provider') else None, launchable=False)
@@ -341,6 +349,31 @@ def test_concurrency_one_runs_one_slot_at_a_time(slots):
     second = by_name(slots.service(path).run_once())
     assert second['a']['phase'] == 'independent_review_published' and second['b']['phase'] == 'paused_cycle'
     assert slots.board.peak == 1 and slots.board.claims == {'t-a': 1, 't-b': 1}
+
+
+def test_each_slot_records_turn_boundaries_in_one_private_pass_journal(slots):
+    from blackoutburst_agents import turn_telemetry
+    names = ('a', 'b', 'c')
+    for n in names:
+        slots.slot(n, ['repo:' + n]); slots.board.add('t-' + n, 'coder-' + n, 'repo:' + n)
+        slots.board.behaviour['t-' + n] = ['telemetry']
+    slots.board.barrier = threading.Barrier(3)
+    result = slots.service(slots.configure(3, list(names))).run_once()
+    assert {row['phase'] for row in result['slots']} == {'paused_cycle'}, result
+    state = result['telemetry']
+    assert state['records'] == 6 and state['full'] is False and state['unavailable'] is None
+    directory = slots.root / 'telemetry'
+    assert oct(os.stat(directory).st_mode & 0o777) == '0o700'
+    records, torn = turn_telemetry.read_journal(directory, state['file'][len('turns-'):-len('.jsonl')])
+    assert not torn and [r['seq'] for r in records] == list(range(1, 7))
+    for n in names:
+        mine = [r for r in records if r['slot'] == n]
+        assert [r['kind'] for r in mine] == ['process_started', 'turn.started']
+        assert {(r['agent_id'], r['ticket_id'], r['operation']) for r in mine} == {('coder-' + n, 't-' + n, 'coder')}
+    # An idle pass creates no journal file at all.
+    for n in names: slots.board.behaviour['t-' + n] = ['paused_cycle']
+    idle = slots.service(slots.configure(3, list(names))).run_once()
+    assert idle['telemetry']['records'] == 0 and sorted(os.listdir(directory)) == [state['file']]
 
 
 def test_idle_pass_makes_no_model_call_and_no_admission(slots):

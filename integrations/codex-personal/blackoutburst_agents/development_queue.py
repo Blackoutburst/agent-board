@@ -368,7 +368,7 @@ class DevelopmentQueueAdmission:
 
     def tick(self,catalog_file,workflow_file,*,approved_sha256,executable,cli_version,interpreter,
              unshare,gh_executable,max_seconds=7200,checkpoint_after_actions=3,provider_backoff_seconds=60,
-             should_stop=None):
+             should_stop=None,turn_event=None):
         """Run at most one existing Core pass, never replay a finite batch.
 
         A completed independent review is archived before later discovery. A
@@ -474,6 +474,7 @@ class DevelopmentQueueAdmission:
             service=ContinuationPoolService(self.root,configuration_path=configuration,owner_id=catalog['owner_id'],
                 board_endpoint=catalog['board_endpoint'],executable=executable,cli_version=cli_version,
                 interpreter=interpreter,unshare=unshare,gh_executable=gh_executable,max_seconds=max_seconds)
+            service.turn_event=turn_event
             result=service.run_once(should_stop=checked_stop);held();checked_stop()
             for pin in (plan['binding']['catalog'],plan['binding']['workflow']):
                 if file_document(pin['path'],MAX_BATCH)[1]!=pin:fail('development_queue_approval_changed')

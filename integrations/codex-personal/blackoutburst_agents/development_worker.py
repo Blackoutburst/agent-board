@@ -40,6 +40,7 @@ def execution_factories(profile='darwin'):
 
 
 class DevelopmentBoardWorker:
+    turn_event = None
     def __init__(self, journal, store, runtime_journal, client, control_client, *,
                  backend_factory=SupervisedNativeNamedPythonBackend, policy_factory=PlannerPolicy,
                  planner_factory=DevelopmentPlanner, _transport=None, _test_anchor=None,
@@ -605,6 +606,7 @@ class DevelopmentBoardWorker:
                                 lambda target:self._verify_family_binding(target,'planner'),
                             local_guard=lambda **options:self._local_control(op['id'],**options),
                             **logical_guard,
+                            **({} if self.turn_event is None else {'_turn_event':self.turn_event}),
                             _transport=self.transport,_test_anchor=self.test_anchor,
                             _allow_fixture_backend=self.allow_fixture,_clock=self.clock)
                         try:

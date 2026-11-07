@@ -12,11 +12,13 @@ never proves provider or subscription capacity.
 This module is deliberately outside the native Linux source roster; it does
 not run inside a qualified generation and only calls existing public APIs.
 """
+from contextlib import closing
 from copy import deepcopy
 import os
 from pathlib import Path
 import threading
 import time
+import uuid
 
 from .board_reader import BoardReadError
 from .continuation_pool_configuration import load_queue_continuation, MAX_CONFIGURATION
@@ -29,6 +31,7 @@ from .finite_pool_batch import child
 from .linux_input_snapshot import _path
 from .linux_planner_policy import _executable_pin, linux_source_pins
 from .pool_journal import PoolError, identifier, uuid_value
+from .turn_telemetry import TurnTelemetryJournal
 
 SCHEMA = 'linux-cloud-queue-slots-v1'
 MAX_SLOTS = 16
@@ -328,7 +331,7 @@ class QueueSlotsService:
             for pin in self.tools.values():
                 require(_executable_pin(pin['path']) == pin, 'continuation_pool_configuration_changed')
 
-    def _tick(self, slot, stopping, scheduler):
+    def _tick(self, slot, stopping, scheduler, telemetry):
         from .development_queue import DevelopmentQueueAdmission
         from .development_queue_client import DevelopmentQueueDiscoveryClient
         config = slot['loaded']['configuration']; catalog = slot['loaded']['plan']['catalog']
@@ -345,7 +348,8 @@ class QueueSlotsService:
                     interpreter=self.tools['interpreter']['path'], unshare=self.tools['unshare']['path'],
                     gh_executable=self.tools['gh']['path'], max_seconds=self.max_seconds,
                     checkpoint_after_actions=config['checkpoint_after_actions'],
-                    provider_backoff_seconds=config['provider_backoff_seconds'], should_stop=stopping)
+                    provider_backoff_seconds=config['provider_backoff_seconds'], should_stop=stopping,
+                    turn_event=telemetry.recorder(operation='coder', slot=slot['name'], agent_id=catalog['agent_id']))
         except BoardReadError as error:
             # Only this slot's own discovery connection becomes a connection
             # state; a Board error raised inside the Core (for example an
@@ -371,8 +375,12 @@ class QueueSlotsService:
             before = signature(os.stat(self.path, follow_symlinks=False))
             self._pins(full=True)
             slots = self.loaded['slots']; cap = self.loaded['configuration']['concurrency']
+            # One bounded turn-boundary journal per pass, created by its first
+            # record only (see turn_telemetry). Closed below even when a slot
+            # thread is retained: a straggler's later record is refused.
+            telemetry = TurnTelemetryJournal(self.root / 'telemetry', str(uuid.uuid4()))
             # The same owner-root lease as a single continuation pass.
-            with ContinuationPoolService._lease(self) as (_, held):
+            with closing(telemetry), ContinuationPoolService._lease(self) as (_, held):
                 reconcile_inventory(self.root, slots)
                 deadline = time.monotonic() + self.max_seconds
                 cancel = threading.Event(); failed = []; results = {}; threads = {}
@@ -391,7 +399,7 @@ class QueueSlotsService:
                 def advance(slot):
                     observation = _TargetObservation(None); observation.stage = 'queue_tick'
                     token = _TARGET_OBSERVATION.set(observation)
-                    try: results[slot['name']] = self._tick(slot, stopping, scheduler)
+                    try: results[slot['name']] = self._tick(slot, stopping, scheduler, telemetry)
                     except Exception as error:
                         code = (vars(error).get('code') if type(error) is BoardReadError
                                 and vars(error).get('slot_connection') else None)
@@ -450,6 +458,7 @@ class QueueSlotsService:
             self._pins(full=True)
             return {'schema': 'continuation-pool-slots-pass-v1', 'status': status, 'concurrency': cap,
                     'slots': ordered, 'tasks': [row['task'] for row in ordered if row.get('task') is not None],
+                    'telemetry': telemetry.state(),
                     'activated': True, 'pass_complete_is_project_completion': False}
         finally:
             self._mutex.release()

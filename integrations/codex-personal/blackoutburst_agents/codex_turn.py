@@ -158,6 +158,7 @@ def execute_turn(
     reasoning_effort=None,
     provider_disposition=False,
     on_provider_observation=None,
+    on_turn_event=None,
 ) -> dict[str, object]:
     """Run one text turn, returning only its final message and safe checks.
 
@@ -169,6 +170,7 @@ def execute_turn(
     write, after metadata/policy checks. Polling callbacks cannot replace it.
     ``provider_disposition`` optionally observes a failed terminal stream through
     natural EOF/exit. Its callback receives local facts, never retry authority.
+    ``on_turn_event`` gets closed boundary facts, never text; failure blocks.
     """
     verification: dict[str, object] = {
         "exit_zero": False, "turn_completed": False, "session_verified": False,
@@ -186,7 +188,8 @@ def execute_turn(
         reasoning_effort = _reasoning_effort(reasoning_effort)
         if (type(provider_disposition) is not bool
                 or (on_provider_observation is not None and
-                    (not provider_disposition or not callable(on_provider_observation)))):
+                    (not provider_disposition or not callable(on_provider_observation)))
+                or (on_turn_event is not None and not callable(on_turn_event))):
             return result
         if not isinstance(prompt, str):
             return result
@@ -214,6 +217,12 @@ def execute_turn(
             return "cancelled" if should_cancel() else None
         except Exception:
             return "callback_failed"
+
+    def note(kind):
+        try:
+            on_turn_event and on_turn_event({'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(), 'session_id': result['session_id']})
+        except Exception:
+            return 'callback_failed'
 
     planner_arguments = None
     if planner_policy is not None:
@@ -261,9 +270,10 @@ def execute_turn(
         return result
 
     # Persist the freshly created PID before setting up I/O or sending bytes.
-    if on_started is not None:
+    if on_started is not None or on_turn_event is not None:
         try:
-            on_started(process.pid)
+            if on_started is not None: on_started(process.pid)
+            if note('process_started'): raise ValueError
         except Exception:
             cleaned = _stop_group(process)
             verification["cleanup_confirmed"] = cleaned
@@ -324,7 +334,8 @@ def execute_turn(
                 terminal_failure = _error_category(line.decode('utf-8', 'replace'))
                 terminal_event_sha256 = hashlib.sha256(line).hexdigest()
                 terminal_deadline = min(deadline, time.monotonic() + 1)
-                return None
+                return note(kind)
+            note(kind)
             return _error_category(line.decode("utf-8", "replace"))
         if turn_completed:
             return "protocol_error"
@@ -348,20 +359,20 @@ def execute_turn(
                     on_session(found)
                 except Exception:
                     return "callback_failed"
-            return None
+            return note(kind)
         if session_id is None:
             return "protocol_error"
         if kind == "turn.started":
             if turn_started:
                 return "protocol_error"
             turn_started = True
-            return None
+            return note(kind)
         if not turn_started:
             return "protocol_error"
         if kind == "turn.completed":
             turn_completed = True
             verification["turn_completed"] = True
-            return None
+            return note(kind)
         if kind in ("item.started", "item.updated", "item.completed"):
             item = event.get("item")
             if not isinstance(item, dict) or not isinstance(item.get("type"), str):
@@ -464,6 +475,8 @@ def execute_turn(
         verification["cleanup_confirmed"] = cleaned
         if not cleaned:
             failure = "cleanup_failed"
+        late = note('cleanup_confirmed' if cleaned else 'cleanup_failed')
+        failure = failure or late
         selector.close()
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:

@@ -134,6 +134,25 @@ class DevelopmentWorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.run(prepared['operation_id']),result)
         self.assertEqual(len(self.inferences),3)
 
+    def test_turn_event_seam_reaches_each_planner_turn_with_validated_identities(self):
+        self.successful_actions();prepared=self.prepare();seen=[]
+        self.worker.turn_event=lambda event,ticket,request:seen.append((event['kind'],ticket,request))
+        def report(callbacks):
+            callbacks['on_turn_event']({'kind':'turn.started','wall':1.0,'monotonic':1.0,'session_id':None})
+        self.after_model=report
+        result=self.worker.run(prepared['operation_id'])
+        self.assertEqual(result['status'],'review_ready',result)
+        self.assertEqual([item[:2] for item in seen],[('turn.started',self.ticket['id'])]*3)
+        self.assertEqual(len({item[2] for item in seen}),3)
+        self.assertTrue(all(item[2].startswith('dev-model-') for item in seen))
+
+    def test_unset_turn_event_adds_no_transport_keyword(self):
+        self.successful_actions();prepared=self.prepare()
+        self.assertIsNone(self.worker.turn_event)
+        def check(callbacks):self.assertNotIn('on_turn_event',callbacks)
+        self.after_model=check
+        self.assertEqual(self.worker.run(prepared['operation_id'])['status'],'review_ready')
+
     def test_empty_real_actions_resources_refuse_before_claim_or_planner(self):
         self.board.set_policy(self.human,True,True,True,True,[],[])
         with self.assertRaises(DevelopmentError) as caught:self.prepare()

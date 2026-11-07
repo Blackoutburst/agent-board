@@ -748,6 +748,7 @@ def _initial_preparing(control,preparer,operation_id):
 
 class ContinuationPoolService:
     """An inert constructor and one explicitly invoked, bounded scheduler pass."""
+    turn_event=None
     def __init__(self,root,*,configuration_path,owner_id,board_endpoint,executable,cli_version,
                  interpreter,unshare,gh_executable,max_seconds):
         self.root=Path(_path(os.fspath(root)));self.path=Path(configuration_path)
@@ -1393,6 +1394,7 @@ class _Generation:
                 'connection':self.driver.selections.connection_pin}
         else:bound=self.driver.selections.load(self.context)
         self.worker=self.driver._open(self.resources,self.context,bound,existing=existing,observe=False)
+        self.worker.turn_event=self.service.turn_event
         self._worker_open=True
         worker_scope={**self.driver.selections.fixed,**{key:self.job[key] for key in ('project_id','ticket_id')},
             'board_session_id':self.context.session_id}

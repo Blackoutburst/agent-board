@@ -107,7 +107,7 @@ class DevelopmentPlanner:
                  planner_policy, authorization, claim_id, instruction, model,
                  budgets=None, enabled=False, _test_anchor=None, _transport=None,
                  _clock=time.time, _allow_fixture_backend=False, context=None, parent_operation=None, fence_intent=None, fence_verify=None,
-                 local_guard=None, reasoning_effort=None, fresh_guard=None):
+                 local_guard=None, reasoning_effort=None, fresh_guard=None, _turn_event=None):
         reasoning = _reasoning_configuration(reasoning_effort)
         self.broker, self.store, self.runtime_journal = broker, store, runtime_journal
         self.client, self.scope, self.policy = control_client, dict(board_scope), planner_policy
@@ -253,6 +253,9 @@ class DevelopmentPlanner:
         self.transport = partial(execute_turn, planner_policy=self.policy) if _transport is None else _transport
         if reasoning:
             self.transport = partial(self.transport, **reasoning)
+        if _turn_event is not None:
+            self.transport = partial(self.transport, on_turn_event=lambda event: _turn_event(
+                event, self.scope['ticket_id'], self._state['step']['request_id']))
         self.runner = PersonalRunner(store, self.transport, runtime_guard=self.model_guard)
 
     def close(self):

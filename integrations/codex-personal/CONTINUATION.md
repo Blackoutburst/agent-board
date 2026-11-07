@@ -294,6 +294,70 @@ le droit de réponse ; un refus reste localement en attente. Une pause propre,
 le backoff et Stop ne déclenchent pas cette alarme. Les réponses dans Needs you
 ne rouvrent pas le Core et ne constituent aucun grant d'exécution.
 
+## Télémétrie bornée des tours (#51)
+
+Chaque passe d'emplacements tient un journal privé, en ajout seul, des
+frontières de tours Codex des **codeurs** : `R/telemetry/turns-<uuid>.jsonl`
+(répertoire 0700, fichier 0600, ouvert `O_APPEND|O_NOFOLLOW|O_CREAT`,
+verrou exclusif, `fsync` par enregistrement). Le fichier n'est créé qu'au
+premier enregistrement : une passe sans tour modèle ne laisse rien. Le nom
+du fichier et ses compteurs figurent dans la sortie JSON de la passe
+(`telemetry`).
+
+Chemin, du code hors roster vers le code du roster, sans import inverse :
+`development_queue_slots` (hors roster) crée le journal et passe un
+enregistreur par emplacement à `DevelopmentQueueAdmission.tick(turn_event=…)`,
+qui le pose sur `ContinuationPoolService.turn_event`, puis
+`_Generation.open_worker` sur `DevelopmentBoardWorker.turn_event`. Le Worker
+le transmet à `DevelopmentPlanner(_turn_event=…)` seulement s'il est posé,
+et le planificateur l'attache à `execute_turn(on_turn_event=…)` avec l'ID de
+ticket de sa portée et le `request_id` du pas courant.
+`turn_telemetry.py` reste hors de `LINUX_EXECUTION_SOURCES` et aucun module du
+roster ne l'importe. Les tours du reviewer (`review_pool`) ne sont pas encore
+raccordés ; le schéma réserve `reviewer`/`planner`.
+
+`execute_turn` n'appelle le rappel que sur des faits validés, avec un
+dictionnaire fermé `{kind, wall, monotonic, session_id}` :
+`process_started` (après `on_started`, avant tout octet du prompt),
+`thread.started` (session validée), `turn.started`, le terminal
+(`turn.completed`, `turn.failed`, `error`) et `cleanup_confirmed` ou
+`cleanup_failed` après l'arrêt du groupe. Aucun texte du modèle, prompt,
+raisonnement, argument, message d'erreur ou secret n'y passe. Un événement
+mal formé, dupliqué ou hors ordre est refusé par le flux existant et n'est
+jamais signalé.
+
+Échec : **fermé**. Si le rappel lève (refus, journal plein, disque plein,
+écriture courte, fichier non sûr), `execute_turn` suit la sémantique
+existante des rappels : arrêt du groupe de processus, tour `blocked` avec
+`callback_failed`. `RunStore` garde un tour lancé et non réglé comme
+`uncertain` et passe le travail en `needs_review` ; la même requête renvoie
+ensuite son résultat en cache sans relancer le transport. Une télémétrie
+défaillante ne peut donc ni rendre un tour incertain réussi, ni rejouer son
+appel. Seule exception : sur un terminal `error`/`turn.failed` hors mode
+`provider_disposition`, le tour échoue déjà ; sa catégorie d'erreur est
+conservée au lieu d'être remplacée par `callback_failed`. Après une écriture
+ratée, le journal refuse tout nouvel enregistrement (`turn_telemetry_unavailable`)
+: on n'ajoute jamais après une queue déchirée ou non synchronisée.
+
+Bornes : 1 024 octets par enregistrement, 16 384 enregistrements et 8 Mio
+par fichier. Un nouveau tour (`process_started`) n'est admis que s'il reste
+256 enregistrements de réserve pour les tours déjà commencés ; sinon le
+journal écrit une fois un marqueur `journal_full` et refuse explicitement
+(`turn_telemetry_full`), avant tout envoi de prompt.
+
+Lecture : `read_journal` (borné, sans réparation, signale une queue
+déchirée) et `turns` (intervalles par tour). Un tour n'est `completed` que
+s'il a exactement un terminal `turn.completed`, un `turn.started` et un
+`cleanup_confirmed`, sans doublon ; un terminal d'échec donne `failed` ;
+tout le reste (terminal absent, processus tué, nettoyage non confirmé) reste
+`uncertain`. Une reprise peut ajouter `correlate(seq, raison)` qui référence
+un enregistrement antérieur ; elle ne fabrique jamais de terminal.
+
+Les horloges monotones ne se comparent qu'au sein d'un même processus
+(`pid` est enregistré) ; toutes les places d'une passe tournent dans le même
+processus. L'intervalle `turn.started` → terminal reste un tour Codex, pas
+un appel HTTP isolé.
+
 ## Sélection explicite
 
 Le nouveau fichier, propriétaire et privé comme les deux fichiers du
