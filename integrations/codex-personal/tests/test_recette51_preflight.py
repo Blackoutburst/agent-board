@@ -12,6 +12,9 @@ import sys
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_queue_slots import slots  # noqa: E402,F401  The real slots-pass fixture.
+
 SCRIPT = Path(__file__).resolve().parents[1] / 'recette51' / 'preflight_76.py'
 KEY = 'a' * 64
 OTHER_KEY = 'b' * 64
@@ -203,3 +206,129 @@ def test_script_is_standard_library_only():
     assert 'blackoutburst_agents' not in source
     imports = {line.split()[1] for line in source.splitlines() if line.startswith(('import ', 'from '))}
     assert imports <= {'argparse', 'hashlib', 'json', 'os', 're', 'stat', 'sys'}
+
+
+# Composition with the real slots layout: `QueueSlotsService.run_once` (with the
+# simulated Board/Core of test_queue_slots) runs `reconcile_inventory`, which
+# writes R/slots/inventory.json next to the slot directories.
+
+def _slots_root(slots, held=False):
+    for name in ('a', 'b'):
+        slots.slot(name, ['repo:' + name])
+    if held:
+        slots.board.add('t-b', 'coder-b', 'repo:b')
+    slots.service(slots.configure(2, ['a', 'b'])).run_once()
+    root = slots.root
+    assert (root / 'slots' / 'inventory.json').is_file()
+    config = root / 'config'
+    document(config / 'continuation.json', b'{"schema":"slots-in-use"}')
+    document(config / 'continuation.pre51.json', b'{"schema":"single-standing"}')
+    return root
+
+
+def _inventory(root):
+    return root / 'slots' / 'inventory.json'
+
+
+def test_real_slots_layout_with_inventory_passes_read_only_and_apply(slots):
+    root = _slots_root(slots)
+    inventory = _inventory(root).read_bytes()
+    assert json.loads(inventory)['schema'] == 'linux-cloud-queue-slots-inventory-v1'
+    before = snapshot(root)
+    result = run(root)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == 'slots/inventory.json sha256=' + hashlib.sha256(inventory).hexdigest()
+    assert lines[-1] == 'pointers=2 all_idle=True'
+    assert [line.split()[0].split('/')[:2] for line in lines[1:-1]] == [['slots', 'a'], ['slots', 'b']]
+    assert 'coder-a' not in result.stdout + result.stderr and 'repo:a' not in result.stdout + result.stderr
+    assert snapshot(root) == before
+    applied = run(root, '--apply')
+    assert applied.returncode == 0, applied.stderr
+    assert applied.stdout.splitlines()[-1].startswith('continuation.json old_sha256=')
+    after = snapshot(root)
+    assert {name for name in set(before) | set(after) if before.get(name) != after.get(name)} == {
+        'config', 'config/continuation.json'}
+    assert _inventory(root).read_bytes() == inventory
+    assert (root / 'config' / 'continuation.json').read_bytes() == b'{"schema":"single-standing"}'
+
+
+def test_real_slots_layout_with_held_work_is_not_idle_and_apply_writes_nothing(slots):
+    root = _slots_root(slots, held=True)
+    before = snapshot(root)
+    for extra in ((), ('--apply',)):
+        result = run(root, *extra)
+        assert result.returncode == 1, result.stderr
+        assert 'all_idle=False' in result.stdout and 'old_sha256' not in result.stdout
+    assert snapshot(root) == before
+
+
+def _directory(path):
+    path.unlink(); directory(path)
+
+
+def _symlink(path):
+    target = path.parent.parent / 'config' / 'inventory-copy.json'
+    document(target, path.read_bytes()); path.unlink(); os.symlink(target, path)
+
+
+def _rewrite(change):
+    def apply(path):
+        value = json.loads(path.read_bytes()); change(value); document(path, canonical(value))
+    return apply
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+
+
+def _first(value):
+    return value['slots'][sorted(value['slots'])[0]]
+
+
+INVALID_INVENTORIES = {
+    'directory': _directory,
+    'symlink': _symlink,
+    'second_link': lambda path: os.link(path, path.parent.parent / 'config' / 'inventory-link'),
+    'mode_0644': lambda path: path.chmod(0o644),
+    'mode_0400': lambda path: path.chmod(0o400),
+    'oversize': lambda path: document(path, b' ' * (512 * 1024 + 1)),
+    'fifo': lambda path: (path.unlink(), os.mkfifo(path, 0o600)),
+    'invalid_json': lambda path: document(path, b'{"schema":'),
+    'duplicate_key': lambda path: document(path, b'{"schema":"x","schema":"linux-cloud-queue-slots-inventory-v1",'
+                                                 b'"slots":{}}'),
+    'wrong_schema': _rewrite(lambda value: value.update(schema='linux-cloud-queue-slots-inventory-v2')),
+    'extra_top_field': _rewrite(lambda value: value.update(note='x')),
+    'slots_not_object': _rewrite(lambda value: value.update(slots=[])),
+    'bad_slot_name': _rewrite(lambda value: value['slots'].update({'bad name': _first(value)})),
+    'missing_binding_field': _rewrite(lambda value: _first(value).pop('approval_sha256')),
+    'extra_binding_field': _rewrite(lambda value: _first(value).update(model='x')),
+    'bad_digest': _rewrite(lambda value: _first(value).update(catalog_sha256='A' * 64)),
+    'bad_agent_id': _rewrite(lambda value: _first(value).update(agent_id='-bad')),
+    'unsorted_resources': _rewrite(lambda value: _first(value).update(resources=['z', 'a'])),
+    'duplicate_resources': _rewrite(lambda value: _first(value).update(resources=['a', 'a'])),
+    'non_string_resource': _rewrite(lambda value: _first(value).update(resources=[1])),
+    'not_canonical': lambda path: document(path, json.dumps(json.loads(path.read_bytes()), indent=1).encode()),
+}
+
+
+@pytest.mark.parametrize('case', sorted(INVALID_INVENTORIES))
+def test_an_invalid_inventory_refuses_both_modes_and_writes_nothing(slots, case):
+    root = _slots_root(slots)
+    INVALID_INVENTORIES[case](_inventory(root))
+    before = snapshot(root)
+    for extra in ((), ('--apply',)):
+        result = run(root, *extra)
+        assert result.returncode == 2, (case, result.stdout, result.stderr)
+        assert 'refused' in result.stderr and 'slots/inventory.json' in result.stderr
+        assert 'coder-' not in result.stderr + result.stdout and 'repo:' not in result.stderr + result.stdout
+        assert 'old_sha256' not in result.stdout
+    assert snapshot(root) == before
+    assert (root / 'config' / 'continuation.json').read_bytes() == b'{"schema":"slots-in-use"}'
+
+
+def test_only_the_exact_inventory_name_is_a_file_exception(slots):
+    root = _slots_root(slots)
+    document(root / 'slots' / 'inventory.json.bak', _inventory(root).read_bytes())
+    result = run(root)
+    assert result.returncode == 2 and 'not a directory: slots/inventory.json.bak' in result.stderr

@@ -10,9 +10,15 @@ link, every R/slots/<slot>/admissions/queue-<key>/tick.json and every
 R/admissions/queue-<key>/tick.json. Each directory on those paths must be a
 real directory owned by the effective UID with mode 0700; each tick.json a
 regular, single-link 0600 file owned by the effective UID. Any symlink,
-unexpected entry or other type refuses. It prints only the relative path,
-`phase` and whether `active` is null, and exits 0 only if every pointer is
-`idle` with `active` null.
+unexpected entry or other type refuses. The single non-slot entry accepted
+under R/slots is the inventory that `reconcile_inventory` writes,
+R/slots/inventory.json: a private regular single-link 0600 file owned by the
+effective UID, at most 512 KiB, whose bytes are exactly the canonical JSON of
+{"schema": "linux-cloud-queue-slots-inventory-v1", "slots": {<slot>: {
+"agent_id", "catalog_sha256", "approval_sha256", "resources"}}}. Only its
+sha256 is printed. It prints only the relative path, `phase` and whether
+`active` is null, and exits 0 only if every pointer is `idle` with `active`
+null.
 
 With --apply it repeats the same check and, only if it passes, requires
 R/config/continuation.pre51.json to be a private regular file with one link,
@@ -38,6 +44,11 @@ QUEUE = re.compile(r'queue-[0-9a-f]{64}')
 REQUEST = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 PHASE = re.compile(r'[a-z_]{1,32}')
 QUEUE_ENTRIES = frozenset({'tick.json', 'tick.lock'})
+INVENTORY = 'inventory.json'
+INVENTORY_SCHEMA = 'linux-cloud-queue-slots-inventory-v1'
+BINDING_FIELDS = frozenset({'agent_id', 'catalog_sha256', 'approval_sha256', 'resources'})
+OPAQUE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}')
+SHA256 = re.compile(r'[0-9a-f]{64}')
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -133,6 +144,39 @@ def pointer(name, parent, path):
     return phase, value['active'] is None
 
 
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+                      allow_nan=False).encode('utf-8')
+
+
+def inventory(parent):
+    """R/slots/inventory.json exactly as reconcile_inventory writes it; its sha256."""
+    path = 'slots/' + INVENTORY
+    data = read_private(INVENTORY, parent, path)
+    try:
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=unique,
+                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError('constant')))
+    except (UnicodeError, ValueError, RecursionError):
+        refuse('invalid document', path)
+    if (type(value) is not dict or set(value) != {'schema', 'slots'} or value['schema'] != INVENTORY_SCHEMA
+            or type(value['slots']) is not dict):
+        refuse('not a slots inventory', path)
+    for name, binding in value['slots'].items():
+        if not SLOT.fullmatch(name) or type(binding) is not dict or set(binding) != BINDING_FIELDS:
+            refuse('not a slots inventory', path)
+        resources = binding['resources']
+        if (type(binding['agent_id']) is not str or not OPAQUE.fullmatch(binding['agent_id'])
+                or any(type(binding[key]) is not str or not SHA256.fullmatch(binding[key])
+                       for key in ('catalog_sha256', 'approval_sha256'))
+                or type(resources) is not list
+                or any(type(item) is not str or not item or len(item) > 512 for item in resources)
+                or resources != sorted(set(resources))):
+            refuse('not a slots inventory', path)
+    if canonical(value) != data:
+        refuse('not canonical', path)
+    return hashlib.sha256(data).hexdigest()
+
+
 def entries(fd, path):
     try:
         return sorted(os.listdir(fd))
@@ -186,16 +230,20 @@ def root_fd(root):
     return fd
 
 
-def scan(root):
+def scan(root, found=None):
     """Every pointer row as (relative path, phase, active is None)."""
     fd = root_fd(root)
     rows = []
+    found = {} if found is None else found
     try:
         admissions(fd, '', rows)
         slots = open_directory('slots', 'slots', fd)
         if slots is not None:
             try:
                 for slot in entries(slots, 'slots'):
+                    if slot == INVENTORY:
+                        found['inventory'] = inventory(slots)
+                        continue
                     if not SLOT.fullmatch(slot):
                         refuse('unexpected entry', 'slots/' + slot)
                     slot_fd = open_directory(slot, 'slots/' + slot, slots)
@@ -267,7 +315,10 @@ def main(argv=None):
     except SystemExit as error:
         return 2 if error.code else 0
     try:
-        rows = scan(arguments.root)
+        found = {}
+        rows = scan(arguments.root, found)
+        if 'inventory' in found:
+            print('slots/%s sha256=%s' % (INVENTORY, found['inventory']))
         for path, phase, active_none in rows:
             print('%s phase=%s active_is_none=%s' % (path, phase, active_none))
         ready = all(phase == 'idle' and active_none for _, phase, active_none in rows)

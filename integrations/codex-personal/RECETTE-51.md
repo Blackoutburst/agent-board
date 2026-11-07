@@ -480,9 +480,17 @@ changement arrête la passe (`continuation_pool_configuration_changed`).
      lien **tous** les pointeurs `R/slots/*/admissions/queue-*/tick.json`
      **et** `R/admissions/queue-*/tick.json`. Chaque répertoire du chemin doit
      appartenir à l'UID effectif en 0700, chaque `tick.json` (et `tick.lock`)
-     être un fichier régulier 0600 à lien unique. Tout lien symbolique, toute
-     entrée inattendue (par exemple un `write-*` résiduel) ou tout autre type
-     refuse (code 2). Il n'affiche que le chemin relatif, `phase` et
+     être un fichier régulier 0600 à lien unique. Sous `R/slots`, la seule
+     entrée qui n'est pas un emplacement est l'inventaire qu'écrit
+     `reconcile_inventory`, `R/slots/inventory.json` : fichier régulier 0600
+     à lien unique de l'UID effectif, au plus 512 Kio, dont les octets sont
+     exactement le JSON canonique du schéma
+     `linux-cloud-queue-slots-inventory-v1` (`slots` : nom → `agent_id`,
+     `catalog_sha256`, `approval_sha256`, `resources` triées). Il est lu,
+     jamais modifié, et seul son sha256 est affiché. Tout lien symbolique,
+     toute autre entrée inattendue (par exemple un `write-*` résiduel, un
+     répertoire nommé `inventory.json`) ou tout autre type refuse (code 2).
+     Il n'affiche que ce sha256, le chemin relatif, `phase` et
      `active_is_none`, puis `pointers=N all_idle=…`. Il sort en 0 seulement
      si tous sont `idle` avec `active` nul, sinon en 1. Avec `--apply`, il
      refait le même relevé, puis exige `config/continuation.pre51.json`
