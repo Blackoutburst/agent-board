@@ -144,8 +144,8 @@ done
 
 - Source : branche `claude/t51-parallel-slots`, empilée sur la PR #98
   (`2d067f33f7f471adcc9c3a78027f1dd7d0526c49`). Tête de code empaquetée :
-  `92a96a8dad125dcbc6ea36f5f25653b98d963edc` (emplacements, télémétrie des
-  tours codeur, script de prévol §7.6). Un commit qui ne touche que la
+  `3e27fcdbfdb2d702647204c4ad9568f82c8e1e95` (emplacements, télémétrie des
+  tours codeur, script de prévol §7.6 corrigé pour `slots/inventory.json`). Un commit qui ne touche que la
   documentation ne modifie aucun fichier empaqueté, mais il change
   `revision`, donc l'identifiant du bundle. **Préparer depuis la tête de code
   revue et noter son SHA.**
@@ -163,7 +163,7 @@ done
 Préparation hors ligne, non root, sous l'utilisateur ubuntu :
 
 ```sh
-HEAD_SHA=92a96a8dad125dcbc6ea36f5f25653b98d963edc   # tête de code ; voir « Valeurs produites » ci-dessous
+HEAD_SHA=3e27fcdbfdb2d702647204c4ad9568f82c8e1e95   # tête de code ; voir « Valeurs produites » ci-dessous
 CAND=/home/ubuntu/agent-pool-candidates/t51-slots-${HEAD_SHA:0:8}-2026110X
 install -d -m 0700 "$CAND"
 git clone --no-hardlinks /home/ubuntu/src/ab-wt51 "$CAND/source"
@@ -202,7 +202,7 @@ les sha256 ci-dessus. Le Lead consigne `NEW_BUNDLE_ID` avant tout sudo.
 **Valeurs produites (préparation à blanc, non root, 7 novembre 2026).**
 Construites par l'agent serveur sous ubuntu, entièrement dans son
 répertoire temporaire, depuis un clone de `ab-wt51` détaché sur
-`92a96a8dad125dcbc6ea36f5f25653b98d963edc`, sans lire `/opt`, `/var/lib`, ni
+`3e27fcdbfdb2d702647204c4ad9568f82c8e1e95`, sans lire `/opt`, `/var/lib`, ni
 aucune racine privée. Seule différence avec la procédure ci-dessus : les
 chemins `codex`/`bwrap`/`gh` du spec pointaient vers les copies du bundle
 candidat 0.49.1
@@ -211,12 +211,12 @@ dont le `manifest_id` vaut exactement `PREV` (`66cce933…f23be`) et dont les
 sha256 d'outils sont vérifiés contre ce manifeste. Le reste du spec est
 identique (mêmes valeurs que ci-dessus).
 
-- tête source (`revision`) : `92a96a8dad125dcbc6ea36f5f25653b98d963edc` ;
+- tête source (`revision`) : `3e27fcdbfdb2d702647204c4ad9568f82c8e1e95` ;
 - `adapter_version` : `0.50.0` ; codex `0.163.0`, gh `2.94.0`, python
   `/usr/bin/python3.10` `a2f33a6e…fc56ae` ;
 - `bundle_id` affiché par `prepare` et `plan` = sha256 de
   `bundle/manifest.json` :
-  `894824aa7b1aee9fdbd6ccf7f1309714a6edd38abeba52426a96eef8d473a1bb` ;
+  `f324f316e2e2b2fcc5822d06daaf4cc3d301593cb413d5c8993fb0f914c5096a` ;
 - 166 fichiers ; outils : `tools/codex`
   `399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215`,
   `tools/codex-resources/bwrap`
@@ -232,13 +232,22 @@ identique (mêmes valeurs que ci-dessus).
 
 Le commit qui consigne ces valeurs ne touche que ce document et
 `SOURCE-MANIFEST.json`, qui ne sont pas empaquetés, mais il change la tête.
-Préparer donc **depuis `92a96a8…`** (le `checkout --detach` ci-dessus), pas
+Préparer donc **depuis `3e27fcd…`** (le `checkout --detach` ci-dessus), pas
 depuis la tête de la branche, pour retrouver ce `bundle_id`.
+
+**Remplacé :** le `bundle_id` `894824aa7b1aee9fdbd6ccf7f1309714a6edd38abeba52426a96eef8d473a1bb`
+consigné auparavant venait de `92a96a8…`, dont le prévol §7.6 refusait la
+disposition réelle (`slots/inventory.json`). Il est caduc : ne jamais le
+présenter comme contenant le script corrigé, ni l'installer. Entre les deux
+préparations, seul `revision` change dans `manifest.json` (mêmes 166
+fichiers, mêmes sha256) : le script de prévol n'est pas dans le bundle,
+l'humain l'installe depuis `$CAND/source` détaché sur `$HEAD_SHA` (§7.6),
+d'où l'importance de cette tête.
 
 `NEW_BUNDLE_ID=<<À_REMPLIR>>` : à consigner par le Lead après que l'opérateur
 a refait `prepare` + `plan` avec le spec ci-dessus (outils lus dans la
 release active `/opt/…/66cce933…`) et obtenu le même `bundle_id`
-`894824aa…a1bb`. Une valeur différente veut dire que les outils installés
+`f324f316…5096a`. Une valeur différente veut dire que les outils installés
 diffèrent du bundle 0.49.1 : arrêter et comparer les sha256 d'outils.
 
 ## 5. Documents à créer (propriétaire 0600, aucun lien dur ni symbolique)
