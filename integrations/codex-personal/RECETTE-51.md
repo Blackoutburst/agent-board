@@ -37,8 +37,8 @@ Contraintes reprises du Lead :
 - La preuve, ce sont les intervalles horaires de quatre appels modèle
   effectifs qui se chevauchent, sur des tickets et des racines distincts, avec
   versions et plafonds exacts, puis l'arrêt et le nettoyage. Quatre profils en
-  ligne ou quatre PR ne prouvent rien. Voir 8.1 : en l'état du backend, ce
-  critère n'est pas acquérable sans la télémétrie de 8.2.
+  ligne ou quatre PR ne prouvent rien. La preuve s'appuie sur la télémétrie
+  des tours codeur de 8.2 (tours Codex, pas appels HTTP).
 - Les états actifs (`admitting`, `active`, en pause, `needs_you`) restent
   comptés dans le plafond. C'est le comportement du code :
   `_Scheduler.holders` compte tout pointeur `tick.json` non idle.
@@ -469,7 +469,8 @@ prouvent pas** des appels modèle simultanés : un processus vivant peut
 attendre, lancer des outils ou être en revue. Ils ne servent qu'aux mesures
 de ressources et à la corroboration.
 
-Ce que le backend installé rend observable, d'après le code :
+Ce que le backend installé (release 0.49.1) rend observable, d'après le code,
+sans la télémétrie de 8.2 :
 
 - chaque tour passe par `codex_turn.execute_turn` : un processus
   `codex exec --json` par tour, sans outil (tout item autre que
@@ -484,40 +485,61 @@ Ce que le backend installé rend observable, d'après le code :
 - aucune frontière d'appel HTTP au fournisseur n'est exposée par Codex
   0.163.0 à l'adaptateur.
 
-**Conséquence : en l'état, le critère « quatre appels modèle simultanés »
-n'est pas acquérable.** La recette ne pourra publier que des chevauchements
-de **tours** (au mieux) ou d'enveloppes de processus, en le disant
-exactement, et le critère « appels modèle » reste **non acquis**.
+Sans télémétrie dédiée, le critère « quatre appels modèle simultanés »
+n'est pas acquérable : la recette ne pourrait publier que des
+chevauchements d'enveloppes de processus.
 
-### 8.2 Télémétrie bornée requise pour viser le critère des tours
+### 8.2 Télémétrie bornée des tours codeur (implémentée, schéma `turn-telemetry-v2`)
 
-Avant la passe 4 (et idéalement avant la passe 2), un changement de code
-revu, dans un nouveau paquet, ajouterait dans `execute_turn` un
-enregistrement borné, en ajout seul :
+Livrée sur la branche #51 (`d629cef`, `72d3519`, `fa9e5ca`, revue du Lead
+favorable pour PR brouillon) ; détails et garanties de chaque couche dans
+`CONTINUATION.md`, sections « Télémétrie bornée des tours (#51) » et
+« Commentaires déplacés hors du roster natif (#51) ».
 
-- champs : opération (codeur/reviewer/planificateur), ID de ticket, profil
-  (`agent_id`), emplacement, `provider_session_id`, `request_id` ;
-- horodatages muraux et monotones de : lancement du processus, réception de
-  `turn.started`, réception de `turn.completed` (ou `turn.failed`/`error`/
-  timeout/annulation), sortie du processus et confirmation du nettoyage ;
-- résultat : `completed`, `failed`, `uncertain` (aucun terminal reçu,
-  processus tué, nettoyage non confirmé) ; un résultat incertain est
-  **conservé** tel quel, jamais réécrit ;
-- **aucun** prompt, réponse, raisonnement, argument de commande, chemin
-  d'authentification ou secret ; taille de chaque enregistrement bornée.
-
-Même alors, l'intervalle `turn.started` → `turn.completed` reste un **tour**
-Codex (inférence plus surcoût interne de Codex), pas un appel HTTP isolé.
-Le rapport l'écrira ainsi.
+- Journal : `R/telemetry/turns-<uuid>.jsonl`, un par passe d'emplacements,
+  privé (0700/0600), en ajout seul, `fsync` par enregistrement, schéma fermé,
+  taille et nombre d'enregistrements bornés. Aucun prompt, réponse,
+  raisonnement, argument, message d'erreur ni secret.
+- Faits enregistrés par tour : `process_started`, `thread.started`,
+  `turn.started`, le terminal (`turn.completed` / `turn.failed` / `error`),
+  `cleanup_confirmed` ou `cleanup_failed` avec la **classe** de sortie
+  (`zero`, `nonzero`, `signal`, `unknown`), puis un fait `result` fermé
+  (statut, raison, session validée et les cinq booléens de vérification de
+  `execute_turn`). Liaison : opération, ticket, `agent_id`, emplacement,
+  `request_id`, pid, session.
+- **Seuls les tours codeur** sont observés. Les tours reviewer
+  (`review_pool`) et `team_role_pool` ne le sont pas ; le critère des quatre
+  codeurs n'en a pas besoin.
+- **Résultat final requis** : `turns()` ne déclare `completed` que pour la
+  séquence exacte, avec une sortie `zero` et un `result` accepté par
+  `execute_turn` (cinq booléens vrais), une identité constante et des temps
+  monotones non décroissants. Un terminal reçu suivi d'un résultat refusé
+  donne `failed`. Tout le reste (processus tué, sortie inconnue, nettoyage
+  non confirmé, fait manquant, ordre ou identité incohérents) donne
+  `uncertain`, jamais `completed`.
+- Échec du journal : fermé (fail-closed). Le tour passe en `blocked` /
+  `callback_failed`, puis la work en `needs_review` ; aucun rejeu, aucun
+  succès fabriqué. Journal plein : refus avant prompt (`turn_telemetry_full`).
+  Un disque ou un journal plein bloque donc les emplacements au lieu de les
+  laisser tourner sans mesure.
+- Portée : l'intervalle `turn.started` → terminal est un **tour Codex**
+  (inférence plus surcoût interne du CLI), pas un appel HTTP isolé. Le
+  rapport le dira ainsi ; aucune interception réseau.
+- **Qualification native encore à faire.** Ces commits changent les sha de
+  modules du roster natif (`codex_turn.py`, `dev_planner.py`,
+  `development_worker.py`, `continuation_pool_service.py`,
+  `development_queue.py`). Le paquet final doit être requalifié avec des
+  sources et des pins frais, par l'opérateur humain autorisé, avant toute
+  passe. Aucun paquet ni aucune qualification ne sont pré-acceptés.
 
 ### 8.3 Critère et recoupement
 
-Critère publiable de la passe 4, si 8.2 est livré : quatre intervalles
-`turn.started` → terminal de **tours codeur**, sur quatre emplacements,
-quatre tickets et quatre racines distincts, avec max(début) < min(fin), et
-aucun résultat `uncertain` dans la fenêtre. Passe 2 : même critère avec deux
-intervalles. Sans 8.2, seuls les chevauchements d'enveloppes sont publiés,
-étiquetés comme tels, et le critère reste non acquis.
+Critère de la passe 4 : quatre tours codeur `completed` au sens de
+`turns()`, sur quatre emplacements, quatre tickets et quatre racines
+distincts, dont les intervalles `turn.started` → `turn.completed` (temps
+muraux) vérifient max(début) < min(fin), et aucun tour `uncertain` dans la
+fenêtre. Passe 2 : même critère avec deux tours. Un tour `failed` ou
+`uncertain` ne compte pas ; il est publié tel quel.
 
 Recoupement (corroboration, pas preuve) :
 
@@ -555,6 +577,8 @@ Ces chiffres servent à décider des plafonds de la passe 4 (section 6).
   `.codex` partagé, ou `paused_quota` sur le compte de TheScreamer. On s'arrête
   et on consigne, sans modifier l'auth.
 - Une exécution Runtime ou un claim incertain sur le Board.
+- Télémétrie : `turn_telemetry_full`, échec d'écriture du journal
+  (`callback_failed`), ou un tour codeur `uncertain` dans `turns()`.
 
 ## 10. Nettoyage
 
