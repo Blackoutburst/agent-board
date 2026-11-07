@@ -656,10 +656,7 @@ class DevelopmentPlanner:
             self._fresh(state, ACTION_NAMES[action['kind']])
             if guard.should_cancel():
                 raise DevelopmentError('planner_runtime_stopped')
-            # Linux's concrete execution context applies the original backend
-            # authority at every boundary. Preserve its producer identity so a
-            # shared grant can prove both actions in one fresh SOURCE frame.
-            # Schema 1 keeps its existing composed backend guard.
+            # Linux keeps the original backend producer; schema 1 its composed guard.
             if original_backend is not None and not self.broker.journal._linux_execution_profile:
                 backend.authorize_scope = self._broker_authorize if original_backend is self._base_authorize else (
                     lambda scope, action, resource: original_backend(scope, action, resource) is True and

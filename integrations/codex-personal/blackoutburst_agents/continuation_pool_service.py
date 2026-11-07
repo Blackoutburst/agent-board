@@ -55,8 +55,7 @@ REASONS=frozenset({'','continuation_pool_configuration_changed','continuation_po
 PERMISSION_FAILURES=frozenset({'development_grants_unavailable','development_ticket_unavailable',
     'development_registration_mismatch'})
 
-# Closed public error producers, frozen at development time. The provenance
-# test scans public source; no source or owner file is read to classify a failure.
+# Closed public error producers, frozen at development time.
 TARGET_FAILURE_CODES=frozenset({
     'abandonment_conflict', 'absent', 'action_not_allowed', 'aggregate_review_attachment_uncertain',
     'aggregate_review_command_refused', 'aggregate_review_concrete_source_required',
@@ -691,9 +690,7 @@ class _Pass:
         for pool in pools:
             try:pool.stop()
             except Exception:self.stop_failed=True
-        # Identical to the existing concrete stop companion: only metadata
-        # crosses threads. A fresh journal handle writes the normal immutable
-        # Stop markers; no Runtime is finished or claim released by inference.
+        # As the concrete stop companion: only metadata crosses threads.
         from .work_journal import WorkJournal,JournalError
         from .development_worker import DevelopmentBoardWorker
         for directory,pin,db_pin,operation,scope in workers:
@@ -1025,9 +1022,7 @@ class ContinuationPoolService:
             if cursor['not_before'] is not None:
                 require(type(cursor['not_before']) in (int,float) and cursor['not_before']>0)
                 if now<cursor['not_before']:
-                    # Stop remains visible during a long provider backoff.
-                    # Historical Core metadata creates neither a permit nor
-                    # a Worker/client and cannot admit any execution.
+                    # Stop stays visible during backoff; old metadata admits nothing.
                     with ContinuationJournal.open(directory/'logical') as journal:
                         observed=journal.snapshot()
                         if observed['state']['phase'] in ('stopped','needs_you','complete'):
@@ -1097,9 +1092,7 @@ class ContinuationPoolService:
                             next_operation_id=new.operation,parameters=new.arguments,
                             request_id='continuation-'+new.operation,after_actions=target['checkpoint_after_actions'])
                         if result['status']=='paused_provider' and new.task.snapshot()==paused:
-                            # No new cycle was admitted. Keep the failed source
-                            # generation, plus this exact candidate for a fresh
-                            # normal wake; never orphan a prepared_waiting intent.
+                            # Nothing admitted: keep source + candidate for a fresh wake.
                             control.guard()
                             finished=time.time();require(type(finished) in (int,float) and finished>=now,
                                 'continuation_pool_clock_changed')
@@ -1153,10 +1146,7 @@ class ContinuationPoolService:
                     _write(private,'cursor.json',completed,replace=True)
                     return projection
                 except Exception as error:
-                    # The own running generation becomes NeedsYou with actual
-                    # counters. This creates no accepted checkpoint or cleanup.
-                    # An already sealed code completion is not reopened merely
-                    # because a later publication/handoff is uncertain.
+                    # NeedsYou with actual counters; no checkpoint/cleanup inferred.
                     if type(new.task) is ContinuationTask and new.provider is not None:
                         try:
                             current=new.task.snapshot()
@@ -1215,9 +1205,7 @@ class _LiveChecks:
     def source(self,context):
         op=self.operation();w=self.g.worker;self.g.workspaces._roots()
         self.g.service._pins(full=True)
-        # These readers take no broker/planner lock. Control can be called
-        # while the ordinary SDK holds them during a confirmed action.
-        # Their own source/test/permission guards continue to run unchanged.
+        # Lock-free readers; their own guards still run.
         bound=self.g.driver.selections.load(self.g.context)
         self.g.driver._operation(w,self.g.context,bound)
     def fence(self,context):
@@ -1382,9 +1370,7 @@ class _Generation:
                 require((current['state']=='queued' and not current['stop_requested']) or
                     (current['state']=='cancelled' and current['stop_requested'] is True
                         and current['reason']=='stop_before_dispatch' and current['execution_active'] is False))
-                # Historical stopped preparation metadata stays stopped. It
-                # grants nothing; clean Core/checkpoint/retirement + Runtime
-                # proofs must still pass before a NEW queued generation.
+                # Stopped preparation metadata stays stopped; it grants nothing.
         self.operation=self.submitted['id']
         _observe_identity(self.generation,self.operation)
         self.context=self.pool._context(self.submitted if create else deepcopy(current),create=create)

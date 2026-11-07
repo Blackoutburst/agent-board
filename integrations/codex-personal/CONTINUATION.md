@@ -351,3 +351,45 @@ publication rassemble les modifications depuis la base publique d'origine,
 puis une revue distincte doit viser cette publication exacte. Une preuve de
 code terminé ou un passage du service réussi ne signifie ni projet terminé,
 ni revue approuvée, ni PR fusionnée.
+
+## Commentaires déplacés hors du roster natif (#51)
+
+Les modules de `LINUX_EXECUTION_SOURCES` partagent un plafond de 2 Mio
+(`family_sources.controller_sources`). Pour faire de la place à la
+télémétrie bornée des tours (#51) sans toucher au plafond ni à la
+composition du roster, ces commentaires ont été raccourcis dans le code ; le
+code exécutable est inchangé (AST identique). Leur texte complet reste ici.
+
+`continuation_pool_service.py` :
+
+- `TARGET_FAILURE_CODES` : *Closed public error producers, frozen at
+  development time. The provenance test scans public source; no source or
+  owner file is read to classify a failure.*
+- `_Pass.stop`, avant le compagnon d'arrêt : *Identical to the existing
+  concrete stop companion: only metadata crosses threads. A fresh journal
+  handle writes the normal immutable Stop markers; no Runtime is finished or
+  claim released by inference.*
+- `_target`, attente `not_before` : *Stop remains visible during a long
+  provider backoff. Historical Core metadata creates neither a permit nor a
+  Worker/client and cannot admit any execution.*
+- `_target`, `paused_provider` inchangé : *No new cycle was admitted. Keep
+  the failed source generation, plus this exact candidate for a fresh normal
+  wake; never orphan a prepared_waiting intent.*
+- `_target`, échec de la génération courante : *The own running generation
+  becomes NeedsYou with actual counters. This creates no accepted checkpoint
+  or cleanup. An already sealed code completion is not reopened merely
+  because a later publication/handoff is uncertain.*
+- `_LiveChecks`, lecteurs : *These readers take no broker/planner lock.
+  Control can be called while the ordinary SDK holds them during a confirmed
+  action. Their own source/test/permission guards continue to run
+  unchanged.*
+- `_Generation._pool`, réouverture : *Historical stopped preparation metadata
+  stays stopped. It grants nothing; clean Core/checkpoint/retirement +
+  Runtime proofs must still pass before a NEW queued generation.*
+
+`dev_planner.py` :
+
+- `_tool`, garde du backend : *Linux's concrete execution context applies
+  the original backend authority at every boundary. Preserve its producer
+  identity so a shared grant can prove both actions in one fresh SOURCE
+  frame. Schema 1 keeps its existing composed backend guard.*
