@@ -26,6 +26,7 @@ from blackoutburst_agents.runner import PersonalRunner
 from blackoutburst_agents.subscription_probe import ProbeSettings
 
 SESSION = '11111111-2222-4333-8444-555555555555'
+OTHER = '11111111-2222-4333-8444-666666666666'
 PRIVATE = ('Private prompt', 'Final private reply', 'private scratch', 'PRIVATE_ERROR_TEXT')
 PACKAGE = Path(telemetry.__file__).parent
 EVENTS = ('process_started', 'thread.started', 'turn.started', 'turn.completed', 'cleanup_confirmed')
@@ -90,7 +91,8 @@ def test_success_reports_closed_boundaries_without_any_text(cli):
     assert result['status'] == 'completed' and result['text'] == 'Final private reply'
     assert kinds(events) == list(EVENTS)
     for event in events:
-        assert set(event) == {'kind', 'wall', 'monotonic', 'session_id'}
+        assert set(event) == {'kind', 'wall', 'monotonic', 'session_id', 'exit'}
+        assert event['exit'] == (0 if event['kind'] == 'cleanup_confirmed' else None)
         assert type(event['wall']) is float and type(event['monotonic']) is float
     assert events[0]['session_id'] is None
     assert all(event['session_id'] == SESSION for event in events[1:])
@@ -194,14 +196,25 @@ def test_turn_failed_terminal_under_provider_disposition_is_recorded_once(cli):
 
 # Journal --------------------------------------------------------------------
 
-def event(kind, session=SESSION):
+def event(kind, session=SESSION, code=0):
     return {'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(),
-            'session_id': None if kind == 'process_started' else session}
+            'session_id': None if kind == 'process_started' else session,
+            'exit': code if kind in ('cleanup_confirmed', 'cleanup_failed') else None}
 
 
-def turn(record, request='dev-model-1', kinds=EVENTS, ticket='ticket-1'):
+VERIFIED = dict(exit_zero=True, turn_completed=True, session_verified=True, tool_free=True, cleanup_confirmed=True)
+
+
+def outcome(status='completed', reason='verified', session=SESSION, **verification):
+    return {'status': status, 'reason': reason, 'session_id': session, 'text': 'Final private reply',
+            'verification': {**VERIFIED, **verification, 'authentication': 'chatgpt'}}
+
+
+def turn(record, request='dev-model-1', kinds=EVENTS, ticket='ticket-1', result=None):
     for kind in kinds:
         record(event(kind), ticket, request)
+    if result is not None:
+        record.result(result, ticket, request)
 
 
 @pytest.fixture
@@ -225,17 +238,20 @@ def test_journal_is_private_append_only_and_lazy(journal):
     value = journal()
     assert not value.directory.exists()  # Nothing until the first record.
     record = value.recorder(operation='coder', slot='a', agent_id='coder-a')
-    turn(record)
+    turn(record, result=outcome())
     info = os.stat(value.path)
     assert oct(info.st_mode & 0o777) == '0o600' and oct(os.stat(value.directory).st_mode & 0o777) == '0o700'
     records, torn = records_of(value)
-    assert not torn and [r['seq'] for r in records] == [1, 2, 3, 4, 5]
+    assert not torn and [r['seq'] for r in records] == [1, 2, 3, 4, 5, 6]
     assert {r['slot'] for r in records} == {'a'} and {r['operation'] for r in records} == {'coder'}
     assert records[0]['session_id'] is None and records[-1]['session_id'] == SESSION
-    assert all(set(r) == telemetry.TURN_FIELDS for r in records)
+    assert all(set(r) == telemetry.TURN_FIELDS for r in records[:-1])
+    assert set(records[-1]) == telemetry.RESULT_FIELDS and 'Final private reply' not in json.dumps(records)
+    assert records[-1]['verification'] == {name: True for name in telemetry.VERIFICATION}
+    assert records[4]['exit'] == 'zero' and records[3]['exit'] is None
     [summary] = telemetry.turns(records)
     assert summary['outcome'] == 'completed' and summary['ticket_id'] == 'ticket-1'
-    assert value.state() == {'schema': telemetry.SCHEMA, 'file': value.name, 'records': 5,
+    assert value.state() == {'schema': telemetry.SCHEMA, 'file': value.name, 'records': 6,
                              'bytes': info.st_size, 'full': False, 'unavailable': None}
 
 
@@ -338,7 +354,7 @@ def test_concurrent_slot_writers_keep_one_contiguous_ordered_journal(journal):
         try:
             record = value.recorder(operation='coder', slot=name, agent_id='coder-' + name)
             for index in range(20):
-                turn(record, 'dev-model-%d' % index, ticket='ticket-' + name)
+                turn(record, 'dev-model-%d' % index, ticket='ticket-' + name, result=outcome())
         except BaseException as error:  # pragma: no cover - reported below
             errors.append(error)
     threads = [threading.Thread(target=slot, args=('s%d' % i,)) for i in range(8)]
@@ -346,12 +362,12 @@ def test_concurrent_slot_writers_keep_one_contiguous_ordered_journal(journal):
     for thread in threads: thread.join(30)
     assert not errors
     records, torn = records_of(value)
-    assert not torn and [r['seq'] for r in records] == list(range(1, 8 * 20 * 5 + 1))
+    assert not torn and [r['seq'] for r in records] == list(range(1, 8 * 20 * 6 + 1))
     summaries = telemetry.turns(records)
     assert len(summaries) == 160 and {s['outcome'] for s in summaries} == {'completed'}
     for name in ('s%d' % i for i in range(8)):
         mine = [r['kind'] for r in records if r['slot'] == name]
-        assert mine == list(EVENTS) * 20
+        assert mine == (list(EVENTS) + ['result']) * 20
 
 
 CHILD = textwrap.dedent("""
@@ -361,7 +377,7 @@ CHILD = textwrap.dedent("""
     journal = telemetry.TurnTelemetryJournal(directory, journal_id)
     record = journal.recorder(operation='coder', slot='a', agent_id='coder-a')
     def event(kind):
-        return {'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(),
+        return {'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(), 'exit': None,
                 'session_id': None if kind == 'process_started' else '11111111-2222-4333-8444-555555555555'}
     for kind in ('process_started', 'thread.started', 'turn.started'):
         record(event(kind), 'ticket-1', 'dev-model-1')
@@ -388,7 +404,7 @@ def test_crash_before_or_after_a_journal_write_keeps_only_durable_facts(journal,
     expected = ['process_started', 'thread.started', 'turn.started'] + (['turn.completed'] if mode == 'after' else [])
     assert [r['kind'] for r in records] == expected and not torn
     [summary] = telemetry.turns(records)
-    assert summary['outcome'] == 'uncertain'  # No cleanup record: never completed.
+    assert summary['outcome'] == 'uncertain'  # No cleanup or result record: never completed.
     # The restarted writer appends after the durable tail; recovery may only correlate.
     restarted = journal(journal_id)
     seq = restarted.correlate(3, 'recovered_uncertain', wall=time.time())
@@ -412,48 +428,102 @@ def test_correlation_never_invents_a_terminal_or_references_the_future(journal):
 
 def test_duplicate_or_out_of_order_records_never_summarize_as_completed(journal):
     value = journal(); record = value.recorder(operation='coder', slot='a', agent_id='coder-a')
+    done = outcome()
     turn(record, 'dev-model-1', kinds=('process_started', 'thread.started', 'turn.started', 'turn.started',
-                                        'turn.completed', 'cleanup_confirmed'))
-    turn(record, 'dev-model-2', kinds=('process_started', 'thread.started', 'turn.completed', 'cleanup_confirmed'))
+                                        'turn.completed', 'cleanup_confirmed'), result=done)
+    turn(record, 'dev-model-2', kinds=('process_started', 'thread.started', 'turn.completed', 'cleanup_confirmed'),
+         result=done)
     turn(record, 'dev-model-3', kinds=('process_started', 'thread.started', 'turn.started', 'turn.completed',
-                                        'cleanup_failed'))
-    turn(record, 'dev-model-4', kinds=('process_started', 'thread.started', 'turn.started', 'error', 'cleanup_confirmed'))
+                                        'cleanup_failed'), result=done)
+    turn(record, 'dev-model-4', kinds=('process_started', 'thread.started', 'turn.started', 'error', 'cleanup_confirmed'),
+         result=outcome('blocked', 'quota_or_rate_limit', turn_completed=False))
     outcomes = [s['outcome'] for s in telemetry.turns(records_of(value)[0])]
     assert outcomes == ['uncertain', 'uncertain', 'uncertain', 'failed']
 
 
 # Runner + RunStore: a telemetry failure never succeeds and never replays ------
 
-class Journaled:
-    """Adapter shaped like the planner's binding: one ticket/request per turn."""
-    def __init__(self, record, request):
-        self.record, self.request = record, request
-
-    def __call__(self, event):
-        return self.record(event, 'ticket-1', self.request)
+ORDER = ('process_started', 'thread.started', 'turn.started', 'turn.completed', 'cleanup_confirmed', 'result')
 
 
-@pytest.mark.parametrize('failing', ['process_started', 'turn.completed', 'cleanup_confirmed'])
-def test_journal_failure_through_the_runner_is_uncertain_and_never_replayed(cli, journal, monkeypatch, tmp_path, failing):
-    value = journal(); record = value.recorder(operation='coder', slot='a', agent_id='coder-a')
+def observed_turn(cli, journal, body, *, timeout=3, request='dev-model-1', **kwargs):
+    """The real injected path: observer(transport, identity) around execute_turn."""
+    value = journal()
+    wrap = value.observer(operation='coder', slot='a', agent_id='coder-a')
+    calls = []
+
+    def transport(settings, prompt, workspace, **options):
+        calls.append(prompt)
+        return execute_turn(settings, prompt, workspace, **options)
+    observed = wrap(transport, lambda: ('ticket-1', request))
+    result = observed(cli.make(body, timeout), 'Private prompt', cli.workspace, **kwargs)
+    records = records_of(value)[0] if value.path.exists() else []
+    return value, result, records, calls
+
+
+def test_observed_success_is_completed_and_the_result_object_passes_through_unchanged(cli, journal):
+    value = journal(); wrap = value.observer(operation='coder', slot='a', agent_id='coder-a')
+    returned = []
+
+    def transport(settings, prompt, workspace, **options):
+        returned.append(execute_turn(settings, prompt, workspace, **options)); return returned[-1]
+    result = wrap(transport, lambda: ('ticket-1', 'dev-model-1'))(cli.make(), 'Private prompt', cli.workspace)
+    assert result is returned[0] and result['status'] == 'completed' and len(returned) == 1
+    records, _ = records_of(value)
+    assert [r['kind'] for r in records] == list(ORDER)
+    assert records[-1]['status'] == 'completed' and records[-1]['reason'] == 'verified'
+    assert not any(text in json.dumps(records) for text in PRIVATE)
+    [summary] = telemetry.turns(records)
+    assert summary['outcome'] == 'completed' and summary['exit'] == 'zero' and summary['violations'] == []
+
+
+def test_lead_case_success_stream_then_nonzero_exit_is_never_completed(cli, journal):
+    _, result, records, calls = observed_turn(cli, journal, 'success()\nraise SystemExit(1)\n')
+    assert result['status'] == 'blocked' and result['verification']['exit_zero'] is False and len(calls) == 1
+    assert [r['kind'] for r in records] == list(ORDER)
+    assert records[4]['exit'] == 'nonzero' and records[-1]['status'] == 'blocked'
+    [summary] = telemetry.turns(records)
+    assert summary['outcome'] == 'failed'
+
+
+@pytest.mark.parametrize('case, body, timeout', [
+    ('protocol_error', "success()\nprint('{not json', flush=True)\ntime.sleep(30)\n", 10),
+    ('timeout', 'success()\ntime.sleep(30)\n', 1),
+    ('late_failure_terminal', "success()\nevent({'type': 'error', 'message': 'late'})\ntime.sleep(30)\n", 10),
+])
+def test_turn_completed_followed_by_a_failure_is_never_completed(cli, journal, case, body, timeout):
+    _, result, records, _ = observed_turn(cli, journal, body, timeout=timeout)
+    assert result['status'] == 'blocked'
+    assert 'turn.completed' in [r['kind'] for r in records] and records[-1]['kind'] == 'result'
+    [summary] = telemetry.turns(records)
+    assert summary['outcome'] != 'completed'
+    if case != 'late_failure_terminal':  # The group was stopped by the adapter: a killed process.
+        assert summary['exit'] == 'signal' and summary['outcome'] == 'uncertain'
+
+
+@pytest.mark.parametrize('failing', range(1, 7), ids=list(ORDER))
+def test_late_callback_or_result_write_failure_is_never_completed_nor_replayed(cli, journal, monkeypatch, tmp_path,
+                                                                              failing):
+    value = journal(); wrap = value.observer(operation='coder', slot='a', agent_id='coder-a')
     settings = cli.make('success()\n')
     store = RunStore(tmp_path / 'runs')
     work = store.create_work(owner_id='owner', agent_id='coder-a', project_id='project', ticket_id='ticket-1',
                              workspace=str(cli.workspace), executable=str(settings.executable), model=None)
-    calls = []
+    calls, writes = [], []
     original = os.write
+
+    def counting(fd, data):
+        if fd == value._fd:
+            writes.append(data)
+            if len(writes) == failing:
+                raise OSError(errno.ENOSPC, 'No space left on device')
+        return original(fd, data)
+    monkeypatch.setattr(telemetry.os, 'write', counting)
 
     def transport(settings_, prompt, workspace, **callbacks):
         calls.append(prompt)
-        adapter = Journaled(record, 'dev-model-1')
-
-        def guarded(event):
-            if event['kind'] == failing:
-                monkeypatch.setattr(telemetry.os, 'write', lambda fd, data: (_ for _ in ()).throw(
-                    OSError(errno.ENOSPC, 'full')) if fd == value._fd else original(fd, data))
-            return adapter(event)
-        return execute_turn(settings, prompt, workspace, on_turn_event=guarded, **callbacks)
-    runner = PersonalRunner(store, transport)
+        return execute_turn(settings, prompt, workspace, **callbacks)
+    runner = PersonalRunner(store, wrap(transport, lambda: ('ticket-1', 'dev-model-1')))
     first = runner.run(work['id'], 'dev-model-1', 'Private prompt', timeout=5)
     monkeypatch.setattr(telemetry.os, 'write', original)
     assert first['result']['status'] == 'blocked' and first['result']['reason'] == 'callback_failed'
@@ -465,9 +535,98 @@ def test_journal_failure_through_the_runner_is_uncertain_and_never_replayed(cli,
         runner.run(work['id'], 'dev-model-2', 'Private prompt', timeout=5)
     assert len(calls) == 1
     records = records_of(value)[0] if value.path.exists() else []
-    assert failing not in [r['kind'] for r in records]
-    assert all(summary['outcome'] == 'uncertain' for summary in telemetry.turns(records))
+    assert len(records) == failing - 1 and ORDER[failing - 1] not in [r['kind'] for r in records]
+    assert all(summary['outcome'] != 'completed' for summary in telemetry.turns(records))
     store.close()
+
+
+def test_observer_is_a_strict_pass_through(journal):
+    value = journal(); wrap = value.observer(operation='coder', slot='a', agent_id='coder-a')
+    calls = []
+
+    def raising(*args, **kwargs):
+        calls.append(kwargs); raise RuntimeError('transport owns its failure')
+    with pytest.raises(RuntimeError, match='transport owns'):
+        wrap(raising, lambda: ('ticket-1', 'dev-model-1'))('settings')
+    assert len(calls) == 1 and callable(calls[0]['on_turn_event'])
+    with pytest.raises(DevelopmentError):  # A pre-set callback is never replaced or chained.
+        wrap(raising, lambda: ('ticket-1', 'dev-model-1'))('settings', on_turn_event=print)
+    with pytest.raises(DevelopmentError):  # Invalid identity: the transport is not called.
+        wrap(raising, lambda: ('../ticket', 'dev-model-1'))('settings')
+    assert len(calls) == 1
+    blocked = {'status': 'blocked', 'reason': 'timeout', 'session_id': 'bad', 'verification': {}}
+    # Recording fails (invalid session), but a non-success result is returned as is.
+    assert wrap(lambda *a, **k: blocked, lambda: ('ticket-1', 'dev-model-2'))('settings') is blocked
+    claimed = {'status': 'completed', 'reason': 'verified', 'session_id': 'bad', 'text': 'Final private reply',
+               'verification': dict(VERIFIED)}
+    downgraded = wrap(lambda *a, **k: claimed, lambda: ('ticket-1', 'dev-model-3'))('settings')
+    assert downgraded is not claimed and claimed['status'] == 'completed'
+    assert (downgraded['status'], downgraded['reason'], downgraded['text'], downgraded['uncertain']) == (
+        'blocked', 'callback_failed', None, True)
+
+
+# Synthetic sequences: only the exact, consistent, verified sequence completes --
+
+def synthetic(kinds, *, sessions=None, monotonic=None, tickets=None, exit_code=0, result=None):
+    records = []
+    for index, kind in enumerate(kinds):
+        session = (sessions[index] if sessions else None if kind == 'process_started' else SESSION)
+        record = {'schema': telemetry.SCHEMA, 'seq': index + 1, 'kind': kind, 'wall': 100.0 + index,
+                  'monotonic': float(monotonic[index] if monotonic else index), 'session_id': session,
+                  'operation': 'coder', 'ticket_id': tickets[index] if tickets else 'ticket-1', 'agent_id': 'coder-a',
+                  'slot': 'a', 'request_id': 'dev-model-1', 'pid': 4242}
+        if kind == 'result':
+            value = result or outcome()
+            record.update(status=value['status'], reason=value['reason'],
+                          verification={name: value['verification'][name] for name in telemetry.VERIFICATION})
+        else:
+            record['exit'] = telemetry._exit_class(exit_code) if kind in telemetry.CLEANUPS else None
+        records.append(telemetry._validate(record))
+    return records
+
+
+def outcomes(records):
+    return [summary['outcome'] for summary in telemetry.turns(records)]
+
+
+def test_only_the_exact_order_of_all_facts_is_completed():
+    assert outcomes(synthetic(ORDER)) == ['completed']
+    import itertools
+    for permutation in itertools.permutations(ORDER):
+        if permutation != ORDER:
+            assert 'completed' not in outcomes(synthetic(permutation)), permutation
+    for size in range(1, len(ORDER)):  # Every strict subsequence too.
+        for subset in itertools.combinations(ORDER, size):
+            assert 'completed' not in outcomes(synthetic(subset)), subset
+
+
+@pytest.mark.parametrize('name, records', [
+    ('cleanup_failed_then_confirmed', lambda: synthetic(ORDER[:4] + ('cleanup_failed', 'cleanup_confirmed', 'result'))),
+    ('cleanup_failed', lambda: synthetic(ORDER[:4] + ('cleanup_failed', 'result'))),
+    ('session_change', lambda: synthetic(ORDER, sessions=[None, SESSION, SESSION, OTHER, OTHER, OTHER])),
+    ('session_lost', lambda: synthetic(ORDER, sessions=[None, SESSION, SESSION, None, SESSION, SESSION])),
+    ('session_before_thread', lambda: synthetic(ORDER, sessions=[SESSION] * 6)),
+    ('monotonic_backwards', lambda: synthetic(ORDER, monotonic=[0, 1, 5, 4, 6, 7])),
+    ('ticket_change', lambda: synthetic(ORDER, tickets=['ticket-1'] * 3 + ['ticket-2'] * 3)),
+    ('nonzero_exit', lambda: synthetic(ORDER, exit_code=1)),
+    ('signal_exit', lambda: synthetic(ORDER, exit_code=-15)),
+    ('unknown_exit', lambda: synthetic(ORDER, exit_code=None)),
+    ('blocked_result', lambda: synthetic(ORDER, result=outcome('blocked', 'execution_failed', exit_zero=False))),
+    ('unverified_result', lambda: synthetic(ORDER, result=outcome(tool_free=None))),
+    ('wrong_reason', lambda: synthetic(ORDER, result=outcome(reason='missing_response'))),
+    ('duplicate_turn', lambda: synthetic(ORDER[:3] + ORDER[2:])),
+    ('no_result', lambda: synthetic(ORDER[:5])),
+])
+def test_inconsistent_or_unverified_turns_are_never_completed(name, records):
+    summaries = telemetry.turns(records())
+    assert summaries and all(summary['outcome'] != 'completed' for summary in summaries), summaries
+    if name in ('session_change', 'session_lost', 'session_before_thread', 'monotonic_backwards', 'ticket_change'):
+        assert all(summary['outcome'] == 'uncertain' and summary['violations'] for summary in summaries)
+
+
+def test_a_record_of_another_pid_breaks_the_turn_identity():
+    records = synthetic(ORDER); records[3]['pid'] = 1
+    assert outcomes(records) == ['uncertain']
 
 
 def test_telemetry_module_stays_outside_the_native_roster_and_no_roster_module_imports_it():

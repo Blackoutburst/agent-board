@@ -218,9 +218,9 @@ def execute_turn(
         except Exception:
             return "callback_failed"
 
-    def note(kind):
+    def note(kind, code=None):
         try:
-            on_turn_event and on_turn_event({'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(), 'session_id': result['session_id']})
+            on_turn_event and on_turn_event({'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(), 'session_id': result['session_id'], 'exit': code})
         except Exception:
             return 'callback_failed'
 
@@ -475,7 +475,7 @@ def execute_turn(
         verification["cleanup_confirmed"] = cleaned
         if not cleaned:
             failure = "cleanup_failed"
-        late = note('cleanup_confirmed' if cleaned else 'cleanup_failed')
+        late = note('cleanup_confirmed' if cleaned else 'cleanup_failed', process.returncode)
         failure = failure or late
         selector.close()
         for stream in (process.stdin, process.stdout, process.stderr):

@@ -349,7 +349,7 @@ class QueueSlotsService:
                     gh_executable=self.tools['gh']['path'], max_seconds=self.max_seconds,
                     checkpoint_after_actions=config['checkpoint_after_actions'],
                     provider_backoff_seconds=config['provider_backoff_seconds'], should_stop=stopping,
-                    turn_event=telemetry.recorder(operation='coder', slot=slot['name'], agent_id=catalog['agent_id']))
+                    turn_event=telemetry.observer(operation='coder', slot=slot['name'], agent_id=catalog['agent_id']))
         except BoardReadError as error:
             # Only this slot's own discovery connection becomes a connection
             # state; a Board error raised inside the Core (for example an

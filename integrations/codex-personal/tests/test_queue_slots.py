@@ -194,9 +194,14 @@ def slots(tmp_path, monkeypatch):
                 elif phase == 'telemetry':
                     # The Core's planner would call this through execute_turn.
                     board.barrier.wait(timeout=10)
-                    for kind in ('process_started', 'turn.started'):
-                        self.turn_event({'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(),
-                                         'session_id': None}, self.ticket, 'dev-model-' + self.ticket)
+                    def transport(settings, prompt, workspace, *, on_turn_event, **options):
+                        for kind in ('process_started', 'turn.started'):
+                            on_turn_event({'kind': kind, 'wall': time.time(), 'monotonic': time.monotonic(),
+                                           'session_id': None, 'exit': None})
+                        return {'status': 'blocked', 'reason': 'timeout', 'session_id': None, 'text': None,
+                                'verification': {'exit_zero': False}}
+                    observed = self.turn_event(transport, lambda: (self.ticket, 'dev-model-' + self.ticket))
+                    assert observed('settings', 'prompt', 'workspace')['reason'] == 'timeout'
                     phase = 'paused_cycle'
                 row = dict(name=self.batch['jobs'][0]['name'], logical_task_id=task, phase=phase,
                     operation_id=str(uuid.uuid4()), state_sha256='a' * 64, reason='quota' if phase == 'paused_quota' else '',
@@ -361,14 +366,14 @@ def test_each_slot_records_turn_boundaries_in_one_private_pass_journal(slots):
     result = slots.service(slots.configure(3, list(names))).run_once()
     assert {row['phase'] for row in result['slots']} == {'paused_cycle'}, result
     state = result['telemetry']
-    assert state['records'] == 6 and state['full'] is False and state['unavailable'] is None
+    assert state['records'] == 9 and state['full'] is False and state['unavailable'] is None
     directory = slots.root / 'telemetry'
     assert oct(os.stat(directory).st_mode & 0o777) == '0o700'
     records, torn = turn_telemetry.read_journal(directory, state['file'][len('turns-'):-len('.jsonl')])
-    assert not torn and [r['seq'] for r in records] == list(range(1, 7))
+    assert not torn and [r['seq'] for r in records] == list(range(1, 10))
     for n in names:
         mine = [r for r in records if r['slot'] == n]
-        assert [r['kind'] for r in mine] == ['process_started', 'turn.started']
+        assert [r['kind'] for r in mine] == ['process_started', 'turn.started', 'result']
         assert {(r['agent_id'], r['ticket_id'], r['operation']) for r in mine} == {('coder-' + n, 't-' + n, 'coder')}
     # An idle pass creates no journal file at all.
     for n in names: slots.board.behaviour['t-' + n] = ['paused_cycle']

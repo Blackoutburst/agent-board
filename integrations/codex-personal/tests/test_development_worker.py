@@ -136,15 +136,17 @@ class DevelopmentWorkerTests(unittest.TestCase):
 
     def test_turn_event_seam_reaches_each_planner_turn_with_validated_identities(self):
         self.successful_actions();prepared=self.prepare();seen=[]
-        self.worker.turn_event=lambda event,ticket,request:seen.append((event['kind'],ticket,request))
-        def report(callbacks):
-            callbacks['on_turn_event']({'kind':'turn.started','wall':1.0,'monotonic':1.0,'session_id':None})
-        self.after_model=report
+        def observe(transport,identity):
+            def observed(*args,**kwargs):
+                seen.append(identity());value=transport(*args,**kwargs);seen.append(value['status']);return value
+            return observed
+        self.worker.turn_event=observe
         result=self.worker.run(prepared['operation_id'])
         self.assertEqual(result['status'],'review_ready',result)
-        self.assertEqual([item[:2] for item in seen],[('turn.started',self.ticket['id'])]*3)
-        self.assertEqual(len({item[2] for item in seen}),3)
-        self.assertTrue(all(item[2].startswith('dev-model-') for item in seen))
+        self.assertEqual(seen[1::2],['completed']*3)
+        self.assertEqual({item[0] for item in seen[0::2]},{self.ticket['id']})
+        self.assertEqual(len({item[1] for item in seen[0::2]}),3)
+        self.assertTrue(all(item[1].startswith('dev-model-') for item in seen[0::2]))
 
     def test_unset_turn_event_adds_no_transport_keyword(self):
         self.successful_actions();prepared=self.prepare()

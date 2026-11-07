@@ -254,8 +254,7 @@ class DevelopmentPlanner:
         if reasoning:
             self.transport = partial(self.transport, **reasoning)
         if _turn_event is not None:
-            self.transport = partial(self.transport, on_turn_event=lambda event: _turn_event(
-                event, self.scope['ticket_id'], self._state['step']['request_id']))
+            self.transport = _turn_event(self.transport, lambda: (self.scope['ticket_id'], self._state['step']['request_id']))
         self.runner = PersonalRunner(store, self.transport, runtime_guard=self.model_guard)
 
     def close(self):

@@ -306,18 +306,51 @@ du fichier et ses compteurs figurent dans la sortie JSON de la passe
 
 Chemin, du code hors roster vers le code du roster, sans import inverse :
 `development_queue_slots` (hors roster) crée le journal et passe un
-enregistreur par emplacement à `DevelopmentQueueAdmission.tick(turn_event=…)`,
-qui le pose sur `ContinuationPoolService.turn_event`, puis
-`_Generation.open_worker` sur `DevelopmentBoardWorker.turn_event`. Le Worker
-le transmet à `DevelopmentPlanner(_turn_event=…)` seulement s'il est posé,
-et le planificateur l'attache à `execute_turn(on_turn_event=…)` avec l'ID de
-ticket de sa portée et le `request_id` du pas courant.
-`turn_telemetry.py` reste hors de `LINUX_EXECUTION_SOURCES` et aucun module du
-roster ne l'importe. Les tours du reviewer (`review_pool`) ne sont pas encore
-raccordés ; le schéma réserve `reviewer`/`planner`.
+observateur par emplacement (`TurnTelemetryJournal.observer`) à
+`DevelopmentQueueAdmission.tick(turn_event=…)`, qui le pose sur
+`ContinuationPoolService.turn_event`, puis `_Generation.open_worker` sur
+`DevelopmentBoardWorker.turn_event`. Le Worker le transmet à
+`DevelopmentPlanner(_turn_event=…)` seulement s'il est posé. Le
+planificateur lui remet son transport et un appelable d'identité (ID de
+ticket de sa portée, `request_id` du pas courant) et utilise le transport
+observé qu'il reçoit. `turn_telemetry.py` reste hors de
+`LINUX_EXECUTION_SOURCES` et aucun module du roster ne l'importe : l'objet
+est injecté.
+
+**Limite : seuls les tours codeur sont observés.** Les tours du reviewer
+(`review_pool` → `LinuxDeliveryReviewBinding`) et ceux de `team_role_pool`
+ne sont pas raccordés ; le schéma réserve `reviewer`/`planner` sans les
+produire. Le critère des quatre tours codeur simultanés (RECETTE-51 §8.3)
+n'en a pas besoin ; un chevauchement avec un reviewer ne peut pas être
+établi par ce journal.
+
+Ce que garantit chaque couche :
+
+- `execute_turn` (roster) : n'appelle le rappel que sur des faits acceptés,
+  ne lui passe jamais de texte, et traite toute exception du rappel comme un
+  échec de rappel existant (arrêt du groupe, `callback_failed`). Elle ignore
+  le journal.
+- l'observateur (`turn_telemetry`, hors roster) : simple relais. Il appelle
+  le transport une seule fois, ajoute seulement `on_turn_event`, refuse un
+  `on_turn_event` déjà fourni, relance telles quelles les exceptions du
+  transport et renvoie le **même** objet résultat. Après le retour, il
+  ajoute un fait `result` : statut, code de raison fermé, `session_id`
+  validé et les booléens `exit_zero`, `turn_completed`, `session_verified`,
+  `tool_free`, `cleanup_confirmed` (jamais `text`). Si ce fait ne peut pas
+  être écrit et que le résultat est `completed`, il renvoie à la place une
+  copie `blocked`/`callback_failed`/`uncertain` sans texte ; un résultat non
+  réussi est renvoyé tel quel. Il ne relance ni ne rejoue jamais rien.
+- `PersonalRunner`/`RunStore` (roster, inchangés) : un tour lancé non
+  `completed` reste incertain (`needs_review`) et la même requête est servie
+  depuis le cache.
+- le journal : n'atteste que des faits écrits et synchronisés ; `turns`
+  n'en déduit `completed` que sous les conditions ci-dessous.
 
 `execute_turn` n'appelle le rappel que sur des faits validés, avec un
-dictionnaire fermé `{kind, wall, monotonic, session_id}` :
+dictionnaire fermé `{kind, wall, monotonic, session_id, exit}` (`exit` vaut
+`None` sauf sur le fait de nettoyage, où c'est le code de retour du
+processus, enregistré seulement comme classe `zero`/`nonzero`/`signal`/
+`unknown`) :
 `process_started` (après `on_started`, avant tout octet du prompt),
 `thread.started` (session validée), `turn.started`, le terminal
 (`turn.completed`, `turn.failed`, `error`) et `cleanup_confirmed` ou
@@ -339,18 +372,28 @@ conservée au lieu d'être remplacée par `callback_failed`. Après une écritur
 ratée, le journal refuse tout nouvel enregistrement (`turn_telemetry_unavailable`)
 : on n'ajoute jamais après une queue déchirée ou non synchronisée.
 
-Bornes : 1 024 octets par enregistrement, 16 384 enregistrements et 8 Mio
+Bornes (un tour fait six enregistrements) : 1 024 octets par enregistrement, 16 384 enregistrements et 8 Mio
 par fichier. Un nouveau tour (`process_started`) n'est admis que s'il reste
 256 enregistrements de réserve pour les tours déjà commencés ; sinon le
 journal écrit une fois un marqueur `journal_full` et refuse explicitement
 (`turn_telemetry_full`), avant tout envoi de prompt.
 
 Lecture : `read_journal` (borné, sans réparation, signale une queue
-déchirée) et `turns` (intervalles par tour). Un tour n'est `completed` que
-s'il a exactement un terminal `turn.completed`, un `turn.started` et un
-`cleanup_confirmed`, sans doublon ; un terminal d'échec donne `failed` ;
-tout le reste (terminal absent, processus tué, nettoyage non confirmé) reste
-`uncertain`. Une reprise peut ajouter `correlate(seq, raison)` qui référence
+déchirée) et `turns` (résumé par tour). `turns` vérifie l'ordre strict des
+faits, la constance de l'opération, du ticket, du profil, de l'emplacement,
+de la requête et du `pid`, l'absence de session au lancement puis une
+session unique ensuite, et que l'horloge monotone ne recule jamais ; toute
+violation est listée et rend le tour `uncertain`. Un tour n'est `completed`
+que pour la suite exacte `process_started`, `thread.started`,
+`turn.started`, `turn.completed`, `cleanup_confirmed` avec sortie `zero`,
+puis `result` `completed`/`verified` dont tous les booléens sont vrais,
+c'est-à-dire un résultat qu'`execute_turn` a lui-même accepté. Un nettoyage
+confirmé après une sortie naturelle, avec un terminal reçu et un résultat
+non réussi (par exemple succès apparent puis sortie 1), donne `failed`.
+Tout le reste reste `uncertain` : terminal ou `result` absent, processus
+tué (`signal`) ou sortie inconnue, nettoyage non confirmé, succès annoncé que
+les faits ne confirment pas. Un `result` seul, sans lancement, est `failed`
+(aucun appel modèle). Une reprise peut ajouter `correlate(seq, raison)` qui référence
 un enregistrement antérieur ; elle ne fabrique jamais de terminal.
 
 Les horloges monotones ne se comparent qu'au sein d'un même processus
