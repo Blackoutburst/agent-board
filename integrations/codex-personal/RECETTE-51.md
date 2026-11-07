@@ -413,19 +413,42 @@ changement arrête la passe (`continuation_pool_configuration_changed`).
      le prend sans attente, ce qui échoue si une passe le tient, et fait la
      vérification **et** le remplacement dans le même bail :
 
+     Le script est dans le dépôt :
+     `integrations/codex-personal/recette51/preflight_76.py` (bibliothèque
+     standard seule, revu avant usage ; testé par
+     `tests/test_recette51_preflight.py`). L'humain en pose une copie lisible
+     par le propriétaire depuis la source revue, puis vérifie qu'elle est
+     identique octet pour octet à la tête revue :
+
      ```sh
+     P=$R/config/preflight-76.py
+     sudo install -o bb-agent-thescreamer -g bb-agent-thescreamer -m 0600 \
+       "$CAND/source/integrations/codex-personal/recette51/preflight_76.py" "$P"
+     sudo sha256sum "$P" "$CAND/source/integrations/codex-personal/recette51/preflight_76.py"   # identiques
+     # 1) relevé seul (lecture seule) :
      sudo -u bb-agent-thescreamer -H flock -n -E 75 "$R/continuations/owner.lock" \
-       /usr/bin/python3.10 -I -B "$R/config/preflight-76.py"   # code de sortie 75 = bail occupé : arrêter
+       /usr/bin/python3.10 -I -B "$P" --root "$R"             # 75 = bail occupé : arrêter
+     # 2) après l'attestation de l'étape 3, dans un nouveau bail :
+     sudo -u bb-agent-thescreamer -H flock -n -E 75 "$R/continuations/owner.lock" \
+       /usr/bin/python3.10 -I -B "$P" --root "$R" --apply
      ```
 
-     Le script `preflight-76.py` (<<À_REMPLIR>>, revu avant usage) relève
-     seulement chemin, `phase` et `active is None` pour **tous** les pointeurs
-     `R/slots/*/admissions/queue-*/tick.json` **et**
-     `R/admissions/queue-*/tick.json`. Il refuse tout lien symbolique ou toute
-     entrée inattendue. Il n'exécute
-     `install -m 0600 continuation.pre51.json continuation.json` que si tous
-     sont `idle` avec `active` nul, et seulement après l'attestation de
-     l'étape 3. Le relevé est publié sur #51 ;
+     Sans `--apply`, le script ne fait que lire. Il parcourt sans suivre de
+     lien **tous** les pointeurs `R/slots/*/admissions/queue-*/tick.json`
+     **et** `R/admissions/queue-*/tick.json`. Chaque répertoire du chemin doit
+     appartenir à l'UID effectif en 0700, chaque `tick.json` (et `tick.lock`)
+     être un fichier régulier 0600 à lien unique. Tout lien symbolique, toute
+     entrée inattendue (par exemple un `write-*` résiduel) ou tout autre type
+     refuse (code 2). Il n'affiche que le chemin relatif, `phase` et
+     `active_is_none`, puis `pointers=N all_idle=…`. Il sort en 0 seulement
+     si tous sont `idle` avec `active` nul, sinon en 1. Avec `--apply`, il
+     refait le même relevé, puis exige `config/continuation.pre51.json`
+     privé, régulier et à lien unique. Il remplace alors atomiquement
+     `config/continuation.json` par une copie (fichier temporaire 0600 dans
+     le même répertoire, `fsync`, renommage, `fsync` du répertoire) et affiche
+     les sha256 ancien et nouveau. Il ne supprime ni le document slots, ni
+     les racines d'emplacement, ni aucun historique. Les deux relevés sont
+     publiés sur #51 ;
   3. Board, par le Lead, **avant** l'étape 2 : aucune exécution Runtime
      ouverte ou incertaine, aucune réservation, aucun claim actif ou incertain
      sur les tickets des emplacements.
