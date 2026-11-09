@@ -1493,6 +1493,31 @@ const Workspace = (() => {
     }
   }
 
+  async function revokeHierarchy(identifier) {
+    const owner = state.actor && state.actor.owner_id;
+    if (!state.actor || state.actor.kind !== "human") return;
+    const row = await api(`/hierarchy/delegations/${workPath(identifier)}`);
+    if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) return;
+    if (row.id !== identifier || row.owner_id !== owner) throw new Error("Délégation non confirmée.");
+    if (row.status !== "active") throw new Error("Cette délégation est déjà révoquée. Actualisez la liste.");
+    const key = idempotencyKey();
+    const form = el("form", { class: "work-form" },
+      el("p", {}, `Révoquer la délégation ${row.id}, version ${row.version}, du profil ${row.beneficiary_id} ?`),
+      el("p", {}, "Les nouveaux effets de cette chaîne seront refusés. Les profils, projets et historiques restent conservés. Les travaux existants doivent terminer leur arrêt et nettoyage normaux ; aucun quota créé n’est remboursé."),
+      formButtons("Confirmer la révocation"));
+    bindForm(form, async () => {
+      if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) throw new Error("Compte changé. Rouvrez la délégation.");
+      const saved = await api(`/hierarchy/delegations/${workPath(identifier)}/change`, { method: "POST", data: {
+        expected_version: row.version, revoke: true, idempotency_key: key
+      } });
+      if (!state.actor || state.actor.owner_id !== owner) return;
+      if (saved.id !== identifier || saved.owner_id !== owner || saved.status !== "revoked" || saved.version !== row.version + 1)
+        throw new Error("Révocation non confirmée. Conservez cette fenêtre pour réessayer avec la même clé.");
+      closeModal(); await agents();
+    });
+    openModal("Révoquer une délégation", form);
+  }
+
   async function renderHierarchy(body, request) {
     if (state.actor.kind !== "human") {
       body.append(empty("Cette administration est réservée au propriétaire humain."));
@@ -1520,7 +1545,8 @@ const Workspace = (() => {
       const list = el("div", {}); body.append(list);
       const appendRows = rows => rows.forEach(row => list.append(panel(`Délégation ${row.id}`, el("div", { class: "panel-body" },
         el("p", {}, `Profil : ${row.beneficiary_id} · ${row.parent_id ? `Parent : ${row.parent_id}` : "Racine accordée par le propriétaire"}`),
-        el("p", {}, `État enregistré : ${row.status} · Version : ${row.version}`), scope(row.policy), quota(row.policy, row.counters)))));
+        el("p", {}, `État enregistré : ${row.status} · Version : ${row.version}`), scope(row.policy), quota(row.policy, row.counters),
+        row.status === "active" ? btn("Révoquer", guard(() => revokeHierarchy(row.id))) : null))));
       appendRows(data.delegations);
       if (!data.delegations.length) list.append(empty("Aucune délégation enregistrée."));
       let after = data.next_after;
