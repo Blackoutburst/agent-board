@@ -68,3 +68,88 @@ def test_current_ancestor_actions_intersect_registration_and_effective_policy(se
         profile = s['b']._profile_for_actor(db, actor)
         effective = s['b']._effective_profile_policy(db, actor, profile)
         assert effective['actions'] == ['repo.read_file']
+
+
+def reserved_hierarchy(s):
+    root = enabled(s); result = new_project(s, root); actor = bind_created(s, result)
+    b = s['b']
+    ticket = b.create_ticket(s['human'], result['project_id'], 'Runtime work', assignee_owner_id='alice',
+        assignee_agent_id=result['profile_id'], resource='repo:work', idempotency_key='runtime-work')
+    b.claim_ticket(actor, ticket['id'], ticket['version'])
+    execution = b.reserve_execution(actor, idempotency_key='reservation', project_id=result['project_id'],
+        ticket_id=ticket['id'], work_id='work', turn_id='turn', provider='codex_chatgpt', model='fixture')['execution']
+    return root, result, actor, execution
+
+
+def test_revocation_between_reservation_and_start_prevents_start_but_allows_cleanup(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    s['store'].change(s['human'], root['id'], 1, 'revoke', revoke=True)
+    control = s['b'].get_execution_control(actor, reserved['id'])
+    assert control['should_stop'] and control['control_reason'] == 'authorization_changed'
+    with pytest.raises(BoardError, match='hierarchy_revoked'):
+        s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    cleaned = s['b'].finish_execution(actor, reserved['id'], reserved['revision'], 'cancelled', True, 'policy_changed')
+    assert cleaned['state'] == 'finished' and cleaned['cleanup_confirmed']
+
+
+def test_revocation_after_running_denies_completed_result_but_not_bounded_cleanup(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    running = s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    s['store'].change(s['human'], root['id'], 1, 'revoke', revoke=True)
+    with pytest.raises(BoardError, match='hierarchy_revoked'):
+        s['b'].finish_execution(actor, running['id'], running['revision'], 'completed', True, 'completed')
+    pending = s['b'].finish_execution(actor, running['id'], running['revision'], 'cancelled', False, 'policy_changed')
+    assert pending['state'] == 'needs_review' and not pending['cleanup_confirmed']
+    with s['b']._connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM runtime_executions WHERE state!='finished'").fetchone()[0] == 1
+    cleaned = s['b'].finish_execution(actor, pending['id'], pending['revision'], 'cancelled', True, 'policy_changed')
+    assert cleaned['state'] == 'finished'
+    # Only exact harmless receipt replay survives terminal cleanup.
+    assert s['b'].finish_execution(actor, pending['id'], pending['revision'], 'cancelled', True, 'policy_changed')['revision'] == cleaned['revision']
+    with pytest.raises(BoardError):
+        s['b'].finish_execution(actor, cleaned['id'], cleaned['revision'], 'blocked', True, 'runner_error')
+    with pytest.raises(BoardError):
+        s['b'].get_execution_control(s['target_actor'], cleaned['id'])
+
+
+def test_revocation_still_allows_human_inspection_but_device_revocation_closes_cleanup_channel(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    s['store'].change(s['human'], root['id'], 1, 'revoke', revoke=True)
+    assert s['b'].get_runtime(s['human'])
+    s['b'].revoke_device(s['human'], actor['device_id'])
+    with pytest.raises(BoardError, match='execution_identity_unavailable'):
+        s['b'].get_execution_control(actor, reserved['id'])
+
+
+def test_already_recorded_completion_can_finish_its_cleanup_after_revocation(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    running = s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    pending = s['b'].finish_execution(actor, running['id'], running['revision'], 'completed', False, 'completed')
+    s['store'].change(s['human'], root['id'], 1, 'revoke', revoke=True)
+    cleaned = s['b'].finish_execution(actor, pending['id'], pending['revision'], 'completed', True, 'completed')
+    assert cleaned['state'] == 'finished' and cleaned['cleanup_confirmed']
+
+
+def test_current_permission_reduction_blocks_reserved_start_and_new_completion(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    s['store'].configure(s['human'], 1, s['ceiling'](allow_new_projects=False), 'reduce-owner')
+    with pytest.raises(BoardError): s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    assert s['b'].get_execution_control(actor, reserved['id'])['should_stop']
+
+
+def test_resource_revocation_after_reserve_blocks_start_and_control_requests_stop(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    reduced = s['ceiling'](resources=[])
+    s['store'].change(s['human'], root['id'], 1, 'reduce-resource', policy=reduced)
+    with pytest.raises(BoardError, match='hierarchy_runtime_resource_denied'):
+        s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    assert s['b'].get_execution_control(actor, reserved['id'])['should_stop']
+
+
+def test_ancestor_policy_pin_blocks_changed_admission_and_success_result(setup):
+    s = setup; root, result, actor, reserved = reserved_hierarchy(s)
+    running = s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    s['store'].change(s['human'], root['id'], 1, 'reduce-actions', policy=s['ceiling'](actions=['repo.read_file']))
+    with pytest.raises(BoardError, match='hierarchy_execution_scope_changed'):
+        s['b'].finish_execution(actor, running['id'], running['revision'], 'completed', True, 'completed')
+    assert s['b'].get_execution_control(actor, reserved['id'])['control_reason'] == 'authorization_changed'

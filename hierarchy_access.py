@@ -64,3 +64,24 @@ def project_allowed(db, board, actor, profile, project_id):
         if project_id in store._effective(db, actor, chain)['project_ids']:
             return True
     return False
+
+
+def runtime_scope(db, board, actor, profile, ticket_id):
+    """Server-only admission pin; current scope must match before start/result."""
+    identifier = creation_delegation(db, profile)
+    if identifier is None:
+        return None
+    import hashlib
+    from projects import _json
+    store = HierarchyStore(board)
+    chain = store._chain(db, actor['owner_id'], identifier)
+    ceiling = profile_ceiling(db, board, actor, profile, 'allow_requests')
+    ticket = db.execute('SELECT resource FROM tickets WHERE id=?', (ticket_id,)).fetchone()
+    if ticket is None or ticket['resource'] and ticket['resource'] not in ceiling['resources']:
+        _fail('hierarchy_runtime_resource_denied', 403)
+    payload = dict(ceiling=ceiling,
+        limits_version=store._limits(db, actor['owner_id'])['version'],
+        owner_policy=json.loads(board._owner(db, actor['owner_id'])['policy']),
+        ancestry=[dict(id=row['id'], version=row['version'], profile_version=db.execute(
+            'SELECT version FROM agent_profiles WHERE id=?', (row['beneficiary_id'],)).fetchone()[0]) for row in chain])
+    return hashlib.sha256(_json(payload).encode('utf-8')).hexdigest()

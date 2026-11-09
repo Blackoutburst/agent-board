@@ -525,6 +525,12 @@ class RuntimeMixin:
             _fail('execution_scope_invalid',409)
         if type(payload) is not dict:
             _fail('execution_scope_invalid',409)
+        from hierarchy_access import runtime_scope
+        profile = self._profile_for_actor(db, actor)
+        if profile is not None:
+            current = runtime_scope(db, self, actor, profile, row['ticket_id'])
+            if current is not None and payload.get('hierarchy_scope') != current:
+                _fail('hierarchy_execution_scope_changed', 409)
         if 'review_scope' in payload:
             actor, profile, pin = self._runtime_review_authorize(db,actor,row['project_id'],
                 row['ticket_id'],row['profile_version'],expected_scope=payload['review_scope'])
@@ -580,8 +586,11 @@ class RuntimeMixin:
                 actor, profile = self._runtime_authorize(db, actor, project_id, ticket_id)
             if self._runtime_denial(db,actor,values):
                 _fail('execution_admission_refused',409)
+            from hierarchy_access import runtime_scope
+            hierarchy_pin = runtime_scope(db, self, actor, profile, ticket_id)
             payload = _json(values | {'agent_id': profile['id'], 'profile_version': profile['version']}
-                            | ({'review_scope': review} if review is not None else {}))
+                            | ({'review_scope': review} if review is not None else {})
+                            | ({'hierarchy_scope': hierarchy_pin} if hierarchy_pin is not None else {}))
             existing = db.execute('''SELECT * FROM runtime_executions
                 WHERE owner_id=? AND device_id=? AND session_id=? AND idempotency_key=?''',
                 (actor['owner_id'], actor['device_id'], actor['session_id'], idempotency_key)).fetchone()
@@ -596,7 +605,8 @@ class RuntimeMixin:
                     actor,profile,review = self._runtime_review_authorize(db,actor,project_id,ticket_id,
                         profile['version'],expected_scope=previous['review_scope'])
                     payload = _json(values | {'agent_id':profile['id'],'profile_version':profile['version'],
-                                             'review_scope':review})
+                                             'review_scope':review}
+                                    | ({'hierarchy_scope': hierarchy_pin} if hierarchy_pin is not None else {}))
                 if existing['payload'] != payload:
                     _fail('execution_key_conflict', 409)
                 return {'reserved': True, 'execution': self._execution_view(db, existing), 'retried': True}
@@ -819,6 +829,17 @@ class RuntimeMixin:
                 _fail('execution_outcome_conflict', 409)
             if status == 'completed' and row['started_at'] is None:
                 _fail('execution_not_started', 409)
+            if status == 'completed' and row['finish_revision'] is None:
+                from hierarchy_access import creation_delegation
+                profile = db.execute('SELECT * FROM agent_profiles WHERE id=? AND owner_id=?',
+                                     (row['agent_id'], row['owner_id'])).fetchone()
+                if profile is not None and creation_delegation(db, profile) is not None:
+                    # Cleanup identity is not authority for a new successful
+                    # result. An already-recorded outcome may still receive
+                    # its exact cleanup confirmation after revocation.
+                    self._runtime_authorize_row(db, actor, row)
+                    if row['stop_requested']:
+                        _fail('stop_requested', 409)
             now = time.time()
             db.execute('''UPDATE runtime_executions SET state=?,revision=revision+1,finish_revision=?,
                 outcome=?,cleanup_confirmed=?,reason=?,updated_at=?,finished_at=? WHERE id=?''',
