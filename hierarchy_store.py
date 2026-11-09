@@ -34,7 +34,7 @@ def migrate_hierarchy(db):
             FOREIGN KEY(owner_id,creator_id) REFERENCES hierarchy_delegations(owner_id,id),
             FOREIGN KEY(owner_id,delegation_id) REFERENCES hierarchy_delegations(owner_id,id))''',
         '''CREATE TABLE hierarchy_team_profiles(owner_id TEXT NOT NULL, profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
-            parent_id TEXT NOT NULL, delegation_id TEXT NOT NULL, PRIMARY KEY(owner_id,profile_id),
+            parent_id TEXT NOT NULL, delegation_id TEXT NOT NULL, released_at REAL, PRIMARY KEY(owner_id,profile_id),
             FOREIGN KEY(owner_id,parent_id) REFERENCES hierarchy_delegations(owner_id,id),
             FOREIGN KEY(owner_id,delegation_id) REFERENCES hierarchy_delegations(owner_id,id))''',
         'CREATE INDEX hierarchy_parent ON hierarchy_delegations(owner_id,parent_id)',
@@ -365,7 +365,7 @@ class HierarchyStore:
             self.board._write_profile(db, identifier, dict(role=role, policy=profile_policy,
                                       project_ids=policy['project_ids']), increment=False)
             result = self._insert(db, actor, identifier, parent_id, policy)
-            db.execute('INSERT INTO hierarchy_team_profiles VALUES(?,?,?,?)',
+            db.execute('INSERT INTO hierarchy_team_profiles(owner_id,profile_id,parent_id,delegation_id) VALUES(?,?,?,?)',
                        (actor['owner_id'], identifier, parent_id, result['id']))
             result['profile_id'] = identifier
             return self._remember(db, actor, 'create_team_profile', key, payload, result)
@@ -405,6 +405,84 @@ class HierarchyStore:
             self.board._write_profile(db, profile_id, values)
             result = dict(id=delegation['id'], profile_id=profile_id, version=expected_version + 1)
             return self._remember(db, actor, 'update_team_profile', key, payload, result)
+
+    def _archive_clear(self, db, owner, profile_id):
+        # Lease expiry is not evidence of cleanup. Preserve every old claim and
+        # Runtime row; this method may only refuse, never reconcile their state.
+        for table in ('tickets', 'tasks'):
+            if db.execute(f'''SELECT 1 FROM {table} t WHERE t.claimant IS NOT NULL
+                AND t.status NOT IN ('done','complete') AND (
+                    json_extract(t.claimant,'$.agent_id')=? OR EXISTS (
+                        SELECT 1 FROM sessions s WHERE s.agent_id=? AND s.owner_id=?
+                        AND s.id=json_extract(t.claimant,'$.session_id')
+                        AND s.device_id=json_extract(t.claimant,'$.device_id'))) LIMIT 1''',
+                (profile_id, profile_id, owner)).fetchone():
+                _fail('hierarchy_archive_claim_present', 409)
+        if db.execute('''SELECT 1 FROM runtime_executions WHERE owner_id=? AND agent_id=?
+            AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1''', (owner, profile_id)).fetchone():
+            _fail('hierarchy_archive_cleanup_unconfirmed', 409)
+        if db.execute('''SELECT 1 FROM delegation_families f WHERE f.owner_id=?
+            AND f.state IN ('running','integrating') AND EXISTS (
+                SELECT 1 FROM sessions s WHERE s.owner_id=? AND s.agent_id=? AND (
+                    s.id=f.session_id OR EXISTS (SELECT 1 FROM delegation_members m
+                        WHERE m.family_id=f.id AND m.session_id=s.id))) LIMIT 1''',
+            (owner, owner, profile_id)).fetchone():
+            _fail('hierarchy_archive_family_active', 409)
+
+    def archive_team_profile(self, actor, parent_id, profile_id, expected_version, key):
+        """Archive a leaf once, only after durable work is reconciled normally."""
+        _version(expected_version)
+        payload = dict(parent_id=parent_id, profile_id=profile_id, expected_version=expected_version)
+        with self.board._tx() as db:
+            actor = self.board._actor(db, actor, 'allow_requests')
+            if actor['kind'] == 'human':
+                # Human reconciliation remains possible after ancestor revocation.
+                chain, seen, current = [], set(), parent_id
+                while current is not None:
+                    row = self._delegation(db, actor['owner_id'], current)
+                    if current in seen or len(chain) >= 5:
+                        _fail('hierarchy_provenance_invalid', 409)
+                    chain.append(row); seen.add(current); current = row['parent_id']
+                chain.reverse()
+            else:
+                chain, _ = self._authorize(db, actor, parent_id, 'manage_team_profile')
+            link = db.execute('SELECT * FROM hierarchy_team_profiles WHERE owner_id=? AND profile_id=? AND parent_id=?',
+                              (actor['owner_id'], profile_id, parent_id)).fetchone()
+            if link is None:
+                _fail('hierarchy_team_profile_not_found', 404)
+            previous = self._retry(db, actor, 'archive_team_profile', key, payload)
+            if previous is not None:
+                return previous
+            target = self.board._profile_owned(db, actor, profile_id)
+            if target['version'] != expected_version:
+                _fail('hierarchy_version_conflict', 409)
+            if link['released_at'] is not None:
+                _fail('hierarchy_archive_already_released', 409)
+            leaf = self._delegation(db, actor['owner_id'], link['delegation_id'])
+            if (leaf['parent_id'] != parent_id or leaf['beneficiary_id'] != profile_id
+                    or target['legacy'] or target['kind'] != 'agent'
+                    or db.execute('SELECT 1 FROM hierarchy_delegations WHERE owner_id=? AND parent_id=?',
+                                  (actor['owner_id'], leaf['id'])).fetchone()):
+                _fail('hierarchy_provenance_invalid', 409)
+            self._archive_clear(db, actor['owner_id'], profile_id)
+            limits = self._limits(db, actor['owner_id'])
+            ledgers = [('hierarchy_limits', limits, 'owner_id', actor['owner_id'])] + [
+                ('hierarchy_delegations', row, 'id', row['id']) for row in chain]
+            for table, row, column, identifier in ledgers:
+                counters = json.loads(row['counters'])
+                for kind in ('profiles', 'delegations'):
+                    if counters[kind]['live'] < 1:
+                        _fail('hierarchy_ledger_invalid', 409)
+                    counters[kind]['live'] -= 1
+                db.execute(f'UPDATE {table} SET counters=? WHERE {column}=?', (_json(counters), identifier))
+            self.board._write_profile(db, profile_id, dict(status='archived'))
+            now = time.time()
+            db.execute("UPDATE hierarchy_delegations SET status='revoked',version=version+1,updated_at=? WHERE id=?",
+                       (now, leaf['id']))
+            db.execute('UPDATE hierarchy_team_profiles SET released_at=? WHERE owner_id=? AND profile_id=?',
+                       (now, actor['owner_id'], profile_id))
+            return self._remember(db, actor, 'archive_team_profile', key, payload,
+                                  dict(id=leaf['id'], profile_id=profile_id, version=expected_version + 1))
 
     def change(self, actor, identifier, expected_version, key, *, policy=None, revoke=False):
         _version(expected_version)

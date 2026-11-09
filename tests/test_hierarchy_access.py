@@ -204,3 +204,30 @@ def test_message_seal_and_reservation_use_the_same_hierarchy_payload(setup):
     assert b.seal_message_execution_admission(*args) == first
     with pytest.raises(BoardError, match='execution_admission_refused'):
         b.reserve_message_execution(*args)
+
+
+def test_archive_requires_normal_claim_release_and_confirmed_runtime_cleanup(setup):
+    s = setup; root = enabled(s); b = s['b']
+    project = s['ceiling']()['project_ids'][0]
+    result = s['store'].create_team_profile(s['parent_actor'], root['id'], 'Developer', 'developer',
+                                          leaf_policy(project), 1, 'archivable-team')
+    actor = bind_created(s, result)
+    ticket = b.create_ticket(s['human'], project, 'Work', assignee_owner_id='alice',
+        assignee_agent_id=result['profile_id'], resource='repo:work', idempotency_key='archive-work')
+    claimed = b.claim_ticket(actor, ticket['id'], ticket['version'])
+    reserved = b.reserve_execution(actor, 'archive-reserve', project, ticket['id'],
+        'archive-work', 'archive-turn', 'codex_chatgpt', 'fixture')['execution']
+    profile_version = b.get_agent_profile(s['human'], result['profile_id'])['version']
+    def archive():
+        return s['store'].archive_team_profile(s['parent_actor'], root['id'], result['profile_id'], profile_version, 'archive')
+    with pytest.raises(BoardError, match='hierarchy_archive_claim_present'): archive()
+    b.update_ticket(s['human'], ticket['id'], claimed['version'], release_claim=True)
+    with pytest.raises(BoardError, match='hierarchy_archive_cleanup_unconfirmed'): archive()
+    pending = b.finish_execution(actor, reserved['id'], reserved['revision'], 'cancelled', False, 'claim_lost')
+    with pytest.raises(BoardError, match='hierarchy_archive_cleanup_unconfirmed'): archive()
+    b.finish_execution(actor, pending['id'], pending['revision'], 'cancelled', True, 'claim_lost')
+    assert archive()['version'] == profile_version + 1
+    assert b.get_ticket(s['human'], ticket['id'])['ticket']['claimant'] is None
+    with b._connection() as db:
+        row = db.execute('SELECT * FROM runtime_executions WHERE id=?', (reserved['id'],)).fetchone()
+        assert row['state'] == 'finished' and row['cleanup_confirmed'] == 1

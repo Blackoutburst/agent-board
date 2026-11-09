@@ -417,3 +417,84 @@ def test_sibling_root_cannot_manage_another_roots_team(setup):
     with pytest.raises(BoardError, match='hierarchy_team_profile_not_found'):
         s['store'].update_team_profile(s['target_actor'], sibling['id'], result['profile_id'], 1,
                                        {'name': 'Hijack'}, 'hijack')
+
+
+def test_archive_releases_only_live_quota_once_and_never_refunds_created(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    before = json.loads(snapshot(s)['hierarchy_limits'][0][3])
+    args = (s['parent_actor'], root['id'], result['profile_id'], 1, 'archive')
+    first = s['store'].archive_team_profile(*args)
+    assert s['store'].archive_team_profile(*args) == first
+    after = json.loads(snapshot(s)['hierarchy_limits'][0][3])
+    for kind in ('profiles', 'delegations'):
+        assert after[kind]['live'] == before[kind]['live'] - 1
+        assert after[kind]['created'] == before[kind]['created']
+    with pytest.raises(BoardError, match='already_released'):
+        s['store'].archive_team_profile(s['parent_actor'], root['id'], result['profile_id'], 2, 'different-key')
+    with s['b']._connection() as db:
+        assert db.execute('SELECT status FROM agent_profiles WHERE id=?', (result['profile_id'],)).fetchone()[0] == 'archived'
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+
+
+def test_human_can_archive_clean_leaf_after_root_revocation_without_restoring_grants(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    s['store'].change(s['human'], root['id'], 1, 'revoke', revoke=True)
+    with pytest.raises(BoardError, match='hierarchy_revoked'):
+        s['store'].archive_team_profile(s['parent_actor'], root['id'], result['profile_id'], 1, 'agent')
+    assert s['store'].archive_team_profile(s['human'], root['id'], result['profile_id'], 1, 'human')['version'] == 2
+    assert s['store'].inspect(s['human'], root['id'])['status'] == 'revoked'
+
+
+def test_archive_rollback_cannot_lose_or_double_release_capacity(setup, monkeypatch):
+    s = setup; root = enabled(s); result = team(s, root)
+    before = snapshot(s); remember = s['store']._remember
+    def fail(*args):
+        remember(*args)
+        raise RuntimeError('after archive receipt')
+    monkeypatch.setattr(s['store'], '_remember', fail)
+    with pytest.raises(RuntimeError):
+        s['store'].archive_team_profile(s['parent_actor'], root['id'], result['profile_id'], 1, 'archive')
+    assert snapshot(s) == before
+    with s['b']._connection() as db:
+        assert db.execute('SELECT released_at FROM hierarchy_team_profiles').fetchone()[0] is None
+        assert db.execute('SELECT status FROM agent_profiles WHERE id=?', (result['profile_id'],)).fetchone()[0] == 'active'
+
+
+def test_parallel_archival_cannot_double_release_owner_or_ancestors(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    gate = threading.Barrier(2)
+    def run(key):
+        gate.wait()
+        try:
+            return s['store'].archive_team_profile(s['parent_actor'], root['id'], result['profile_id'], 1, key)
+        except BoardError as error:
+            return str(error)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(run, ['archive-a', 'archive-b']))
+    assert sum(isinstance(r, dict) for r in results) == 1
+    assert sum('hierarchy_version_conflict' in str(r) for r in results) == 1
+    with s['b']._connection() as db:
+        counters = json.loads(db.execute('SELECT counters FROM hierarchy_limits').fetchone()[0])
+        assert counters['profiles'] == dict(live=0, created=1)
+        assert counters['delegations'] == dict(live=1, created=2)
+        parent = json.loads(db.execute('SELECT counters FROM hierarchy_delegations WHERE id=?', (root['id'],)).fetchone()[0])
+        assert parent['profiles'] == dict(live=0, created=1)
+
+
+def test_archive_refuses_unmanaged_profile_or_other_owner(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    for actor, profile in ((s['parent_actor'], s['target']['id']), (s['other'], result['profile_id'])):
+        with pytest.raises(BoardError):
+            s['store'].archive_team_profile(actor, root['id'], profile, 1, 'forbidden')
+
+
+def test_archive_does_not_allow_recycling_cumulative_profile_budget(setup):
+    s = setup
+    quotas = {k: dict(live=1 if k == 'profiles' else 4, created=1 if k == 'profiles' else 8)
+              for k in ('projects', 'profiles', 'delegations')}
+    root = enabled(s, quotas=quotas); project = s['ceiling']()['project_ids'][0]
+    policy = leaf_policy(project, quotas=quotas)
+    first = s['store'].create_team_profile(s['parent_actor'], root['id'], 'First', 'developer', policy, 1, 'first')
+    s['store'].archive_team_profile(s['parent_actor'], root['id'], first['profile_id'], 1, 'archive-first')
+    with pytest.raises(BoardError, match='hierarchy_quota_exhausted'):
+        s['store'].create_team_profile(s['parent_actor'], root['id'], 'Second', 'developer', policy, 1, 'second')
