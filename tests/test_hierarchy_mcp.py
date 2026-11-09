@@ -79,3 +79,13 @@ def test_mcp_project_constructor_binds_singleton_without_connection(channel):
     assert profile['project_ids'] == [created['project_id']]
     assert profile['bindings'] == []
     rpc('inspect_hierarchy', {'delegation_id':root['id'],'session_id':'unknown-session'},error=True)
+
+
+def test_mcp_discovery_is_closed_paged_and_current(channel):
+    s, root, rpc, _, _ = channel
+    page = rpc('list_hierarchy_delegations',{'limit':1})
+    assert [i['delegation']['id'] for i in page['items']] == [root['id']]
+    for args in ({'limit':True},{'limit':'1'},{'limit':51},{'owner_id':'alice'},{'after':{}},{'after':'*'}):
+        rpc('list_hierarchy_delegations',args,error=True)
+    s['store'].change(s['human'],root['id'],1,'revoke',revoke=True)
+    assert rpc('list_hierarchy_delegations',{}) == {'items': [], 'next_after': None}

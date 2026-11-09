@@ -621,3 +621,41 @@ def test_archive_rechecks_actual_leaf_project_before_mutation_or_receipt(setup, 
         archived = s['store'].archive_team_profile(s['human'], root['id'], profile_id, 2, 'human-archive')
         assert archived['version'] == 3
         assert s['store'].archive_team_profile(s['human'], root['id'], profile_id, 2, 'human-archive') == archived
+
+
+def test_agent_discovery_is_own_current_scope_and_revocable(setup):
+    s = setup; store = s['store']; actor = s['parent_actor']
+    assert store.list_for_agent(actor) == {'items': [], 'next_after': None}
+    root = enabled(s)
+    child_grant = make_child(s, root)
+    own = store.list_for_agent(actor)['items']
+    assert [i['delegation']['id'] for i in own] == [root['id']]
+    assert [i['delegation']['id'] for i in store.list_for_agent(s['target_actor'])['items']] == [child_grant['id']]
+    store.change(s['human'],root['id'],1,'revoke',revoke=True)
+    assert store.list_for_agent(actor)['items'] == []
+    assert store.list_for_agent(s['target_actor'])['items'] == []
+
+
+def test_discovery_scans_bounded_pages_including_denied_rows(setup):
+    s = setup; root = enabled(s); store = s['store']; actor = s['parent_actor']
+    second = store.create_root(s['human'],s['parent']['id'],s['ceiling'](),'second-root')
+    ordered = sorted([root['id'],second['id']])
+    store.change(s['human'],ordered[0],1,'revoke',revoke=True)
+    first = store.list_for_agent(actor,1)
+    assert first == {'items': [], 'next_after': ordered[0]}
+    last = store.list_for_agent(actor,1,first['next_after'])
+    assert [i['delegation']['id'] for i in last['items']] == [ordered[1]]
+    assert last['next_after'] is None
+    # A current owner ceiling reduction hides old snapshots.
+    reduced = dict(s['ceiling'](), project_ids=[])
+    store.configure(s['human'],1,reduced,'reduce-owner')
+    assert store.list_for_agent(actor)['items'] == []
+
+
+def test_companion_discovery_does_not_use_owner_powers_as_a_grant(setup):
+    s = setup; p, actor = companion(s)
+    assert s['store'].list_for_agent(actor)['items'] == []
+    enabled(s)
+    assert s['store'].list_for_agent(actor)['items'] == []
+    root = s['store'].create_root(s['human'],p['id'],s['ceiling'](),'companion-root')
+    assert [i['delegation']['id'] for i in s['store'].list_for_agent(actor)['items']] == [root['id']]

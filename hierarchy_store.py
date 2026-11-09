@@ -1,7 +1,7 @@
-"""Transactional hierarchy records, not yet exposed by Board or MCP.
+"""Transactional human-rooted hierarchy and current authorization ceilings.
 
-Schema installation is explicit for migration composition tests. No existing
-authorization path consults this store yet: records alone grant no authority.
+Schema installation participates in the Board migration transaction. All
+transport callers recheck current authenticated authority; roles grant nothing.
 All callers must use the authenticated Board actor and the same transaction
 for object creation, provenance, quota debits and receipt.
 """
@@ -543,6 +543,40 @@ class HierarchyStore:
             return dict(limits=self._view(limits) if limits is not None else None,
                         delegations=[self._view(row) for row in rows[:limit]],
                         next_after=rows[limit - 1]['id'] if len(rows) > limit else None)
+
+    def list_for_agent(self, actor, limit=20, after=None):
+        """Scan a bounded page of own grants; omit currently denied chains.
+
+        next_after advances across scanned rows, including revoked grants, so a
+        page may be empty while more candidates remain. Never scan owner-wide
+        history or expose another beneficiary's delegation.
+        """
+        from board import BoardError
+        if type(limit) is not int or not 1 <= limit <= 50:
+            _fail('hierarchy_page_invalid')
+        if after is not None:
+            exact_string(after)
+        with self.board._tx() as db:
+            actor = self.board._actor(db, actor, 'allow_read')
+            if actor['kind'] != 'agent':
+                _fail('hierarchy_agent_required', 403)
+            profile = self.board._profile_for_actor(db, actor)
+            rows = db.execute('SELECT id FROM hierarchy_delegations WHERE owner_id=? AND beneficiary_id=? '
+                              'AND id>? ORDER BY id LIMIT ?',
+                              (actor['owner_id'], profile['id'], after or '', limit + 1)).fetchall()
+            items = []
+            for row in rows[:limit]:
+                try:
+                    chain, effective = self._authorize(db, actor, row['id'])
+                    if not set(json.loads(chain[-1]['policy'])['project_ids']) <= set(effective['project_ids']):
+                        continue
+                except BoardError as exc:
+                    if exc.status != 403:
+                        raise
+                    continue
+                items.append(dict(delegation=self._view(chain[-1]), effective=effective,
+                                  ancestry=[dict(id=r['id'], version=r['version']) for r in chain]))
+            return dict(items=items, next_after=rows[limit - 1]['id'] if len(rows) > limit else None)
 
     def inspect(self, actor, identifier):
         with self.board._tx() as db:

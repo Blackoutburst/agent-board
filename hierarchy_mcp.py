@@ -4,6 +4,7 @@ from hierarchy_store import HierarchyStore
 from projects import _fail, _version
 
 FIELDS = {
+    'list_hierarchy_delegations': set(),
     'inspect_hierarchy': {'delegation_id'},
     'delegate_hierarchy_project': {'parent_id', 'beneficiary_id', 'policy', 'expected_version', 'idempotency_key'},
     'create_hierarchy_project_lead': {'parent_id', 'name', 'lead_name', 'policy', 'expected_version', 'idempotency_key'},
@@ -16,10 +17,16 @@ HIERARCHY_TOOLS = frozenset(FIELDS)
 
 def validate_hierarchy_arguments(name, args):
     required = FIELDS[name] | {'session_id'}
-    if type(args) is not dict or set(args) != required:
+    optional = {'limit', 'after'} if name == 'list_hierarchy_delegations' else set()
+    if type(args) is not dict or not required <= set(args) or set(args) - required - optional:
         _fail('Supply only hierarchy tool fields')
     for key, value in args.items():
-        if key == 'expected_version':
+        if key == 'limit':
+            if type(value) is not int or not 1 <= value <= 50:
+                _fail('hierarchy_page_invalid')
+        elif key == 'after' and value is None:
+            continue
+        elif key == 'expected_version':
             _version(value)
         elif key in ('policy', 'changes'):
             if type(value) is not dict:
@@ -30,6 +37,11 @@ def validate_hierarchy_arguments(name, args):
 
 def mount_hierarchy_tools(mcp, board, session_actor):
     store = HierarchyStore(board)
+
+    @mcp.tool()
+    async def list_hierarchy_delegations(session_id: str, limit: int = 20, after: str | None = None) -> dict:
+        """Discover only your own currently authorized hierarchy grants and effective ceilings. No grants means an empty page, never implicit authority. Follow next_after even after an empty page: revoked or out-of-scope grants are skipped within bounded scans. Current session/profile/ancestor permissions are rechecked on each page. No work is claimed."""
+        return store.list_for_agent(session_actor(session_id), limit, after)
 
     @mcp.tool()
     async def inspect_hierarchy(session_id: str, delegation_id: str) -> dict:
