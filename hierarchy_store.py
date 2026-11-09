@@ -234,6 +234,8 @@ class HierarchyStore:
                     (not current['allow_requests'] or current['autonomy'] == 'responses')):
                 _fail('hierarchy_ancestor_permission_denied', 403)
         effective = self._effective(db, actor, chain)
+        if operation is not None and effective['autonomy'] == 'responses':
+            _fail('hierarchy_ancestor_permission_denied', 403)
         if operation is not None and operation not in effective['operations']:
             _fail('hierarchy_operation_not_authorized', 403)
         return chain, effective
@@ -279,7 +281,9 @@ class HierarchyStore:
         with self.board._tx() as db:
             actor = self.board._actor(db, actor, 'allow_requests')
             chain, effective = self._authorize(db, actor, parent_id, 'delegate_project')
-            # Revoked ancestors are checked before idempotent receipt lookup.
+            # Current target scope must cover retries as well as first writes.
+            check_child_policy(effective, policy)
+            self._target(db, actor, beneficiary, policy)
             previous = self._retry(db, actor, 'create_child', key, payload)
             if previous is not None:
                 return previous
@@ -311,6 +315,7 @@ class HierarchyStore:
             chain, effective = self._authorize(db, actor, parent_id, 'create_project_lead')
             previous = self._retry(db, actor, 'create_project_lead', key, payload)
             if previous is not None:
+                check_child_policy(effective, previous['policy'])
                 return previous
             if chain[-1]['version'] != expected_version:
                 _fail('hierarchy_version_conflict', 409)
@@ -347,6 +352,7 @@ class HierarchyStore:
         with self.board._tx() as db:
             actor = self.board._actor(db, actor, 'allow_requests')
             chain, effective = self._authorize(db, actor, parent_id, 'create_team_profile')
+            check_child_policy(effective, policy)
             previous = self._retry(db, actor, 'create_team_profile', key, payload)
             if previous is not None:
                 return previous
@@ -445,11 +451,14 @@ class HierarchyStore:
                     chain.append(row); seen.add(current); current = row['parent_id']
                 chain.reverse()
             else:
-                chain, _ = self._authorize(db, actor, parent_id, 'manage_team_profile')
+                chain, effective = self._authorize(db, actor, parent_id, 'manage_team_profile')
             link = db.execute('SELECT * FROM hierarchy_team_profiles WHERE owner_id=? AND profile_id=? AND parent_id=?',
                               (actor['owner_id'], profile_id, parent_id)).fetchone()
             if link is None:
                 _fail('hierarchy_team_profile_not_found', 404)
+            if actor['kind'] != 'human':
+                leaf_scope = json.loads(self._delegation(db, actor['owner_id'], link['delegation_id'])['policy'])
+                check_child_policy(effective, leaf_scope)
             previous = self._retry(db, actor, 'archive_team_profile', key, payload)
             if previous is not None:
                 return previous
@@ -512,5 +521,7 @@ class HierarchyStore:
             if actor['kind'] == 'human':
                 return self._view(self._delegation(db, actor['owner_id'], identifier))
             chain, effective = self._authorize(db, actor, identifier)
+            if not set(json.loads(chain[-1]['policy'])['project_ids']) <= set(effective['project_ids']):
+                _fail('hierarchy_project_scope_denied', 403)
             return dict(delegation=self._view(chain[-1]), effective=effective,
                         ancestry=[dict(id=row['id'], version=row['version']) for row in chain])

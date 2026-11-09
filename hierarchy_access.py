@@ -41,7 +41,10 @@ def profile_ceiling(db, board, actor, profile, permission=None):
             _fail('hierarchy_ancestor_permission_denied', 403)
         if permission == 'allow_requests' and policy['autonomy'] == 'responses':
             _fail('hierarchy_ancestor_permission_denied', 403)
-    return store._effective(db, dict(actor, owner_id=profile['owner_id']), chain)
+    effective = store._effective(db, dict(actor, owner_id=profile['owner_id']), chain)
+    if permission == 'allow_requests' and effective['autonomy'] == 'responses':
+        _fail('hierarchy_ancestor_permission_denied', 403)
+    return effective
 
 
 def project_allowed(db, board, actor, profile, project_id):

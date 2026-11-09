@@ -270,7 +270,9 @@ def test_created_scope_requires_current_creation_ceiling_and_revocation_blocks_r
     actor = bind_created(s, result)
     reduced = s['ceiling'](allow_new_projects=False)
     s['store'].change(s['human'], root['id'], 1, 'reduce-creation', policy=reduced)
-    assert s['store'].inspect(actor, result['id'])['effective']['project_ids'] == []
+    with pytest.raises(BoardError, match='hierarchy_project_scope_denied'):
+        s['store'].inspect(actor, result['id'])
+    assert s['store'].inspect(s['human'], result['id'])['policy']['project_ids'] == [result['project_id']]
     s['store'].change(s['human'], root['id'], 2, 'revoke', revoke=True)
     with pytest.raises(BoardError, match='hierarchy_revoked'): new_project(s, root)
     with pytest.raises(BoardError, match='hierarchy_revoked'): s['store'].inspect(actor, result['id'])
@@ -319,7 +321,8 @@ def test_new_project_scope_tracks_owner_reduction_and_receipt_payload(setup):
         s['store'].create_project_lead(s['parent_actor'], root['id'], 'Changed', 'Project Lead',
                                       child(project_ids=[]), 1, 'new-project')
     s['store'].configure(s['human'], 1, s['ceiling'](allow_new_projects=False), 'owner-reduction')
-    assert not s['store'].inspect(actor, result['id'])['effective']['project_ids']
+    with pytest.raises(BoardError, match='hierarchy_project_scope_denied'):
+        s['store'].inspect(actor, result['id'])
     with pytest.raises(BoardError, match='hierarchy_operation_not_authorized'):
         new_project(s, root)
 
@@ -498,3 +501,29 @@ def test_archive_does_not_allow_recycling_cumulative_profile_budget(setup):
     s['store'].archive_team_profile(s['parent_actor'], root['id'], first['profile_id'], 1, 'archive-first')
     with pytest.raises(BoardError, match='hierarchy_quota_exhausted'):
         s['store'].create_team_profile(s['parent_actor'], root['id'], 'Second', 'developer', policy, 1, 'second')
+
+
+def test_retries_and_archive_recheck_target_after_root_project_scope_removed(setup):
+    s = setup; root = enabled(s); delegated = make_child(s, root); created = team(s, root)
+    s['store'].change(s['human'], root['id'], 1, 'remove-project', policy=s['ceiling']() | {'project_ids': []})
+    for call in (lambda: make_child(s, root), lambda: team(s, root),
+                 lambda: s['store'].archive_team_profile(s['parent_actor'], root['id'], created['profile_id'], 1, 'archive'),
+                 lambda: s['store'].inspect(s['target_actor'], delegated['id'])):
+        with pytest.raises(BoardError): call()
+
+
+def test_archived_released_team_cannot_be_restored_by_ordinary_human_editor(setup):
+    s = setup; root = enabled(s); created = team(s, root)
+    s['store'].archive_team_profile(s['parent_actor'], root['id'], created['profile_id'], 1, 'archive')
+    with pytest.raises(BoardError, match='hierarchy_archived_reentry_requires_accounting'):
+        s['b'].update_agent_profile(s['human'], created['profile_id'], 2, status='active')
+
+
+def test_created_project_team_retry_is_denied_after_creation_ceiling_removed(setup):
+    s = setup; root = enabled(s); project = new_project(s, root); actor = bind_created(s, project)
+    policy = leaf_policy(project['project_id'])
+    args = (actor, project['id'], 'Developer', 'developer', policy, 1, 'team-retry')
+    first = s['store'].create_team_profile(*args)
+    s['store'].change(s['human'], root['id'], 1, 'remove-creation', policy=s['ceiling'](allow_new_projects=False))
+    with pytest.raises(BoardError): s['store'].create_team_profile(*args)
+    assert s['store'].inspect(s['human'], first['id'])['beneficiary_id'] == first['profile_id']

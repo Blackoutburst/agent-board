@@ -231,3 +231,34 @@ def test_archive_requires_normal_claim_release_and_confirmed_runtime_cleanup(set
     with b._connection() as db:
         row = db.execute('SELECT * FROM runtime_executions WHERE id=?', (reserved['id'],)).fetchone()
         assert row['state'] == 'finished' and row['cleanup_confirmed'] == 1
+
+
+@pytest.mark.parametrize('reduction', ['root', 'owner'])
+def test_effective_responses_autonomy_blocks_new_requests_and_runtime_admission(setup, reduction):
+    s = setup; root, result, actor, execution = reserved_hierarchy(s)
+    b = s['b']
+    reduced = s['ceiling'](autonomy='responses')
+    if reduction == 'root':
+        s['store'].change(s['human'], root['id'], 1, 'responses-only', policy=reduced)
+    else:
+        s['store'].configure(s['human'], 1, reduced, 'responses-only')
+    for call in (lambda: b.create_ticket(actor, result['project_id'], 'Forbidden', idempotency_key='forbidden'),
+                 lambda: b.claim_ticket(actor, execution['ticket_id'], b.get_ticket(s['human'], execution['ticket_id'])['ticket']['version']),
+                 lambda: b.renew_ticket(actor, execution['ticket_id'], b.get_ticket(s['human'], execution['ticket_id'])['ticket']['version']),
+                 lambda: b.reserve_execution(actor, 'new-request', result['project_id'], execution['ticket_id'],
+                    'new-work', 'new-turn', 'codex_chatgpt', 'fixture')):
+        with pytest.raises(BoardError, match='hierarchy_ancestor_permission_denied'): call()
+    assert b.get_execution_control(actor, execution['id'])['should_stop']
+    assert b.finish_execution(actor, execution['id'], execution['revision'], 'cancelled', True, 'policy_changed')['state'] == 'finished'
+
+
+def test_responses_only_still_allows_message_reply_admission(setup):
+    s = setup; root, result, actor, execution, ticket, source = reserved_message_hierarchy(s)
+    b = s['b']
+    s['store'].change(s['human'], root['id'], 1, 'responses-only', policy=s['ceiling'](autonomy='responses'))
+    b.finish_execution(actor, execution['id'], execution['revision'], 'cancelled', True, 'policy_changed')
+    reply = b.post_message(actor, ticket['thread_id'], 'Reply only', reply_to=source['id'], idempotency_key='response')
+    assert reply['reply_to'] == source['id']
+    sha = b.get_message(actor, ticket['thread_id'], source['id'])['source_sha256']
+    assert b.reserve_message_execution(actor, 'response-only-turn', ticket['thread_id'], source['id'], sha,
+        'response-work', 'response-turn', 'codex_chatgpt', 'fixture')['reserved']
