@@ -600,3 +600,24 @@ def test_companion_new_project_is_exact_bound_and_remains_revocable(setup):
     assert created['project_id'] not in s['store'].inspect(actor, root['id'])['effective']['project_ids']
     with pytest.raises(BoardError):
         s['store'].inspect(lead_actor, created['id'])
+
+
+@pytest.mark.parametrize('retry', [False, True])
+def test_archive_rechecks_actual_leaf_project_before_mutation_or_receipt(setup, retry):
+    s = setup; root = enabled(s); result = team(s, root)
+    b = s['b']; profile_id = result['profile_id']
+    version = 1
+    if retry:
+        s['store'].archive_team_profile(s['parent_actor'], root['id'], profile_id, 1, 'archive')
+        version = 2
+    outside = b.create_project(s['human'], 'Outside parent scope', ['alice'])
+    b.update_agent_profile(s['human'], profile_id, version, project_ids=[outside['id']])
+    before = snapshot(s)
+    with pytest.raises(BoardError, match='hierarchy_profile_project_scope_required'):
+        s['store'].archive_team_profile(s['parent_actor'], root['id'], profile_id, 1, 'archive')
+    assert snapshot(s) == before
+    if not retry:
+        # Human reconciliation still releases capacity exactly once.
+        archived = s['store'].archive_team_profile(s['human'], root['id'], profile_id, 2, 'human-archive')
+        assert archived['version'] == 3
+        assert s['store'].archive_team_profile(s['human'], root['id'], profile_id, 2, 'human-archive') == archived

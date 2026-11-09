@@ -467,9 +467,12 @@ class HierarchyStore:
                               (actor['owner_id'], profile_id, parent_id)).fetchone()
             if link is None:
                 _fail('hierarchy_team_profile_not_found', 404)
+            target = self.board._profile_owned(db, actor, profile_id)
             if actor['kind'] != 'human':
                 leaf_scope = json.loads(self._delegation(db, actor['owner_id'], link['delegation_id'])['policy'])
                 check_child_policy(effective, leaf_scope)
+                if json.loads(target['project_ids']) != leaf_scope['project_ids']:
+                    _fail('hierarchy_profile_project_scope_required', 403)
             previous = self._retry(db, actor, 'archive_team_profile', key, payload)
             if previous is not None:
                 return previous
