@@ -232,6 +232,11 @@ class ProfilesMixin(ProfileRefreshMixin):
             if db.execute('SELECT 1 FROM hierarchy_team_profiles WHERE profile_id=? AND released_at IS NOT NULL',
                           (identifier,)).fetchone():
                 _fail('hierarchy_archived_reentry_requires_accounting', 409)
+        if values.get('status') in ('active', 'paused') and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hierarchy_receipts'").fetchone():
+            if db.execute("SELECT 1 FROM hierarchy_receipts WHERE operation='archive_project_lead' "
+                          "AND json_extract(receipt,'$.profile_id')=?", (identifier,)).fetchone():
+                _fail('hierarchy_archived_reentry_requires_accounting', 409)
         row = db.execute('SELECT * FROM agent_profiles WHERE id=?', (identifier,)).fetchone()
         fields = {**json.loads(row['fields']), **{key: value for key, value in values.items() if key in TEXT_LIMITS}}
         previous_policy = json.loads(row['policy'])

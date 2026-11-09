@@ -272,6 +272,11 @@ class ProjectsMixin:
                 _fail("Only a human can change project automation", 403)
             if row["version"] != expected_version:
                 _fail("Project changed; reload before saving", 409)
+            if changes.get("archived") is False and db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hierarchy_receipts'").fetchone():
+                if db.execute("SELECT 1 FROM hierarchy_receipts WHERE operation='archive_project_lead' "
+                              "AND json_extract(receipt,'$.project_id')=?", (project_id,)).fetchone():
+                    _fail('hierarchy_archived_reentry_requires_accounting', 409)
             assignments = ",".join(key + "=?" for key in values)
             db.execute(f"UPDATE projects SET {assignments},version=version+1,updated_at=? WHERE id=? AND version=?",
                        (*values.values(), time.time(), project_id, expected_version))

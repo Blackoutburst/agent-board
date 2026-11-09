@@ -507,6 +507,73 @@ class HierarchyStore:
             return self._remember(db, actor, 'archive_team_profile', key, payload,
                                   dict(id=leaf['id'], profile_id=profile_id, version=expected_version + 1))
 
+    def archive_project_lead(self, actor, project_id, project_version, profile_version, key):
+        """Human reconciliation only; archive after team/work cleanup, once."""
+        exact_string(project_id); _version(project_version); _version(profile_version)
+        payload = dict(project_id=project_id, project_version=project_version, profile_version=profile_version)
+        with self.board._tx() as db:
+            actor = self.board._human(db, actor)
+            binding = db.execute('SELECT * FROM hierarchy_project_bindings WHERE owner_id=? AND project_id=?',
+                                 (actor['owner_id'], project_id)).fetchone()
+            if binding is None:
+                _fail('hierarchy_project_binding_not_found', 404)
+            previous = self._retry(db, actor, 'archive_project_lead', key, payload)
+            if previous is not None:
+                return previous
+            if db.execute("SELECT 1 FROM hierarchy_receipts WHERE owner_id=? AND operation='archive_project_lead' "
+                          "AND json_extract(receipt,'$.project_id')=?", (actor['owner_id'], project_id)).fetchone():
+                _fail('hierarchy_archive_already_released', 409)
+            project = self.board._project_member(db, actor, project_id)
+            profile = self.board._profile_owned(db, actor, binding['profile_id'])
+            leaf = self._delegation(db, actor['owner_id'], binding['delegation_id'])
+            if project['version'] != project_version or profile['version'] != profile_version:
+                _fail('hierarchy_version_conflict', 409)
+            if (profile['legacy'] or profile['kind'] != 'agent'
+                    or json.loads(profile['project_ids']) != [project_id]
+                    or leaf['beneficiary_id'] != profile['id'] or leaf['parent_id'] != binding['creator_id']):
+                _fail('hierarchy_provenance_invalid', 409)
+            if db.execute("SELECT 1 FROM hierarchy_delegations d WHERE d.owner_id=? AND d.parent_id=? "
+                          "AND NOT EXISTS (SELECT 1 FROM hierarchy_team_profiles t WHERE t.owner_id=d.owner_id "
+                          "AND t.delegation_id=d.id AND t.released_at IS NOT NULL)",
+                          (actor['owner_id'], leaf['id'])).fetchone():
+                _fail('hierarchy_archive_descendants_present', 409)
+            self._archive_clear(db, actor['owner_id'], profile['id'])
+            if db.execute("SELECT 1 FROM tickets WHERE project_id=? AND claimant IS NOT NULL "
+                          "AND status NOT IN ('done','complete') LIMIT 1", (project_id,)).fetchone():
+                _fail('hierarchy_archive_claim_present', 409)
+            if db.execute("SELECT 1 FROM tasks t JOIN tickets k ON k.thread_id=t.thread_id "
+                          "WHERE k.project_id=? AND t.claimant IS NOT NULL "
+                          "AND t.status NOT IN ('done','complete') LIMIT 1", (project_id,)).fetchone():
+                _fail('hierarchy_archive_claim_present', 409)
+            if db.execute("SELECT 1 FROM runtime_executions WHERE project_id=? "
+                          "AND (state!='finished' OR cleanup_confirmed!=1) LIMIT 1", (project_id,)).fetchone():
+                _fail('hierarchy_archive_cleanup_unconfirmed', 409)
+            if db.execute("SELECT 1 FROM delegation_families WHERE project_id=? "
+                          "AND state IN ('running','integrating') LIMIT 1", (project_id,)).fetchone():
+                _fail('hierarchy_archive_family_active', 409)
+            chain, seen, current = [], set(), binding['creator_id']
+            while current is not None:
+                row = self._delegation(db, actor['owner_id'], current)
+                if current in seen or len(chain) >= 5:
+                    _fail('hierarchy_provenance_invalid', 409)
+                chain.append(row); seen.add(current); current = row['parent_id']
+            limits = self._limits(db, actor['owner_id'])
+            for table, row, column, identifier in [('hierarchy_limits', limits, 'owner_id', actor['owner_id'])] + [
+                    ('hierarchy_delegations', row, 'id', row['id']) for row in chain]:
+                counters = json.loads(row['counters'])
+                for kind in ('projects', 'profiles', 'delegations'):
+                    if counters[kind]['live'] < 1:
+                        _fail('hierarchy_ledger_invalid', 409)
+                    counters[kind]['live'] -= 1
+                db.execute(f'UPDATE {table} SET counters=? WHERE {column}=?', (_json(counters), identifier))
+            self.board._write_profile(db, profile['id'], dict(status='archived'))
+            db.execute('UPDATE projects SET archived=1,version=version+1,updated_at=? WHERE id=?', (time.time(), project_id))
+            db.execute("UPDATE hierarchy_delegations SET status='revoked',version=version+1,updated_at=? WHERE id=?",
+                       (time.time(), leaf['id']))
+            return self._remember(db, actor, 'archive_project_lead', key, payload,
+                dict(id=leaf['id'], project_id=project_id, profile_id=profile['id'],
+                     version=project_version + 1, profile_version=profile_version + 1))
+
     def change(self, actor, identifier, expected_version, key, *, policy=None, revoke=False):
         _version(expected_version)
         if type(revoke) is not bool or (policy is None and not revoke) or (policy is not None and revoke):
