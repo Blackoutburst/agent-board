@@ -616,6 +616,7 @@
     "tests/browser_family.cjs": "ea17478d3c44275bd122d25bcbb66db7a25e8171b020dc3018e875ee2010b37e",
     "tests/browser_followups.cjs": "8259df28aa9566ec62c76ee42740a2a0d7db90e6a04cc273802997e7d632f771",
     "tests/browser_group_mentions.cjs": "d0ea2931cd959fd1aa55d52194c83a7e0e1dfa13e5696c8d5511d178c9046a28",
+    "tests/browser_hierarchy.py": "fd1ca231705e36e25537607297699821d6a159362390226ac763fb05c9826a5c",
     "tests/browser_markdown.cjs": "c67620788aeee3cd5d7d705ddd786029f73708ab6f04ee0c05338c01dad98c04",
     "tests/browser_messages_append.cjs": "9f6cdf88a60256bd4af142aad23e93cbf0f155103a01d54a8ea6adaa2ae7caca",
     "tests/browser_overhaul.cjs": "6313e1bbafa9dde9309ac83d0c20a937defc705219ff0c050e01abc8ae1e3f8f",
