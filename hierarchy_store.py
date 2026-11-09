@@ -515,6 +515,21 @@ class HierarchyStore:
             return self._remember(db, actor, 'change', key, payload,
                                   self._view(self._delegation(db, actor['owner_id'], identifier)))
 
+    def list_for_owner(self, actor, *, limit=50, after=None):
+        if type(limit) is not int or not 1 <= limit <= 100:
+            _fail('hierarchy_page_invalid')
+        if after is not None:
+            exact_string(after)
+        with self.board._tx() as db:
+            actor = self.board._human(db, actor)
+            limits = db.execute('SELECT * FROM hierarchy_limits WHERE owner_id=?',
+                                (actor['owner_id'],)).fetchone()
+            rows = db.execute('SELECT * FROM hierarchy_delegations WHERE owner_id=? AND id>? ORDER BY id LIMIT ?',
+                              (actor['owner_id'], after or '', limit + 1)).fetchall()
+            return dict(limits=self._view(limits) if limits is not None else None,
+                        delegations=[self._view(row) for row in rows[:limit]],
+                        next_after=rows[limit - 1]['id'] if len(rows) > limit else None)
+
     def inspect(self, actor, identifier):
         with self.board._tx() as db:
             actor = self.board._actor(db, actor, 'allow_read')

@@ -1510,6 +1510,9 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
     async def rename_agent(agent_id: str, values: AgentName, actor=Depends(human)):
         return board.rename_agent(actor, agent_id, values.name)
 
+    from hierarchy_api import mount_hierarchy_routes
+    mount_hierarchy_routes(app, board, human)
+
     @app.get('/api/agent-profiles')
     async def agent_profiles(include_archived: bool = False, actor=Depends(human)):
         return board.list_agent_profiles(actor, include_archived=include_archived)
