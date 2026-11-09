@@ -13,7 +13,7 @@ from legacy_schema_fixtures import (
 def test_empty_schema14_tables_are_absent_in_legacy_store_and_recreated(tmp_path):
     board = Board(tmp_path / 'legacy')
     with board._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 20
         remove_server_schema14_tables(db)
         db.execute('DROP INDEX companion_per_owner')
         db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
@@ -23,7 +23,7 @@ def test_empty_schema14_tables_are_absent_in_legacy_store_and_recreated(tmp_path
         assert not tables.intersection(SERVER_SCHEMA14_TABLES)
     migrated = Board(board.data_dir)
     with migrated._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 20
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert set(SERVER_SCHEMA14_TABLES) <= tables
         assert not db.execute('PRAGMA foreign_key_check').fetchall()

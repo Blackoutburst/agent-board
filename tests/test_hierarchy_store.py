@@ -19,8 +19,6 @@ def setup(tmp_path):
     b.set_policy(human, True, True, True, True,
                  ['repo.read_file', 'repo.patch_file', 'repo.run_test'], ['repo:work'])
     project = b.create_project(human, 'Project', ['alice'], idempotency_key='project')
-    with b._tx() as db:
-        migrate_hierarchy(db)
     store = HierarchyStore(b)
     def agent(name):
         p = b.create_agent_profile(human, name, project_ids=[project['id']], policy=dict(
@@ -208,7 +206,7 @@ def test_store_schema_does_not_expose_an_incomplete_board_api(setup):
     s = setup
     assert not hasattr(s['b'], 'create_hierarchy_root')
     with s['b']._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 20
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
 
 

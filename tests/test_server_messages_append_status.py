@@ -164,16 +164,18 @@ def test_real16_migration_keeps_existing_A_projection_and_adds_empty_optional_st
     from server_messages_append import SQL
     from test_server_provisioning import stop,profile as profile_a,grant as grant_a,body as body_a,request as request_a
     e=env;b,h,_,_,_,host,*_=e;stop(e);p=profile_a(e);grant_a(e);r=request_a(e,body_a(e,p))
+    from legacy_schema_fixtures import remove_hierarchy_schema20_tables, HIERARCHY_SCHEMA20_TABLES
     with b._tx() as db:
+        remove_hierarchy_schema20_tables(db)
         for name in reversed(tuple(SQL)):
             db.execute(('DROP INDEX ' if name.endswith('one_active') else 'DROP TABLE ')+name)
         db.execute('DROP INDEX companion_per_owner')
         db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=16')
     before=snapshot(b);reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:5])=={**before,
+    assert snapshot(reopened,exclude=tuple(SQL)[:5]+HIERARCHY_SCHEMA20_TABLES)=={**before,
         'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
     assert reopened.get_server_provisioning_request(h,host['id'],r['request_id'])==r
     with reopened._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]== 19
+        assert db.execute('PRAGMA user_version').fetchone()[0]== 20
         assert db.execute('SELECT COUNT(*) FROM server_messages_append_statuses').fetchone()[0]==0

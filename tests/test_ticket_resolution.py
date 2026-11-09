@@ -90,13 +90,15 @@ def test_schema_18_migration_marks_existing_done_tickets_completed(space, tmp_pa
     board.update_ticket(human, task['id'], task['version'], status='done', outcome='Done', evidence='Checked')
     open_task = new(space, 'Legacy open')
     with sqlite3.connect(board.db_path) as db:
+        from legacy_schema_fixtures import remove_hierarchy_schema20_tables
+        remove_hierarchy_schema20_tables(db)
         db.execute("UPDATE tickets SET resolution=''")
         db.execute('DROP INDEX companion_per_owner')
         db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=17')
     reopened = Board(board.data_dir, base_url=board.base_url)
     with sqlite3.connect(reopened.db_path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 20
         rows = dict(db.execute('SELECT id,resolution FROM tickets WHERE id IN (?,?)', (task['id'], open_task['id'])))
     assert rows == {task['id']: 'completed', open_task['id']: ''}
 

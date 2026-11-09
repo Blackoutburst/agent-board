@@ -180,12 +180,14 @@ def test_schema18_upgrade_preserves_ordinary_claims_snapshots_and_ticket_resolut
     with board._connection() as db:
         before = [tuple(row) for row in db.execute('SELECT profile_id,version,snapshot FROM agent_profile_versions ORDER BY profile_id,version')]
     with board._tx() as db:
+        from legacy_schema_fixtures import remove_hierarchy_schema20_tables
+        remove_hierarchy_schema20_tables(db)
         db.execute('DROP INDEX companion_per_owner')
         db.execute('ALTER TABLE agent_profiles DROP COLUMN kind')
         db.execute('PRAGMA user_version=18')
     migrated = Board(board.data_dir)
     with migrated._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 19
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 20
         assert db.execute('SELECT kind FROM agent_profiles WHERE id=?', (profile['id'],)).fetchone()[0] == 'agent'
         assert [tuple(row) for row in db.execute('SELECT profile_id,version,snapshot FROM agent_profile_versions ORDER BY profile_id,version')] == before
     assert migrated.get_ticket(human, ticket['id'])['ticket']['claimant'] == claimed['claimant']
@@ -288,7 +290,7 @@ def test_schema19_backup_roundtrip_and_newer_schema_refusal(setup, tmp_path):
     restored = Board(tmp_path / 'restored')
     assert restored.get_agent_profile(human, companion['id'])['kind'] == 'companion'
     with restored._tx() as db:
-        db.execute('PRAGMA user_version=20')
+        db.execute('PRAGMA user_version=21')
     with pytest.raises(RuntimeError, match='newer'):
         Board(tmp_path / 'restored')
 

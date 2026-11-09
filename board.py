@@ -69,7 +69,7 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
             raise ValueError("lease_seconds must be positive")
         with self._tx() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 19:
+            if version > 20:
                 raise RuntimeError("Database schema is newer than this application")
             if version == 0:
                 # Run each statement in the surrounding transaction; executescript
@@ -200,6 +200,10 @@ class Board(ServerMessagesAppendMixin, ServerProvisioningMixin, ServerInstancesM
                 db.execute("ALTER TABLE agent_profiles ADD COLUMN kind TEXT NOT NULL DEFAULT 'agent' CHECK(kind IN ('agent','companion'))")
                 db.execute("CREATE UNIQUE INDEX companion_per_owner ON agent_profiles(owner_id) WHERE kind='companion'")
                 db.execute("PRAGMA user_version=19")
+            if version < 20:
+                from hierarchy_store import migrate_hierarchy
+                migrate_hierarchy(db)
+                db.execute('PRAGMA user_version=20')
             self._provisioning_schema(db)
             self._messages_append_schema(db)
 

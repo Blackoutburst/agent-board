@@ -106,7 +106,7 @@ def _request_view(row, body):
 
 class ServerProvisioningMixin:
     def _provisioning_schema(self, db):
-        if db.execute('PRAGMA user_version').fetchone()[0] not in (16, 17, 18, 19):
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (16, 17, 18, 19, 20):
             _fail('server_provisioning_schema_invalid', 409)
         names = tuple(SQL)[:4]
         if any(row['name'] not in SQL for row in db.execute(

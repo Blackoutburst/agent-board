@@ -36,7 +36,7 @@ def test_exact_selection_never_chooses_higher_priority_work_or_launches_runtime(
     assert board.get_ticket(human,urgent['id'])['ticket']['claimant'] is None
     assert board.get_runtime(human)['executions']==[]
     with board._connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==19
+        assert db.execute('PRAGMA user_version').fetchone()[0]==20
         assert db.execute("SELECT COUNT(*) FROM ticket_events WHERE event='ticket_claimed'").fetchone()[0]==1
 
 

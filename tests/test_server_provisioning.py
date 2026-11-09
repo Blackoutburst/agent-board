@@ -1,6 +1,7 @@
 """Real SQLite boundaries for inert human requests; no manager/provider effect."""
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+
 import json
 import sqlite3
 import threading
@@ -10,7 +11,7 @@ import pytest
 from board import Board, BoardError
 from server_provisioning import GRANT_SCHEMA, REQUEST_SCHEMA, CANCEL_SCHEMA, SQL
 from test_server_instances import env, report, command, ack
-from legacy_schema_fixtures import remove_provisioning_schema16_tables, MESSAGES_APPEND_SCHEMA17_TABLES
+from legacy_schema_fixtures import remove_provisioning_schema16_tables, MESSAGES_APPEND_SCHEMA17_TABLES, HIERARCHY_SCHEMA20_TABLES
 
 
 def stop(e, key='stop'):
@@ -282,9 +283,9 @@ def test_schema16_migration_is_atomic_and_preserves_old_rows(env,monkeypatch):
     assert snapshot(b)==before
     monkeypatch.setattr(module,'migrate_server_provisioning',original)
     reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)=={**before,
+    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES+HIERARCHY_SCHEMA20_TABLES)=={**before,
         'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
-    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 19
+    with reopened._connection() as db:assert db.execute('PRAGMA user_version').fetchone()[0]== 20
 
 
 @pytest.mark.parametrize('phase', ['request', 'cancel'])
@@ -380,7 +381,7 @@ def test_schema16_retains_actual_runtime_and_permanent_admission_refusal(runtime
     downgrade_empty_provisioning(b)
     before=snapshot(b)
     reopened=Board(b.data_dir)
-    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES)=={**before,
+    assert snapshot(reopened,exclude=tuple(SQL)[:4]+MESSAGES_APPEND_SCHEMA17_TABLES+HIERARCHY_SCHEMA20_TABLES)=={**before,
         'agent_profiles':[(*row,'agent') for row in before['agent_profiles']]}
     assert reopened.reserve_message_execution(actor(e),**args)==proof
     with reopened._connection() as db:
