@@ -13,6 +13,7 @@ import time
 from hierarchy_policy import (AUTONOMY, KINDS, normalize_policy, check_child_policy,
                               require_capacity, exact_string)
 from projects import _fail, _json, _version
+from profiles import _insert_profile, _record_version
 
 
 def migrate_hierarchy(db):
@@ -27,6 +28,11 @@ def migrate_hierarchy(db):
         '''CREATE TABLE hierarchy_receipts(owner_id TEXT NOT NULL REFERENCES owners(id), principal TEXT NOT NULL,
             operation TEXT NOT NULL, key TEXT NOT NULL, payload_sha256 TEXT NOT NULL, receipt TEXT NOT NULL,
             PRIMARY KEY(owner_id,principal,operation,key))''',
+        '''CREATE TABLE hierarchy_project_bindings(owner_id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id),
+            creator_id TEXT NOT NULL, delegation_id TEXT NOT NULL, profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
+            PRIMARY KEY(owner_id,project_id),
+            FOREIGN KEY(owner_id,creator_id) REFERENCES hierarchy_delegations(owner_id,id),
+            FOREIGN KEY(owner_id,delegation_id) REFERENCES hierarchy_delegations(owner_id,id))''',
         'CREATE INDEX hierarchy_parent ON hierarchy_delegations(owner_id,parent_id)',
     ):
         db.execute(statement)
@@ -153,8 +159,30 @@ class HierarchyStore:
         policies = [normalize_policy(json.loads(limits['policy']))]
         policies += [normalize_policy(json.loads(row['policy'])) for row in chain]
         result = normalize_policy(policies[-1])
+        # A created project belongs to this chain only through its immutable
+        # transaction binding and the creator's still-current creation ceiling.
+        created = set()
+        ids = [row['id'] for row in chain]
+        for binding in db.execute('SELECT * FROM hierarchy_project_bindings WHERE owner_id=?',
+                                  (actor['owner_id'],)):
+            if binding['creator_id'] not in ids:
+                continue
+            index = ids.index(binding['creator_id'])
+            ceilings = policies[:index + 2]
+            if all(p['allow_new_projects'] and 'create_project_lead' in p['operations'] for p in ceilings):
+                created.add(binding['project_id'])
         for field in ('operations', 'project_ids', 'actions', 'resources'):
-            result[field] = sorted(set.intersection(*(set(p[field]) for p in policies)))
+            scopes = [set(p[field]) for p in policies]
+            if field == 'project_ids':
+                # Only ancestors through the creator receive binding scope;
+                # descendants must explicitly carry the singleton project.
+                for i, scope in enumerate(scopes):
+                    for project in created:
+                        binding = db.execute('SELECT creator_id FROM hierarchy_project_bindings WHERE owner_id=? AND project_id=?',
+                                             (actor['owner_id'], project)).fetchone()
+                        if i <= ids.index(binding['creator_id']) + 1:
+                            scope.add(project)
+            result[field] = sorted(set.intersection(*scopes))
         result['allow_new_projects'] = all(p['allow_new_projects'] for p in policies)
         distances = [len(chain) - 1] + [len(chain) - 1 - i for i in range(len(chain))]
         result['max_depth'] = max(0, min(p['max_depth'] - distance
@@ -173,7 +201,13 @@ class HierarchyStore:
             profile_policy = json.loads(profile['policy'])
             for field in ('actions', 'resources'):
                 result[field] = sorted(set(result[field]) & set(profile_policy[field]))
-            result['project_ids'] = sorted(set(result['project_ids']) & set(json.loads(profile['project_ids'])))
+            profile_projects = set(json.loads(profile['project_ids']))
+            for project in created:
+                binding = db.execute('SELECT creator_id FROM hierarchy_project_bindings WHERE owner_id=? AND project_id=?',
+                                     (actor['owner_id'], project)).fetchone()
+                if ids.index(row['id']) <= ids.index(binding['creator_id']):
+                    profile_projects.add(project)
+            result['project_ids'] = sorted(set(result['project_ids']) & profile_projects)
             result['autonomy'] = min(result['autonomy'], profile_policy['autonomy'], key=AUTONOMY.get)
         # Reductions are effective intersections; snapshots of descendants stay intact.
         if result['max_depth'] == 0 and 'delegate_project' in result['operations']:
@@ -254,6 +288,49 @@ class HierarchyStore:
             self._charge(db, actor['owner_id'], chain, {'delegations': 1})
             result = self._insert(db, actor, beneficiary, parent_id, policy)
             return self._remember(db, actor, 'create_child', key, payload, result)
+
+    def create_project_lead(self, actor, parent_id, name, lead_name, policy, expected_version, key):
+        """Internal atomic constructor. No device, binding, grant or Runtime start.
+
+        The client supplies no project ID: the singleton child scope is minted
+        with the project and recorded provenance inside the transaction.
+        """
+        _version(expected_version)
+        exact_string(name); exact_string(lead_name)
+        policy = normalize_policy(policy)
+        if policy['project_ids']:
+            _fail('hierarchy_new_project_scope_must_be_empty')
+        payload = dict(parent_id=parent_id, name=name, lead_name=lead_name,
+                       policy=policy, expected_version=expected_version)
+        with self.board._tx() as db:
+            actor = self.board._actor(db, actor, 'allow_requests')
+            chain, effective = self._authorize(db, actor, parent_id, 'create_project_lead')
+            previous = self._retry(db, actor, 'create_project_lead', key, payload)
+            if previous is not None:
+                return previous
+            if chain[-1]['version'] != expected_version:
+                _fail('hierarchy_version_conflict', 409)
+            project_id, profile_id, now = secrets.token_hex(16), secrets.token_hex(16), time.time()
+            child_policy = dict(policy, project_ids=[project_id])
+            check_child_policy(effective, child_policy, created_project_id=project_id)
+            self._charge(db, actor['owner_id'], chain, dict(projects=1, profiles=1, delegations=1))
+            db.execute("""INSERT INTO projects(id,name,description,context,repository_url,environment,created_at,updated_at)
+                VALUES(?,?,'','','','',?,?)""", (project_id, name, now, now))
+            db.execute('INSERT INTO project_members(project_id,owner_id) VALUES(?,?)',
+                       (project_id, actor['owner_id']))
+            _insert_profile(db, profile_id, actor['owner_id'], lead_name, now=now)
+            profile_policy = dict(allow_read=True, allow_messages=False, allow_requests=True,
+                actions=child_policy['actions'], resources=child_policy['resources'], autonomy=child_policy['autonomy'])
+            db.execute('UPDATE agent_profiles SET policy=?,project_ids=? WHERE id=?',
+                       (_json(profile_policy), _json([project_id]), profile_id))
+            _record_version(db, profile_id, replace_initial=True)
+            result = self._insert(db, actor, profile_id, parent_id, child_policy)
+            db.execute('INSERT INTO hierarchy_project_bindings VALUES(?,?,?,?,?)',
+                       (actor['owner_id'], project_id, parent_id, result['id'], profile_id))
+            result.update(project_id=project_id, profile_id=profile_id)
+            self.board._audit(db, actor, 'hierarchy_project_lead_created', dict(
+                project_id=project_id, profile_id=profile_id, parent_id=parent_id, delegation_id=result['id']))
+            return self._remember(db, actor, 'create_project_lead', key, payload, result)
 
     def change(self, actor, identifier, expected_version, key, *, policy=None, revoke=False):
         _version(expected_version)

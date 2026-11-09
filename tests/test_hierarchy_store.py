@@ -210,3 +210,115 @@ def test_store_schema_does_not_expose_an_incomplete_board_api(setup):
     with s['b']._connection() as db:
         assert db.execute('PRAGMA user_version').fetchone()[0] == 19
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+
+
+def new_project(s, root, key='new-project', **changes):
+    return s['store'].create_project_lead(s['parent_actor'], root['id'], 'New project', 'Project Lead',
+        child(project_ids=[], **changes), root['version'], key)
+
+
+def bind_created(s, result):
+    b = s['b']; human = s['human']
+    device = b.create_device(human, 'new-lead', [])
+    b.bind_agent_profile(human, result['profile_id'], 1, device['id'], 'new-lead', 'codex')
+    raw = b.authenticate(device['token'])
+    b.register_agent(raw, 'new-lead', 'new-lead', [], 'codex', True, 'new-lead')
+    return b.actor_session(raw, 'new-lead')
+
+
+def test_new_project_lead_is_atomic_scoped_unbound_and_idempotent(setup):
+    s = setup; root = enabled(s)
+    result = new_project(s, root)
+    assert new_project(s, root) == result
+    with s['b']._connection() as db:
+        profile = db.execute('SELECT * FROM agent_profiles WHERE id=?', (result['profile_id'],)).fetchone()
+        assert json.loads(profile['project_ids']) == [result['project_id']]
+        assert not db.execute('SELECT * FROM agent_profile_bindings WHERE profile_id=?', (result['profile_id'],)).fetchall()
+        assert [r[0] for r in db.execute('SELECT owner_id FROM project_members WHERE project_id=?',
+                                       (result['project_id'],))] == ['alice']
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+        counters = json.loads(db.execute('SELECT counters FROM hierarchy_limits').fetchone()[0])
+        assert counters['projects'] == dict(live=1, created=1)
+        assert counters['profiles'] == dict(live=1, created=1)
+    actor = bind_created(s, result)
+    assert s['store'].inspect(actor, result['id'])['effective']['project_ids'] == [result['project_id']]
+    # Explicit binding never broadens a static ancestor profile.
+    with s['b']._connection() as db:
+        projects = json.loads(db.execute('SELECT project_ids FROM agent_profiles WHERE id=?',
+                                        (s['parent']['id'],)).fetchone()[0])
+        assert result['project_id'] not in projects
+
+
+def test_new_project_creation_rolls_back_every_object_and_ledger(setup, monkeypatch):
+    s = setup; root = enabled(s)
+    tables = ['projects', 'project_members', 'agent_profiles', 'agent_profile_versions',
+              'hierarchy_limits', 'hierarchy_delegations', 'hierarchy_project_bindings', 'hierarchy_receipts', 'audit']
+    def counts():
+        with s['b']._connection() as db:
+            return {t: [tuple(r) for r in db.execute('SELECT * FROM ' + t)] for t in tables}
+    before = counts(); original = s['store']._remember
+    def fail(*args):
+        original(*args)
+        raise RuntimeError('injected after all writes')
+    monkeypatch.setattr(s['store'], '_remember', fail)
+    with pytest.raises(RuntimeError): new_project(s, root)
+    assert counts() == before
+
+
+def test_created_scope_requires_current_creation_ceiling_and_revocation_blocks_retry(setup):
+    s = setup; root = enabled(s); result = new_project(s, root)
+    actor = bind_created(s, result)
+    reduced = s['ceiling'](allow_new_projects=False)
+    s['store'].change(s['human'], root['id'], 1, 'reduce-creation', policy=reduced)
+    assert s['store'].inspect(actor, result['id'])['effective']['project_ids'] == []
+    s['store'].change(s['human'], root['id'], 2, 'revoke', revoke=True)
+    with pytest.raises(BoardError, match='hierarchy_revoked'): new_project(s, root)
+    with pytest.raises(BoardError, match='hierarchy_revoked'): s['store'].inspect(actor, result['id'])
+
+
+def test_project_creation_refuses_client_chosen_scope_and_overquota_without_orphans(setup):
+    s = setup; root = enabled(s, quotas={k: dict(live=1 if k == 'projects' else 4, created=8)
+                                       for k in ('projects', 'profiles', 'delegations')})
+    small = {k: dict(live=1 if k == 'projects' else 4, created=8)
+             for k in ('projects', 'profiles', 'delegations')}
+    with pytest.raises(BoardError, match='scope_must_be_empty'):
+        s['store'].create_project_lead(s['parent_actor'], root['id'], 'Project', 'Lead',
+            s['subordinate'](), 1, 'chosen')
+    new_project(s, root, quotas=small)
+    before = snapshot(s)
+    with pytest.raises(BoardError, match='hierarchy_quota_exhausted'):
+        new_project(s, root, key='second', quotas=small)
+    assert snapshot(s) == before
+
+
+def test_parallel_project_constructors_share_one_owner_quota(setup):
+    s = setup
+    quotas = {k: dict(live=1 if k == 'projects' else 4, created=8)
+              for k in ('projects', 'profiles', 'delegations')}
+    root = enabled(s, quotas=quotas)
+    gate = threading.Barrier(2)
+    def run(key):
+        gate.wait()
+        try:
+            return new_project(s, root, key=key, quotas=quotas)
+        except BoardError as error:
+            return str(error)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(run, ['parallel-a', 'parallel-b']))
+    assert sum(isinstance(r, dict) for r in results) == 1
+    assert sum('hierarchy_quota_exhausted' in str(r) for r in results) == 1
+    with s['b']._connection() as db:
+        assert db.execute('SELECT COUNT(*) FROM hierarchy_project_bindings').fetchone()[0] == 1
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+
+
+def test_new_project_scope_tracks_owner_reduction_and_receipt_payload(setup):
+    s = setup; root = enabled(s); result = new_project(s, root)
+    actor = bind_created(s, result)
+    with pytest.raises(BoardError, match='hierarchy_idempotency_conflict'):
+        s['store'].create_project_lead(s['parent_actor'], root['id'], 'Changed', 'Project Lead',
+                                      child(project_ids=[]), 1, 'new-project')
+    s['store'].configure(s['human'], 1, s['ceiling'](allow_new_projects=False), 'owner-reduction')
+    assert not s['store'].inspect(actor, result['id'])['effective']['project_ids']
+    with pytest.raises(BoardError, match='hierarchy_operation_not_authorized'):
+        new_project(s, root)
