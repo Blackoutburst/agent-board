@@ -1493,12 +1493,23 @@ const Workspace = (() => {
     }
   }
 
-  async function hierarchyLimitsEditor() {
+  async function hierarchyLimitsEditor(mode = "limits", identifier = null) {
     const owner = state.actor && state.actor.owner_id;
     if (!state.actor || state.actor.kind !== "human") return;
+    if (!["limits", "root", "reduce"].includes(mode)) throw new Error("Commande de délégation inconnue.");
     const overview = await api("/hierarchy?limit=1");
     if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) return;
-    const old = overview.limits;
+    let old = overview.limits, profiles = [];
+    if (mode === "root") {
+      if (!old) throw new Error("Configurez les plafonds du propriétaire avant de déléguer.");
+      profiles = (await api("/agent-profiles")).filter(p => p.owner_id === owner && !p.legacy && p.status !== "archived");
+      if (!profiles.length) throw new Error("Créez d’abord un profil dans votre compte.");
+      old = null;
+    } else if (mode === "reduce") {
+      old = await api(`/hierarchy/delegations/${workPath(identifier)}`);
+      if (old.id !== identifier || old.owner_id !== owner || old.status !== "active") throw new Error("Délégation active non confirmée.");
+    }
+    if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) return;
     const policy = old ? old.policy : { operations: [], project_ids: [], allow_new_projects: false,
       actions: [], resources: [], autonomy: "responses", max_depth: 0,
       quotas: { projects: {live:0,created:0}, profiles: {live:0,created:0}, delegations: {live:0,created:0} } };
@@ -1507,7 +1518,10 @@ const Workspace = (() => {
       ["manage_team_profile", "Gérer les profils d’équipe"], ["delegate_project", "Déléguer un projet"]
     ];
     const form = el("form", { class: "work-form" },
-      el("p", {}, "Ces plafonds bornent toutes vos chaînes de délégation. Les enregistrer ne délègue aucun droit à un profil et ne connecte ni ne démarre un agent."),
+      el("p", {}, mode === "limits" ? "Ces plafonds bornent toutes vos chaînes de délégation. Les enregistrer ne délègue aucun droit à un profil et ne connecte ni ne démarre un agent." : "Les droits proposés restent bornés par les plafonds du propriétaire et les permissions du profil. Aucun agent ne sera connecté ou démarré."),
+      mode === "root" ? select("Profil bénéficiaire", "beneficiary_id", [["", "Choisir explicitement un profil"], ...profiles.map(p => [p.id, `${p.name} · ${p.kind === "companion" ? "compagnon" : "agent"} · ${p.id}`])], "") : null,
+      mode === "reduce" ? el("p", {}, `Réduction de ${old.id}, version ${old.version}. Seul un sous-ensemble des droits enregistrés peut être conservé.`) : null,
+      mode === "root" ? el("p", {}, "Cette racine est un grant humain explicite à ce profil. Les plafonds du compte et les permissions actuelles du profil continuent de s’appliquer. Aucune connexion n’est créée.") : null,
       operationLabels.map(([key, label]) => check(label, key, policy.operations.includes(key))),
       field("Identifiants des projets autorisés", "project_ids", {value:policy.project_ids.join("\n"),type:"textarea",hint:"Un identifiant exact par ligne. Aucun joker. Seuls vos projets sont acceptés."}),
       field("Actions autorisées", "actions", {value:policy.actions.join("\n"),type:"textarea",hint:"Une action exacte par ligne, par exemple repo.read_file. Les actions réservées sont refusées."}),
@@ -1519,7 +1533,7 @@ const Workspace = (() => {
         el("legend", {}, label), ...[ ["live","Nombre actif maximal"], ["created","Nombre créé maximal, historique inclus"] ].map(([key,title]) =>
           field(title,`${kind}_${key}`,{type:"number",value:String(policy.quotas[kind][key]),min:0,max:1000000,required:true})))),
       el("p", {}, "Les créations déjà comptabilisées sont conservées. Une réduction bloque les opérations suivantes sans certifier l’arrêt des travaux en cours."),
-      check("Je confirme ces plafonds pour mon compte", "confirm_limits", false), formButtons("Enregistrer les plafonds"));
+      check(mode === "root" ? "Je confirme cette délégation à ce profil" : mode === "reduce" ? "Je confirme la réduction des droits" : "Je confirme ces plafonds pour mon compte", "confirm_limits", false), formButtons(mode === "root" ? "Accorder la délégation" : mode === "reduce" ? "Réduire les droits" : "Enregistrer les plafonds"));
     const key = idempotencyKey();
     bindForm(form, async values => {
       if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) throw new Error("Compte changé. Rouvrez le formulaire.");
@@ -1534,12 +1548,20 @@ const Workspace = (() => {
         project_ids:list("project_ids"), actions:list("actions"), resources:list("resources"),
         allow_new_projects:values.has("allow_new_projects"), autonomy:values.get("autonomy"), max_depth:integer("max_depth"), quotas:{} };
       for (const kind of ["projects","profiles","delegations"]) proposed.quotas[kind] = {live:integer(`${kind}_live`),created:integer(`${kind}_created`)};
-      const saved = await api("/hierarchy/limits", {method:"PUT",data:{expected_version:old ? old.version : 0,policy:proposed,idempotency_key:key}});
+      const beneficiary = values.get("beneficiary_id");
+      if (mode === "root" && !profiles.some(p => p.id === beneficiary)) throw new Error("Choisissez un profil bénéficiaire de votre compte.");
+      const path = mode === "root" ? "/hierarchy/roots" : mode === "reduce" ? `/hierarchy/delegations/${workPath(identifier)}/change` : "/hierarchy/limits";
+      const data = {policy:proposed,idempotency_key:key};
+      if (mode === "root") data.beneficiary_id = beneficiary;
+      else data.expected_version = old ? old.version : 0;
+      const saved = await api(path, {method:mode === "limits" ? "PUT" : "POST",data});
       if (!state.actor || state.actor.owner_id !== owner) return;
-      if (saved.owner_id !== owner || saved.version !== (old ? old.version : 0) + 1) throw new Error("Plafonds non confirmés. Réessayez avec ce même formulaire.");
+      if (saved.owner_id !== owner || saved.version !== (old ? old.version : 0) + 1
+          || mode === "root" && (saved.beneficiary_id !== beneficiary || saved.parent_id !== null || saved.status !== "active")
+          || mode === "reduce" && (saved.id !== identifier || saved.status !== "active")) throw new Error("Plafonds non confirmés. Réessayez avec ce même formulaire.");
       closeModal(); await agents();
     });
-    openModal("Plafonds de délégation", form);
+    openModal(mode === "root" ? "Accorder une délégation racine" : mode === "reduce" ? "Réduire une délégation" : "Plafonds de délégation", form);
   }
 
   async function revokeHierarchy(identifier) {
@@ -1588,7 +1610,8 @@ const Workspace = (() => {
       const data = await api("/hierarchy?limit=20");
       if (!current()) return;
       loading.remove();
-      body.append(btn("Configurer les plafonds", guard(hierarchyLimitsEditor)));
+      body.append(btn("Configurer les plafonds", guard(() => hierarchyLimitsEditor())));
+      if (data.limits) body.append(btn("Accorder une délégation racine", guard(() => hierarchyLimitsEditor("root"))));
       body.append(el("p", { class: "muted" }, "Une délégation enregistrée ne garantit pas un accès actuel : les permissions du compte, du profil et de chaque ancêtre restent des plafonds. Révoquer bloque les nouveaux effets ; les travaux existants nécessitent leur nettoyage normal. Les compteurs créés ne sont jamais remboursés."));
       body.append(data.limits ? panel("Plafonds du propriétaire", el("div", { class: "panel-body" }, scope(data.limits.policy), quota(data.limits.policy, data.limits.counters)))
         : empty("Aucune hiérarchie configurée. Les rôles Lead et compagnon ne donnent aucun droit de création implicite."));
@@ -1596,7 +1619,7 @@ const Workspace = (() => {
       const appendRows = rows => rows.forEach(row => list.append(panel(`Délégation ${row.id}`, el("div", { class: "panel-body" },
         el("p", {}, `Profil : ${row.beneficiary_id} · ${row.parent_id ? `Parent : ${row.parent_id}` : "Racine accordée par le propriétaire"}`),
         el("p", {}, `État enregistré : ${row.status} · Version : ${row.version}`), scope(row.policy), quota(row.policy, row.counters),
-        row.status === "active" ? btn("Révoquer", guard(() => revokeHierarchy(row.id))) : null))));
+        row.status === "active" ? el("div", {class:"button-row"}, btn("Réduire les droits", guard(() => hierarchyLimitsEditor("reduce", row.id))), btn("Révoquer", guard(() => revokeHierarchy(row.id)))) : null))));
       appendRows(data.delegations);
       if (!data.delegations.length) list.append(empty("Aucune délégation enregistrée."));
       let after = data.next_after;
