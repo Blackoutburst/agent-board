@@ -381,6 +381,8 @@ class ProfilesMixin(ProfileRefreshMixin):
         mapped = 'allow_messages' if permission == 'allow_reply' else permission
         if mapped and (not policy.get(mapped) or (mapped == 'allow_requests' and policy['autonomy'] == 'responses')):
             _fail('Agent profile does not authorize this operation', 403)
+        from hierarchy_access import profile_ceiling
+        profile_ceiling(db, self, actor, profile, permission)
         return profile
 
     def _profile_project_allowed(self, db, actor, project_id):
@@ -389,8 +391,8 @@ class ProfilesMixin(ProfileRefreshMixin):
         profile = self._profile_for_actor(db, actor)
         if not profile:
             return False
-        project_ids = json.loads(profile['project_ids'])
-        return project_ids is None or project_id in project_ids
+        from hierarchy_access import project_allowed
+        return project_allowed(db, self, actor, profile, project_id)
 
     def _profile_thread_allowed(self, db, actor, thread_id, *, allow_standalone_invitation=True):
         if actor['kind'] == 'human' or has_owner_power(actor, 'dispatch'):
@@ -403,8 +405,11 @@ class ProfilesMixin(ProfileRefreshMixin):
             return True
         ticket = db.execute('SELECT project_id FROM tickets WHERE thread_id=?', (thread_id,)).fetchone()
         if not ticket:
+            from hierarchy_access import creation_delegation
+            if creation_delegation(db, profile) is not None:
+                return False
             return allow_standalone_invitation and self._profile_standalone_thread_invited(db, profile, thread_id)
-        return bool(ticket and ticket['project_id'] in project_ids and db.execute(
+        return bool(ticket and self._profile_project_allowed(db, actor, ticket['project_id']) and db.execute(
             'SELECT 1 FROM project_members WHERE project_id=? AND owner_id=?', (ticket['project_id'], actor['owner_id'])).fetchone())
 
     @staticmethod
@@ -444,6 +449,32 @@ class ProfilesMixin(ProfileRefreshMixin):
         for field in ('actions', 'resources'):
             result[field] = owner[field] if profile['legacy'] and policy[field] == ['*'] else [item for item in owner[field] if item in policy[field]]
         result['autonomy'] = policy['autonomy']
+        from hierarchy_access import profile_ceiling, creation_delegation
+        from hierarchy_store import HierarchyStore
+        from board import BoardError
+        try:
+            ceiling = profile_ceiling(db, self, actor, profile)
+        except BoardError:
+            # Policy inspection also serves human reconciliation and stale
+            # assignment displays. Return a closed ceiling, not an exception
+            # hiding historical work; actor authorization still rejects it.
+            result.update(enabled=False, allow_read=False, allow_reply=False,
+                          allow_requests=False, actions=[], resources=[], autonomy='responses')
+            if 'allow_create_projects' in result:
+                result['allow_create_projects'] = False
+            return result
+        if ceiling is not None:
+            for field in ('actions', 'resources'):
+                result[field] = sorted(set(result[field]) & set(ceiling[field]))
+            result['autonomy'] = ceiling['autonomy']
+            for field, source in (('allow_read', 'allow_read'), ('allow_reply', 'allow_messages'),
+                                  ('allow_requests', 'allow_requests')):
+                for row in HierarchyStore(self)._chain(db, profile['owner_id'],
+                        creation_delegation(db, profile)):
+                    ancestor = json.loads(db.execute('SELECT policy FROM agent_profiles WHERE id=?',
+                                                     (row['beneficiary_id'],)).fetchone()[0])
+                    result[field] = result[field] and ancestor[source]
+            result['allow_requests'] = result['allow_requests'] and ceiling['autonomy'] != 'responses'
         return result
 
     def _profile_session_claims(self, db, session_id):
