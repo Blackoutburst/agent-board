@@ -690,6 +690,7 @@
     "tests/test_hierarchy_migration.py": "1ff718ef9a189362bd18a8cf20ff05061f8ee3057fc1f3a88ead772a92f5fc6e",
     "tests/test_hierarchy_policy.py": "463cfeacb66ee167da8112c01ffb12f78a1d03471659bede68f6a31681f277b8",
     "tests/test_hierarchy_revoke_ui.cjs": "414482134d085840f50f8ac0521d0ecdbb9fa97f63122f6691ea05aba6d16748",
+    "tests/test_hierarchy_scenario.py": "dc00c9b73724c9df9fa711fcde6e8e6dbd36057314c8fc4035694757841a670f",
     "tests/test_hierarchy_store.py": "4cab54609c289870ee02dcd0da1eeb57399a09e16f49aba0900e5d9595f3f715",
     "tests/test_human_request_presentation.py": "ab0d4e529901fcc5ebc19917eb2e91c4cc736821809039d52944ae9235d8a742",
     "tests/test_inbox_backlog.py": "bad59441d927bcbee99f889194c32fc81c8364ac9946a84e479e2ec09a81295c",
