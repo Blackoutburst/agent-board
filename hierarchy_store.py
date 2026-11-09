@@ -106,11 +106,17 @@ class HierarchyStore:
     def _view(row):
         return {key: json.loads(row[key]) if key in ('policy', 'counters') else row[key] for key in row.keys()}
 
-    def _target(self, db, actor, beneficiary, policy):
+    def _target(self, db, actor, beneficiary, policy, *, human_root=False):
         profile = self.board._profile_owned(db, actor, beneficiary)
-        if profile['legacy'] or profile['status'] == 'archived' or json.loads(profile['project_ids']) is None:
+        projects = json.loads(profile['project_ids'])
+        companion_root = human_root and profile['kind'] == 'companion'
+        if (profile['legacy'] or profile['status'] == 'archived'
+                or profile['kind'] == 'companion' and not companion_root
+                or projects is None and not companion_root):
             _fail('hierarchy_beneficiary_invalid', 403)
-        if not set(policy['project_ids']) <= set(json.loads(profile['project_ids'])):
+        # A companion's broad ordinary read scope is not a hierarchy wildcard.
+        # Only a human root may supply its finite explicit delegation scope.
+        if projects is not None and not set(policy['project_ids']) <= set(projects):
             _fail('hierarchy_profile_project_scope_required', 403)
         for identifier in policy['project_ids']:
             self.board._project_member(db, actor, identifier)
@@ -205,7 +211,12 @@ class HierarchyStore:
             profile_policy = json.loads(profile['policy'])
             for field in ('actions', 'resources'):
                 result[field] = sorted(set(result[field]) & set(profile_policy[field]))
-            profile_projects = set(json.loads(profile['project_ids']))
+            stored_projects = json.loads(profile['project_ids'])
+            if stored_projects is None:
+                if profile['kind'] != 'companion' or row['parent_id'] is not None:
+                    _fail('hierarchy_beneficiary_invalid', 403)
+                stored_projects = json.loads(row['policy'])['project_ids']
+            profile_projects = set(stored_projects)
             for project in created:
                 binding = db.execute('SELECT creator_id FROM hierarchy_project_bindings WHERE owner_id=? AND project_id=?',
                                      (actor['owner_id'], project)).fetchone()
@@ -265,7 +276,7 @@ class HierarchyStore:
         payload = dict(beneficiary=beneficiary, policy=policy)
         with self.board._tx() as db:
             actor = self.board._human(db, actor)
-            self._target(db, actor, beneficiary, policy)
+            self._target(db, actor, beneficiary, policy, human_root=True)
             previous = self._retry(db, actor, 'create_root', key, payload)
             if previous is not None:
                 return previous

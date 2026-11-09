@@ -525,3 +525,78 @@ def test_created_project_team_retry_is_denied_after_creation_ceiling_removed(set
     s['store'].change(s['human'], root['id'], 1, 'remove-creation', policy=s['ceiling'](allow_new_projects=False))
     with pytest.raises(BoardError): s['store'].create_team_profile(*args)
     assert s['store'].inspect(s['human'], first['id'])['beneficiary_id'] == first['profile_id']
+
+
+def companion(s, projects=None):
+    b, human = s['b'], s['human']
+    p = b.create_agent_profile(human, 'Companion', kind='companion', **({} if projects is None else {'project_ids': projects}),
+        policy=dict(allow_read=True, allow_messages=True, allow_requests=True,
+                    actions=s['ceiling']()['actions'], resources=['repo:work'], autonomy='queue'))
+    device = b.create_device(human, 'companion', [])
+    p = b.bind_agent_profile(human, p['id'], p['version'], device['id'], 'companion', 'codex')
+    raw = b.authenticate(device['token'])
+    b.register_agent(raw, 'companion', 'companion', [], 'codex', True, 'companion')
+    return p, b.actor_session(raw, 'companion')
+
+
+def test_companion_needs_human_root_and_has_only_explicit_hierarchy_scope(setup):
+    s = setup; p, actor = companion(s)
+    assert actor['kind'] == 'agent' and actor['companion_for'] == 'alice'
+    s['store'].configure(s['human'], 0, s['ceiling'](), 'enable')
+    before = snapshot(s)
+    with pytest.raises(BoardError):
+        s['store'].create_root(actor, p['id'], s['ceiling'](), 'self-root')
+    assert snapshot(s) == before
+    root = s['store'].create_root(s['human'], p['id'], s['ceiling'](), 'companion-root')
+    extra = s['b'].create_project(s['human'], 'Unrelated', ['alice'])
+    effective = s['store'].inspect(actor, root['id'])['effective']
+    assert effective['project_ids'] == s['ceiling']()['project_ids']
+    assert extra['id'] not in effective['project_ids']
+    leaf = s['store'].create_child(actor, root['id'], s['target']['id'],
+        s['subordinate'](), root['version'], 'delegate')
+    assert s['store'].inspect(s['target_actor'], leaf['id'])['effective']['project_ids'] == effective['project_ids']
+    s['store'].change(s['human'], root['id'], root['version'], 'revoke', revoke=True)
+    before = snapshot(s)
+    with pytest.raises(BoardError, match='hierarchy_revoked'):
+        s['store'].inspect(actor, root['id'])
+    with pytest.raises(BoardError, match='hierarchy_revoked'):
+        s['store'].create_child(actor, root['id'], s['target']['id'],
+            s['subordinate'](), root['version'], 'delegate')
+    assert snapshot(s) == before
+
+
+def test_agent_cannot_make_companion_a_child_even_with_matching_scope(setup):
+    s = setup; root = enabled(s)
+    p, _ = companion(s, s['ceiling']()['project_ids'])
+    before = snapshot(s)
+    with pytest.raises(BoardError, match='hierarchy_beneficiary_invalid'):
+        s['store'].create_child(s['parent_actor'], root['id'], p['id'],
+            s['subordinate'](), root['version'], 'companion-child')
+    assert snapshot(s) == before
+
+
+def test_companion_explicit_profile_scope_remains_an_additional_ceiling(setup):
+    s = setup; p, _ = companion(s, [])
+    s['store'].configure(s['human'], 0, s['ceiling'](), 'enable')
+    before = snapshot(s)
+    with pytest.raises(BoardError, match='hierarchy_profile_project_scope_required'):
+        s['store'].create_root(s['human'], p['id'], s['ceiling'](), 'root')
+    assert snapshot(s) == before
+
+
+def test_companion_new_project_is_exact_bound_and_remains_revocable(setup):
+    s = setup; p, actor = companion(s)
+    s['store'].configure(s['human'], 0, s['ceiling'](), 'enable')
+    root = s['store'].create_root(s['human'], p['id'], s['ceiling'](), 'root')
+    created = s['store'].create_project_lead(actor, root['id'], 'Created', 'Lead',
+        child(project_ids=[]), root['version'], 'new')
+    effective = s['store'].inspect(actor, root['id'])['effective']
+    assert set(effective['project_ids']) == set(s['ceiling']()['project_ids'] + [created['project_id']])
+    lead_actor = bind_created(s, created)
+    assert s['store'].inspect(lead_actor, created['id'])['effective']['project_ids'] == [created['project_id']]
+    reduced = s['ceiling'](allow_new_projects=False,
+        operations=['create_team_profile', 'manage_team_profile', 'delegate_project'])
+    s['store'].change(s['human'], root['id'], root['version'], 'reduce', policy=reduced)
+    assert created['project_id'] not in s['store'].inspect(actor, root['id'])['effective']['project_ids']
+    with pytest.raises(BoardError):
+        s['store'].inspect(lead_actor, created['id'])
