@@ -1493,13 +1493,65 @@ const Workspace = (() => {
     }
   }
 
+  async function renderHierarchy(body, request) {
+    if (state.actor.kind !== "human") {
+      body.append(empty("Cette administration est réservée au propriétaire humain."));
+      return;
+    }
+    const owner = state.actor.owner_id;
+    const loading = empty("Chargement des délégations…"); body.append(loading);
+    const current = () => request === state.request && state.actor?.owner_id === owner;
+    const quota = (policy, counters) => el("ul", {}, [
+      ["projects", "Projets"], ["profiles", "Profils"], ["delegations", "Délégations"]
+    ].map(([key, label]) => el("li", {}, `${label} : ${counters[key].live} / ${policy.quotas[key].live} actifs ; ${counters[key].created} / ${policy.quotas[key].created} créés au total`)));
+    const scope = policy => el("div", {},
+      el("p", {}, `Opérations : ${policy.operations.join(", ") || "aucune"}`),
+      el("p", {}, `Projets : ${policy.project_ids.join(", ") || "aucun"}`),
+      el("p", {}, `Nouveaux projets : ${policy.allow_new_projects ? "autorisés dans les plafonds" : "refusés"} · Profondeur : ${policy.max_depth} · Autonomie : ${policy.autonomy}`),
+      el("p", {}, `Actions : ${policy.actions.join(", ") || "aucune"}`),
+      el("p", {}, `Ressources : ${policy.resources.join(", ") || "aucune"}`));
+    try {
+      const data = await api("/hierarchy?limit=20");
+      if (!current()) return;
+      loading.remove();
+      body.append(el("p", { class: "muted" }, "Une délégation enregistrée ne garantit pas un accès actuel : les permissions du compte, du profil et de chaque ancêtre restent des plafonds. Révoquer bloque les nouveaux effets ; les travaux existants nécessitent leur nettoyage normal. Les compteurs créés ne sont jamais remboursés."));
+      body.append(data.limits ? panel("Plafonds du propriétaire", el("div", { class: "panel-body" }, scope(data.limits.policy), quota(data.limits.policy, data.limits.counters)))
+        : empty("Aucune hiérarchie configurée. Les rôles Lead et compagnon ne donnent aucun droit de création implicite."));
+      const list = el("div", {}); body.append(list);
+      const appendRows = rows => rows.forEach(row => list.append(panel(`Délégation ${row.id}`, el("div", { class: "panel-body" },
+        el("p", {}, `Profil : ${row.beneficiary_id} · ${row.parent_id ? `Parent : ${row.parent_id}` : "Racine accordée par le propriétaire"}`),
+        el("p", {}, `État enregistré : ${row.status} · Version : ${row.version}`), scope(row.policy), quota(row.policy, row.counters)))));
+      appendRows(data.delegations);
+      if (!data.delegations.length) list.append(empty("Aucune délégation enregistrée."));
+      let after = data.next_after;
+      const more = btn("Charger la suite", guard(async () => {
+        more.disabled = true;
+        try {
+          const page = await api(`/hierarchy?limit=20&after=${encodeURIComponent(after)}`);
+          if (!current()) return;
+          appendRows(page.delegations); after = page.next_after;
+          if (!after) more.remove();
+        } finally { more.disabled = false; }
+      }));
+      if (after) body.append(more);
+    } catch (failure) {
+      if (!current()) return;
+      loading.remove();
+      body.append(el("p", { role: "alert", class: "callout" }, "Délégations indisponibles. Actualisez pour relire les droits ; aucune autorisation n’est supposée."));
+    }
+  }
+
   async function agents() {
     const request = ++state.request; navigate("agents"); workRoute({ page: "agents" });
     const body = frame("Agents", "Un profil définit le rôle et les préférences ; une instance hébergée exécute ce profil sur votre serveur.", [btn(agentTab === "hosted" ? "Actualiser" : "Refresh", guard(agents)), btn(agentTab === "hosted" ? "Préparer un agent serveur" : "New profile", guard(() => agentTab === "hosted" ? providerWizard() : profileEditor()), "primary")]);
     const change = guard(async tab => { agentTab = tab; await agents(); });
-    const navigation = tabs([["profiles", "Profiles"], ["hosted", "Sur le serveur"], ["connections", "Connections"], ["runtime", "Runtime"]], agentTab, change);
+    const navigation = tabs([["profiles", "Profiles"], ...(state.actor.kind === "human" ? [["hierarchy", "Délégations"]] : []), ["hosted", "Sur le serveur"], ["connections", "Connections"], ["runtime", "Runtime"]], agentTab, change);
     navigation.setAttribute("aria-label", "Agent sections");
     body.append(navigation);
+    if (agentTab === "hierarchy") {
+      await renderHierarchy(body, request);
+      return;
+    }
     if (agentTab === "hosted") {
       await renderServerHosts(body, request);
       return;
