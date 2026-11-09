@@ -36,6 +36,7 @@ from coordination import validate_selected_queue_claim_arguments
 from server_instances import MANAGER_TOOLS, validate_manager_arguments
 from server_messages_append import validate_messages_append_arguments
 from profile_management import PROFILE_MANAGEMENT_TOOLS,validate_profile_management_arguments
+from hierarchy_mcp import HIERARCHY_TOOLS, validate_hierarchy_arguments, mount_hierarchy_tools
 from runtime import validate_message_admission_seal_arguments
 from provider_onboarding import overview as provider_onboarding_overview
 from notifications import DiscordNotifications
@@ -67,6 +68,8 @@ class BoardMCP(FastMCP):
             validate_messages_append_arguments(name, arguments)
         elif name == 'seal_message_execution_admission':
             validate_message_admission_seal_arguments(arguments)
+        elif name in HIERARCHY_TOOLS:
+            validate_hierarchy_arguments(name, arguments)
         elif name in PROFILE_MANAGEMENT_TOOLS:
             validate_profile_management_arguments(name,arguments)
         elif name == 'claim_selected_queue_ticket':
@@ -85,7 +88,8 @@ class BoardMCP(FastMCP):
         return [tool.model_copy(update={'inputSchema': {**tool.inputSchema, 'additionalProperties': False}})
                 if tool.name in {'get_development_frame', 'get_development_ticket_frame', 'seal_message_execution_admission', 'claim_selected_queue_ticket'}
                 or tool.name in MANAGER_TOOLS or tool.name in APPEND_MANAGER_TOOLS
-                or tool.name in PROFILE_MANAGEMENT_TOOLS or tool.name in COMPANION_TOOLS else tool for tool in tools]
+                or tool.name in PROFILE_MANAGEMENT_TOOLS or tool.name in COMPANION_TOOLS
+                or tool.name in HIERARCHY_TOOLS else tool for tool in tools]
 
 
 class Body(BaseModel):
@@ -660,6 +664,8 @@ def create_app(data_dir=None, base_url=None, filebrowser_url=None, filebrowser_t
 
     def session_actor(session_id):
         return board.actor_session(device_actor(), session_id)
+
+    mount_hierarchy_tools(mcp, board, session_actor)
 
     def validated(model, values):
         return model.model_validate(values).model_dump()
