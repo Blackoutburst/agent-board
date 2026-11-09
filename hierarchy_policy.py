@@ -26,6 +26,10 @@ def require(value, code='hierarchy_policy_invalid'):
 def exact_string(value):
     require(type(value) is str and 0 < len(value) <= 200 and value == value.strip()
             and not any(ord(c) < 32 or ord(c) == 127 for c in value) and '*' not in value)
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        _fail('hierarchy_policy_invalid')
     return value
 
 
@@ -75,6 +79,7 @@ def check_child_policy(parent, child, *, created_project_id=None):
         require(set(child[key]) <= set(parent[key]), 'hierarchy_child_exceeds_parent')
     require(AUTONOMY[child['autonomy']] <= AUTONOMY[parent['autonomy']], 'hierarchy_child_exceeds_parent')
     require(not child['allow_new_projects'], 'hierarchy_child_exceeds_parent')
+    require(len(child['project_ids']) == 1, 'hierarchy_child_exceeds_parent')
     allowed_projects = set(parent['project_ids'])
     if created_project_id is not None:
         exact_string(created_project_id)

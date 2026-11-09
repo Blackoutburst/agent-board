@@ -87,3 +87,15 @@ def test_a_reduced_ceiling_does_not_force_deletion_of_existing_objects():
     existing = counters(live=4, created=8)
     assert require_capacity(low, existing, {})
     with pytest.raises(BoardError): require_capacity(low, existing, {'delegations': 1})
+
+
+@pytest.mark.parametrize('projects', [[], ['project', 'other']])
+def test_existing_project_child_requires_exactly_one_project(projects):
+    with pytest.raises(BoardError):
+        check_child_policy(policy(project_ids=['project', 'other']), child(project_ids=projects))
+
+
+@pytest.mark.parametrize('field', ['project_ids', 'actions', 'resources'])
+def test_unencodable_unicode_is_refused_before_persistence(field):
+    with pytest.raises(BoardError, match='hierarchy_policy_invalid'):
+        normalize_policy(policy(**{field: ['value' + chr(0xD800)]}))
