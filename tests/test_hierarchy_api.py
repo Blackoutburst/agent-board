@@ -91,3 +91,36 @@ def test_human_overview_is_bounded_and_preserves_pagination(application):
         assert {first['delegations'][0]['id'], second['delegations'][0]['id']} == ids
         assert second['next_after'] is None
         assert client.get('/api/hierarchy?limit=101').status_code == 422
+
+
+def test_project_archive_endpoint_is_human_csrf_strict_and_owner_scoped(application):
+    from hierarchy_store import HierarchyStore
+    from test_hierarchy_policy import child
+    b=application.state.board;human=dict(kind='human',owner_id='blackoutburst')
+    b.set_policy(human,True,True,True,True,['repo.read_file'],['repo:work'])
+    ceiling=policy(project_ids=[],actions=['repo.read_file'])
+    parent=b.create_agent_profile(human,'Creator',project_ids=[],policy=dict(allow_read=True,
+        allow_messages=False,allow_requests=True,actions=['repo.read_file'],resources=['repo:work'],autonomy='queue'))
+    device=b.create_device(human,'Fixture',[])
+    b.bind_agent_profile(human,parent['id'],parent['version'],device['id'],'creator','codex')
+    raw=b.authenticate(device['token']);b.register_agent(raw,'creator','Creator',[],'codex',True,'creator')
+    store=HierarchyStore(b);store.configure(human,0,ceiling,'limits')
+    root=store.create_root(human,parent['id'],ceiling,'root')
+    created=store.create_project_lead(b.actor_session(raw,'creator'),root['id'],'Project','Lead',
+        child(project_ids=[],actions=['repo.read_file']),1,'create')
+    path='/api/hierarchy/projects/'+created['project_id']+'/archive'
+    body=dict(project_version=1,profile_version=1,idempotency_key='archive')
+    other=TestClient(application)
+    with TestClient(application) as client:
+        assert client.post(path,json=body).status_code==401
+        login(client);login(other,'thescreamer')
+        csrf=client.headers.pop('X-CSRF-Token')
+        assert client.post(path,json=body).status_code==403
+        client.headers['X-CSRF-Token']=csrf
+        assert other.post(path,json=body).status_code==404
+        for changes in ({'owner_id':'blackoutburst'},{'profile_version':True},{'project_version':'1'}):
+            assert client.post(path,json=body|changes).status_code==422
+        first=client.post(path,json=body)
+        assert first.status_code==200,first.text
+        assert client.post(path,json=body).json()==first.json()
+        assert b.get_project(human,created['project_id'])['archived']

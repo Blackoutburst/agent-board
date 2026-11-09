@@ -66,3 +66,32 @@ def test_archive_requires_normal_claim_release_and_current_versions(setup):
     b.release_ticket(lead,ticket['id'],claim['version'],'release','No model executed in this fixture')
     with pytest.raises(BoardError,match='version_conflict'): archive(s,result)
     assert s['store'].archive_project_lead(s['human'],result['project_id'],1,2,'archive')['profile_version']==3
+
+
+def test_project_archive_waits_for_real_runtime_cleanup_record(setup):
+    from test_hierarchy_access import reserved_hierarchy
+    s=setup; _,result,actor,reserved=reserved_hierarchy(s);b=s['b']
+    # A normally released ticket does not mean the reserved Runtime is clean.
+    ticket=b.get_ticket(s['human'],reserved['ticket_id'])['ticket']
+    b.release_ticket(actor,ticket['id'],ticket['version'],'release','No model launched')
+    with pytest.raises(BoardError,match='cleanup_unconfirmed'):
+        s['store'].archive_project_lead(s['human'],result['project_id'],1,2,'archive')
+    pending=b.finish_execution(actor,reserved['id'],reserved['revision'],'cancelled',False,'stop_requested')
+    with pytest.raises(BoardError,match='cleanup_unconfirmed'):
+        s['store'].archive_project_lead(s['human'],result['project_id'],1,2,'archive')
+    b.finish_execution(actor,pending['id'],pending['revision'],'cancelled',True,'stop_requested')
+    assert s['store'].archive_project_lead(s['human'],result['project_id'],1,2,'archive')['version']==2
+
+
+def test_concurrent_archive_retries_release_one_owner_and_ancestor_debit(setup):
+    from concurrent.futures import ThreadPoolExecutor
+    s=setup;root=enabled(s);result=new_project(s,root)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(lambda _: archive(s,result),range(2)))
+    assert results[0]==results[1]
+    with s['b']._connection() as db:
+        owner=json.loads(db.execute('SELECT counters FROM hierarchy_limits').fetchone()[0])
+        ancestor=json.loads(db.execute('SELECT counters FROM hierarchy_delegations WHERE id=?',(root['id'],)).fetchone()[0])
+        assert owner['projects']==dict(live=0,created=1)
+        assert ancestor['profiles']==dict(live=0,created=1)
+        assert db.execute("SELECT COUNT(*) FROM hierarchy_receipts WHERE operation='archive_project_lead'").fetchone()[0]==1

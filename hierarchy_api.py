@@ -34,6 +34,12 @@ class HierarchyChange(HierarchyBody):
     idempotency_key: Annotated[str, Field(min_length=1, max_length=200)]
 
 
+class HierarchyProjectArchive(HierarchyBody):
+    project_version: Annotated[int, Field(ge=1)]
+    profile_version: Annotated[int, Field(ge=1)]
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=200)]
+
+
 def mount_hierarchy_routes(app, board, human):
     store = HierarchyStore(board)
 
@@ -57,3 +63,8 @@ def mount_hierarchy_routes(app, board, human):
     async def change(identifier: str, values: HierarchyChange, actor=Depends(human)):
         return store.change(actor, identifier, values.expected_version, values.idempotency_key,
                             policy=values.policy, revoke=values.revoke)
+
+    @app.post('/api/hierarchy/projects/{project_id}/archive')
+    async def archive_project(project_id: str, values: HierarchyProjectArchive, actor=Depends(human)):
+        return store.archive_project_lead(actor, project_id, values.project_version,
+                                          values.profile_version, values.idempotency_key)
