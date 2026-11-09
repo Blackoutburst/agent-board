@@ -1493,6 +1493,55 @@ const Workspace = (() => {
     }
   }
 
+  async function hierarchyLimitsEditor() {
+    const owner = state.actor && state.actor.owner_id;
+    if (!state.actor || state.actor.kind !== "human") return;
+    const overview = await api("/hierarchy?limit=1");
+    if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) return;
+    const old = overview.limits;
+    const policy = old ? old.policy : { operations: [], project_ids: [], allow_new_projects: false,
+      actions: [], resources: [], autonomy: "responses", max_depth: 0,
+      quotas: { projects: {live:0,created:0}, profiles: {live:0,created:0}, delegations: {live:0,created:0} } };
+    const operationLabels = [
+      ["create_project_lead", "Créer un projet et son Lead"], ["create_team_profile", "Créer les profils d’équipe"],
+      ["manage_team_profile", "Gérer les profils d’équipe"], ["delegate_project", "Déléguer un projet"]
+    ];
+    const form = el("form", { class: "work-form" },
+      el("p", {}, "Ces plafonds bornent toutes vos chaînes de délégation. Les enregistrer ne délègue aucun droit à un profil et ne connecte ni ne démarre un agent."),
+      operationLabels.map(([key, label]) => check(label, key, policy.operations.includes(key))),
+      field("Identifiants des projets autorisés", "project_ids", {value:policy.project_ids.join("\n"),type:"textarea",hint:"Un identifiant exact par ligne. Aucun joker. Seuls vos projets sont acceptés."}),
+      field("Actions autorisées", "actions", {value:policy.actions.join("\n"),type:"textarea",hint:"Une action exacte par ligne, par exemple repo.read_file. Les actions réservées sont refusées."}),
+      field("Ressources autorisées", "resources", {value:policy.resources.join("\n"),type:"textarea",hint:"Une ressource exacte par ligne. Aucun joker."}),
+      check("Autoriser la création de nouveaux projets dans ces plafonds", "allow_new_projects", policy.allow_new_projects),
+      select("Autonomie maximale", "autonomy", [["responses","Réponses"],["requested","Sur demande"],["queue","File autorisée"]],policy.autonomy),
+      field("Profondeur maximale de délégation (0 à 4)","max_depth",{type:"number",value:String(policy.max_depth),min:0,max:4,required:true}),
+      [ ["projects","Projets"], ["profiles","Profils"], ["delegations","Délégations"] ].map(([kind,label]) => el("fieldset", {},
+        el("legend", {}, label), ...[ ["live","Nombre actif maximal"], ["created","Nombre créé maximal, historique inclus"] ].map(([key,title]) =>
+          field(title,`${kind}_${key}`,{type:"number",value:String(policy.quotas[kind][key]),min:0,max:1000000,required:true})))),
+      el("p", {}, "Les créations déjà comptabilisées sont conservées. Une réduction bloque les opérations suivantes sans certifier l’arrêt des travaux en cours."),
+      check("Je confirme ces plafonds pour mon compte", "confirm_limits", false), formButtons("Enregistrer les plafonds"));
+    const key = idempotencyKey();
+    bindForm(form, async values => {
+      if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) throw new Error("Compte changé. Rouvrez le formulaire.");
+      if (!values.has("confirm_limits")) throw new Error("Confirmez les plafonds avant de les enregistrer.");
+      const list = name => String(values.get(name) || "").split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
+      const integer = name => {
+        const text = String(values.get(name));
+        if (!/^\d+$/.test(text)) throw new Error("Utilisez des nombres entiers positifs ou zéro.");
+        return Number(text);
+      };
+      const proposed = { operations: operationLabels.filter(([name])=>values.has(name)).map(([name])=>name),
+        project_ids:list("project_ids"), actions:list("actions"), resources:list("resources"),
+        allow_new_projects:values.has("allow_new_projects"), autonomy:values.get("autonomy"), max_depth:integer("max_depth"), quotas:{} };
+      for (const kind of ["projects","profiles","delegations"]) proposed.quotas[kind] = {live:integer(`${kind}_live`),created:integer(`${kind}_created`)};
+      const saved = await api("/hierarchy/limits", {method:"PUT",data:{expected_version:old ? old.version : 0,policy:proposed,idempotency_key:key}});
+      if (!state.actor || state.actor.owner_id !== owner) return;
+      if (saved.owner_id !== owner || saved.version !== (old ? old.version : 0) + 1) throw new Error("Plafonds non confirmés. Réessayez avec ce même formulaire.");
+      closeModal(); await agents();
+    });
+    openModal("Plafonds de délégation", form);
+  }
+
   async function revokeHierarchy(identifier) {
     const owner = state.actor && state.actor.owner_id;
     if (!state.actor || state.actor.kind !== "human") return;
@@ -1539,6 +1588,7 @@ const Workspace = (() => {
       const data = await api("/hierarchy?limit=20");
       if (!current()) return;
       loading.remove();
+      body.append(btn("Configurer les plafonds", guard(hierarchyLimitsEditor)));
       body.append(el("p", { class: "muted" }, "Une délégation enregistrée ne garantit pas un accès actuel : les permissions du compte, du profil et de chaque ancêtre restent des plafonds. Révoquer bloque les nouveaux effets ; les travaux existants nécessitent leur nettoyage normal. Les compteurs créés ne sont jamais remboursés."));
       body.append(data.limits ? panel("Plafonds du propriétaire", el("div", { class: "panel-body" }, scope(data.limits.policy), quota(data.limits.policy, data.limits.counters)))
         : empty("Aucune hiérarchie configurée. Les rôles Lead et compagnon ne donnent aucun droit de création implicite."));
