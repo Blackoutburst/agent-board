@@ -77,10 +77,10 @@
     "docs/trusted-test-scripts-release-2026-10-16.json": "30f3b6127949d6c710630ad7626726a46689eca7a4ef5839be04a8c7c0347b27",
     "docs/verifiable-blocks-release-2026-10-19.json": "3b053e1a3a479da5c2b2a7c7603f42fd10de2cd8b6858b9ad01194ee614b3609",
     "hierarchy_access.py": "c4338520e104ccf9b809d1c7b6d75aa767feedc472c236151404801887199c20",
-    "hierarchy_api.py": "b5e24342aacac91be556a6fc6b4e0bcc7e751885ca38097be0d94d901e1415c3",
+    "hierarchy_api.py": "a34bdceac9b49328ad8e584a8757e627afa45dbd64bca893dec213423ea4c7f8",
     "hierarchy_mcp.py": "69ae1189cbc0d6bd5c40a069c854cff55ed75143f5dbc2630c959954aa572c7e",
     "hierarchy_policy.py": "41ff919bba487d1daf0239248433970b07b24c8650574ee68319ff6986a6d2c7",
-    "hierarchy_store.py": "893623c9b34250e722834b48102ab18ae0c84e78b9daf4dfe356e30145725376",
+    "hierarchy_store.py": "521049b9cea9c9dcdecbbb91f0447101d16734548ba8b20dab381aa824581d9b",
     "integrations/codex-personal/.gitignore": "3f11bb55129ce391fc04ec545183991b8c641934fc6c949a0c8699f3b72ff2b7",
     "integrations/codex-personal/ADMISSION_AND_READ_FRAMES.md": "b8b06c763ed2d5464796c328a28b95b87b8af58cfe3adcd2837ed8bb0fc09e71",
     "integrations/codex-personal/CLOUD-WORKERS.md": "c61afee9d22af92ff5b5313542cc29fef55a0a57494f8b293aaa0ba3aa20944e",
@@ -684,7 +684,7 @@
     "tests/test_group_mentions.py": "cf9b13d50c14c5f00b487e51ff8cc496e8fee52c39748036673223ecc4f8ecfd",
     "tests/test_group_mentions_api.py": "19d9275de565930c954df1b17800c27650a08121b7047e21f82412b7ea814693",
     "tests/test_hierarchy_access.py": "77926d08f75566a2f4a5ae92d324f98400dee4f99ee435e33c86e9065bb4e6ef",
-    "tests/test_hierarchy_api.py": "a96fb26f1952f5aa3d58d878b6f92eb49d2c3363203ab0dde3b9c40f1a256973",
+    "tests/test_hierarchy_api.py": "4f9493ec5d896e9556e9d195c7984000f96741ed1bccb9f9050f4c4d5d066664",
     "tests/test_hierarchy_limits_ui.cjs": "295ef28ee63480570e45d1947183ba7944c33d082ed57b86c062c9edab445685",
     "tests/test_hierarchy_mcp.py": "210a84bbe70450d6fae9b99a1335714ea41622589178f159ace296d8e20ffb05",
     "tests/test_hierarchy_migration.py": "1ff718ef9a189362bd18a8cf20ff05061f8ee3057fc1f3a88ead772a92f5fc6e",
@@ -881,6 +881,6 @@
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "d44f14f2c2995ebf85c3a1a33047016d6689c0eefa6c295d8e8357415b456ee4"
+    "web/workspace.js": "defb08e644f7f8a375513d1774ba6385b5d115195220771620064a413a1378fd"
   }
 }

@@ -118,9 +118,15 @@ def test_project_archive_endpoint_is_human_csrf_strict_and_owner_scoped(applicat
         assert client.post(path,json=body).status_code==403
         client.headers['X-CSRF-Token']=csrf
         assert other.post(path,json=body).status_code==404
+        preview_path=path.replace('/archive','/archive-preview')
+        assert other.get(preview_path).status_code==404
+        preview=client.get(preview_path).json()
+        assert preview['project_version']==1 and preview['profile_version']==1 and not preview['released']
+        assert preview['profile_id']==created['profile_id']
         for changes in ({'owner_id':'blackoutburst'},{'profile_version':True},{'project_version':'1'}):
             assert client.post(path,json=body|changes).status_code==422
         first=client.post(path,json=body)
         assert first.status_code==200,first.text
         assert client.post(path,json=body).json()==first.json()
         assert b.get_project(human,created['project_id'])['archived']
+        assert client.get(preview_path).json()['released'] is True

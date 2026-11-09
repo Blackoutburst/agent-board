@@ -1589,6 +1589,25 @@ const Workspace = (() => {
     openModal("Révoquer une délégation", form);
   }
 
+  async function archiveHierarchyProject(projectId) {
+    const owner = state.actor && state.actor.owner_id;
+    if (!state.actor || state.actor.kind !== "human") return;
+    const preview = await api(`/hierarchy/projects/${workPath(projectId)}/archive-preview`);
+    if (!state.actor || state.actor.owner_id !== owner) return;
+    if (preview.owner_id !== owner || preview.project_id !== projectId || preview.released) throw new Error("Archivage déjà réalisé ou non confirmé. Actualisez.");
+    const key = idempotencyKey();
+    const form = el("form", {}, el("p", {}, `Archiver le projet ${projectId} (version ${preview.project_version}) et son Lead ${preview.profile_id} (version ${preview.profile_version}) ?`),
+      el("p", {}, "L’équipe doit déjà être archivée et tous les travaux nettoyés. Les quotas actifs seront libérés une fois ; les compteurs cumulés et historiques seront conservés. La restauration sans nouvelle comptabilisation sera refusée."), formButtons("Confirmer l’archivage"));
+    bindForm(form, async () => {
+      if (!state.actor || state.actor.kind !== "human" || state.actor.owner_id !== owner) throw new Error("Compte changé. Rouvrez le formulaire.");
+      const saved = await api(`/hierarchy/projects/${workPath(projectId)}/archive`, {method:"POST",data:{project_version:preview.project_version,profile_version:preview.profile_version,idempotency_key:key}});
+      if (!state.actor || state.actor.owner_id !== owner) return;
+      if (saved.project_id !== projectId || saved.profile_id !== preview.profile_id || saved.version !== preview.project_version + 1 || saved.profile_version !== preview.profile_version + 1) throw new Error("Archivage non confirmé. Réessayez avec ce même formulaire.");
+      closeModal(); await agents();
+    });
+    openModal("Archiver le projet et son Lead", form);
+  }
+
   async function renderHierarchy(body, request) {
     if (state.actor.kind !== "human") {
       body.append(empty("Cette administration est réservée au propriétaire humain."));
@@ -1619,6 +1638,7 @@ const Workspace = (() => {
       const appendRows = rows => rows.forEach(row => list.append(panel(`Délégation ${row.id}`, el("div", { class: "panel-body" },
         el("p", {}, `Profil : ${row.beneficiary_id} · ${row.parent_id ? `Parent : ${row.parent_id}` : "Racine accordée par le propriétaire"}`),
         el("p", {}, `État enregistré : ${row.status} · Version : ${row.version}`), scope(row.policy), quota(row.policy, row.counters),
+        row.project_binding ? btn("Archiver projet et Lead", guard(() => archiveHierarchyProject(row.project_binding.project_id))) : null,
         row.status === "active" ? el("div", {class:"button-row"}, btn("Réduire les droits", guard(() => hierarchyLimitsEditor("reduce", row.id))), btn("Révoquer", guard(() => revokeHierarchy(row.id)))) : null))));
       appendRows(data.delegations);
       if (!data.delegations.length) list.append(empty("Aucune délégation enregistrée."));

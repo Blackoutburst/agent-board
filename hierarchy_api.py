@@ -68,3 +68,7 @@ def mount_hierarchy_routes(app, board, human):
     async def archive_project(project_id: str, values: HierarchyProjectArchive, actor=Depends(human)):
         return store.archive_project_lead(actor, project_id, values.project_version,
                                           values.profile_version, values.idempotency_key)
+
+    @app.get('/api/hierarchy/projects/{project_id}/archive-preview')
+    async def archive_preview(project_id: str, actor=Depends(human)):
+        return store.project_archive_preview(actor, project_id)

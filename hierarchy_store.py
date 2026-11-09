@@ -507,6 +507,20 @@ class HierarchyStore:
             return self._remember(db, actor, 'archive_team_profile', key, payload,
                                   dict(id=leaf['id'], profile_id=profile_id, version=expected_version + 1))
 
+    def project_archive_preview(self, actor, project_id):
+        with self.board._tx() as db:
+            actor = self.board._human(db, actor)
+            binding = db.execute('SELECT * FROM hierarchy_project_bindings WHERE owner_id=? AND project_id=?',
+                                 (actor['owner_id'], project_id)).fetchone()
+            if binding is None:
+                _fail('hierarchy_project_binding_not_found', 404)
+            project = self.board._project_member(db, actor, project_id)
+            profile = self.board._profile_owned(db, actor, binding['profile_id'])
+            released = db.execute("SELECT 1 FROM hierarchy_receipts WHERE owner_id=? AND operation='archive_project_lead' "
+                                  "AND json_extract(receipt,'$.project_id')=?", (actor['owner_id'], project_id)).fetchone()
+            return dict(owner_id=actor['owner_id'], project_id=project_id, profile_id=profile['id'],
+                        project_version=project['version'], profile_version=profile['version'], released=bool(released))
+
     def archive_project_lead(self, actor, project_id, project_version, profile_version, key):
         """Human reconciliation only; archive after team/work cleanup, once."""
         exact_string(project_id); _version(project_version); _version(profile_version)
@@ -608,7 +622,9 @@ class HierarchyStore:
             rows = db.execute('SELECT * FROM hierarchy_delegations WHERE owner_id=? AND id>? ORDER BY id LIMIT ?',
                               (actor['owner_id'], after or '', limit + 1)).fetchall()
             return dict(limits=self._view(limits) if limits is not None else None,
-                        delegations=[self._view(row) for row in rows[:limit]],
+                        delegations=[dict(self._view(row), project_binding=(dict(binding) if (binding := db.execute(
+                            'SELECT project_id,profile_id FROM hierarchy_project_bindings WHERE owner_id=? AND delegation_id=?',
+                            (actor['owner_id'], row['id'])).fetchone()) else None)) for row in rows[:limit]],
                         next_after=rows[limit - 1]['id'] if len(rows) > limit else None)
 
     def list_for_agent(self, actor, limit=20, after=None):
