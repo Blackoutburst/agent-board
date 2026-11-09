@@ -322,3 +322,98 @@ def test_new_project_scope_tracks_owner_reduction_and_receipt_payload(setup):
     assert not s['store'].inspect(actor, result['id'])['effective']['project_ids']
     with pytest.raises(BoardError, match='hierarchy_operation_not_authorized'):
         new_project(s, root)
+
+
+def leaf_policy(project, **changes):
+    return child(project_ids=[project], operations=[], max_depth=0, **changes)
+
+
+def test_project_lead_creates_distinct_scoped_developer_and_reviewer(setup):
+    s = setup; root = enabled(s); project = new_project(s, root)
+    lead = bind_created(s, project)
+    policy = leaf_policy(project['project_id'])
+    profiles = [s['store'].create_team_profile(lead, project['id'], role, role, policy, 1, role)
+                for role in ('developer', 'reviewer')]
+    assert profiles[0]['profile_id'] != profiles[1]['profile_id']
+    for result in profiles:
+        with s['b']._connection() as db:
+            row = db.execute('SELECT * FROM agent_profiles WHERE id=?', (result['profile_id'],)).fetchone()
+            assert json.loads(row['project_ids']) == [project['project_id']]
+            assert not db.execute('SELECT * FROM agent_profile_bindings WHERE profile_id=?', (row['id'],)).fetchall()
+        assert s['store'].create_team_profile(lead, project['id'], json.loads(row['fields'])['role'],
+            json.loads(row['fields'])['role'], policy, 1, json.loads(row['fields'])['role']) == result
+    with s['b']._connection() as db:
+        counters = json.loads(db.execute('SELECT counters FROM hierarchy_limits').fetchone()[0])
+        assert counters['profiles'] == dict(live=3, created=3)
+        assert counters['delegations'] == dict(live=4, created=4)
+
+
+def team(s, root):
+    project = s['ceiling']()['project_ids'][0]
+    return s['store'].create_team_profile(s['parent_actor'], root['id'], 'Developer', 'developer',
+                                         leaf_policy(project), 1, 'team')
+
+
+def test_team_edits_are_cas_idempotent_and_never_change_grants(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    args = (s['parent_actor'], root['id'], result['profile_id'], 1, {'status': 'paused', 'name': 'New'}, 'edit')
+    edited = s['store'].update_team_profile(*args)
+    assert s['store'].update_team_profile(*args) == edited
+    assert edited['version'] == 2
+    for changes in ({'policy': {}}, {'project_ids': []}, {'status': 'archived'}, {'kind': 'companion'}):
+        with pytest.raises(BoardError):
+            s['store'].update_team_profile(s['parent_actor'], root['id'], result['profile_id'], 2, changes, 'bad')
+    with pytest.raises(BoardError, match='hierarchy_version_conflict'):
+        s['store'].update_team_profile(s['parent_actor'], root['id'], result['profile_id'], 1, {'name': 'Old'}, 'stale')
+
+
+def test_team_provenance_refuses_unrelated_profiles_and_revoked_retry(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    with pytest.raises(BoardError, match='hierarchy_team_profile_not_found'):
+        s['store'].update_team_profile(s['parent_actor'], root['id'], s['target']['id'], 1, {'name': 'Hijack'}, 'hijack')
+    s['store'].change(s['human'], root['id'], 1, 'stop', revoke=True)
+    with pytest.raises(BoardError, match='hierarchy_revoked'): team(s, root)
+    with pytest.raises(BoardError, match='hierarchy_revoked'):
+        s['store'].update_team_profile(s['parent_actor'], root['id'], result['profile_id'], 1, {'name': 'After'}, 'after')
+
+
+def test_team_cannot_delegate_or_change_project_scope(setup):
+    s = setup; root = enabled(s)
+    for policy in (s['subordinate'](), leaf_policy('unrelated')):
+        with pytest.raises(BoardError):
+            s['store'].create_team_profile(s['parent_actor'], root['id'], 'Bad', 'Lead', policy, 1, 'bad')
+
+
+def test_team_creation_rolls_back_provenance_profile_and_counters(setup, monkeypatch):
+    s = setup; root = enabled(s)
+    def rows():
+        with s['b']._connection() as db:
+            return {t: [tuple(r) for r in db.execute('SELECT * FROM ' + t)] for t in (
+                'agent_profiles', 'agent_profile_versions', 'hierarchy_limits', 'hierarchy_delegations',
+                'hierarchy_team_profiles', 'hierarchy_receipts', 'audit')}
+    before = rows(); remember = s['store']._remember
+    def fail(*args):
+        remember(*args)
+        raise RuntimeError('after receipt')
+    monkeypatch.setattr(s['store'], '_remember', fail)
+    with pytest.raises(RuntimeError): team(s, root)
+    assert rows() == before
+
+
+def test_paused_team_still_occupies_live_and_cumulative_capacity(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    before = snapshot(s)['hierarchy_limits']
+    s['store'].update_team_profile(s['parent_actor'], root['id'], result['profile_id'], 1,
+                                   {'status': 'paused'}, 'pause')
+    assert snapshot(s)['hierarchy_limits'] == before
+    s['store'].update_team_profile(s['parent_actor'], root['id'], result['profile_id'], 2,
+                                   {'status': 'active'}, 'resume')
+    assert snapshot(s)['hierarchy_limits'] == before
+
+
+def test_sibling_root_cannot_manage_another_roots_team(setup):
+    s = setup; root = enabled(s); result = team(s, root)
+    sibling = s['store'].create_root(s['human'], s['target']['id'], s['ceiling'](), 'sibling')
+    with pytest.raises(BoardError, match='hierarchy_team_profile_not_found'):
+        s['store'].update_team_profile(s['target_actor'], sibling['id'], result['profile_id'], 1,
+                                       {'name': 'Hijack'}, 'hijack')

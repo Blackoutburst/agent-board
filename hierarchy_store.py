@@ -33,6 +33,10 @@ def migrate_hierarchy(db):
             PRIMARY KEY(owner_id,project_id),
             FOREIGN KEY(owner_id,creator_id) REFERENCES hierarchy_delegations(owner_id,id),
             FOREIGN KEY(owner_id,delegation_id) REFERENCES hierarchy_delegations(owner_id,id))''',
+        '''CREATE TABLE hierarchy_team_profiles(owner_id TEXT NOT NULL, profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
+            parent_id TEXT NOT NULL, delegation_id TEXT NOT NULL, PRIMARY KEY(owner_id,profile_id),
+            FOREIGN KEY(owner_id,parent_id) REFERENCES hierarchy_delegations(owner_id,id),
+            FOREIGN KEY(owner_id,delegation_id) REFERENCES hierarchy_delegations(owner_id,id))''',
         'CREATE INDEX hierarchy_parent ON hierarchy_delegations(owner_id,parent_id)',
     ):
         db.execute(statement)
@@ -331,6 +335,76 @@ class HierarchyStore:
             self.board._audit(db, actor, 'hierarchy_project_lead_created', dict(
                 project_id=project_id, profile_id=profile_id, parent_id=parent_id, delegation_id=result['id']))
             return self._remember(db, actor, 'create_project_lead', key, payload, result)
+
+    def create_team_profile(self, actor, parent_id, name, role, policy, expected_version, key):
+        """Create an ordinary leaf profile with single-project provenance."""
+        _version(expected_version)
+        exact_string(name); exact_string(role)
+        policy = normalize_policy(policy)
+        if policy['operations'] or policy['max_depth'] != 0 or policy['allow_new_projects']:
+            _fail('hierarchy_team_must_be_leaf', 403)
+        payload = dict(parent_id=parent_id, name=name, role=role, policy=policy, expected_version=expected_version)
+        with self.board._tx() as db:
+            actor = self.board._actor(db, actor, 'allow_requests')
+            chain, effective = self._authorize(db, actor, parent_id, 'create_team_profile')
+            previous = self._retry(db, actor, 'create_team_profile', key, payload)
+            if previous is not None:
+                return previous
+            if chain[-1]['version'] != expected_version:
+                _fail('hierarchy_version_conflict', 409)
+            check_child_policy(effective, policy)
+            project = db.execute('''SELECT p.* FROM projects p JOIN project_members m ON m.project_id=p.id
+                WHERE p.id=? AND m.owner_id=?''', (policy['project_ids'][0], actor['owner_id'])).fetchone()
+            if project is None or project['archived']:
+                _fail('hierarchy_project_unavailable', 403)
+            self._charge(db, actor['owner_id'], chain, dict(profiles=1, delegations=1))
+            identifier = secrets.token_hex(16)
+            _insert_profile(db, identifier, actor['owner_id'], name)
+            profile_policy = dict(allow_read=True, allow_messages=False, allow_requests=True,
+                actions=policy['actions'], resources=policy['resources'], autonomy=policy['autonomy'])
+            self.board._write_profile(db, identifier, dict(role=role, policy=profile_policy,
+                                      project_ids=policy['project_ids']), increment=False)
+            result = self._insert(db, actor, identifier, parent_id, policy)
+            db.execute('INSERT INTO hierarchy_team_profiles VALUES(?,?,?,?)',
+                       (actor['owner_id'], identifier, parent_id, result['id']))
+            result['profile_id'] = identifier
+            return self._remember(db, actor, 'create_team_profile', key, payload, result)
+
+    def update_team_profile(self, actor, parent_id, profile_id, expected_version, changes, key):
+        """Cosmetic changes and pause/resume; grants and archival stay separate."""
+        _version(expected_version)
+        allowed = {'name', 'avatar', 'description', 'role', 'instructions', 'language', 'response_style', 'status'}
+        if type(changes) is not dict or not changes or set(changes) - allowed:
+            _fail('hierarchy_team_changes_invalid')
+        if 'status' in changes and changes['status'] not in ('active', 'paused'):
+            _fail('hierarchy_team_changes_invalid')
+        with self.board._tx() as db:
+            actor = self.board._actor(db, actor, 'allow_requests')
+            chain, effective = self._authorize(db, actor, parent_id, 'manage_team_profile')
+            link = db.execute('SELECT * FROM hierarchy_team_profiles WHERE owner_id=? AND profile_id=? AND parent_id=?',
+                              (actor['owner_id'], profile_id, parent_id)).fetchone()
+            if link is None:
+                _fail('hierarchy_team_profile_not_found', 404)
+            delegation = self._delegation(db, actor['owner_id'], link['delegation_id'])
+            if delegation['status'] != 'active':
+                _fail('hierarchy_revoked', 403)
+            target = self.board._profile_owned(db, actor, profile_id)
+            if target['legacy'] or target['kind'] != 'agent' or target['status'] == 'archived':
+                _fail('hierarchy_beneficiary_invalid', 403)
+            target_policy = json.loads(delegation['policy'])
+            check_child_policy(effective, target_policy)
+            if json.loads(target['project_ids']) != target_policy['project_ids']:
+                _fail('hierarchy_profile_project_scope_required', 403)
+            values = self.board._profile_values(db, actor, changes)
+            payload = dict(parent_id=parent_id, profile_id=profile_id, expected_version=expected_version, changes=values)
+            previous = self._retry(db, actor, 'update_team_profile', key, payload)
+            if previous is not None:
+                return previous
+            if target['version'] != expected_version:
+                _fail('hierarchy_version_conflict', 409)
+            self.board._write_profile(db, profile_id, values)
+            result = dict(id=delegation['id'], profile_id=profile_id, version=expected_version + 1)
+            return self._remember(db, actor, 'update_team_profile', key, payload, result)
 
     def change(self, actor, identifier, expected_version, key, *, policy=None, revoke=False):
         _version(expected_version)
