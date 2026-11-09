@@ -623,7 +623,9 @@ class HierarchyStore:
                               (actor['owner_id'], after or '', limit + 1)).fetchall()
             return dict(limits=self._view(limits) if limits is not None else None,
                         delegations=[dict(self._view(row), project_binding=(dict(binding) if (binding := db.execute(
-                            'SELECT project_id,profile_id FROM hierarchy_project_bindings WHERE owner_id=? AND delegation_id=?',
+                            "SELECT b.project_id,b.profile_id,EXISTS(SELECT 1 FROM hierarchy_receipts r WHERE r.owner_id=b.owner_id "
+                            "AND r.operation='archive_project_lead' AND json_extract(r.receipt,'$.project_id')=b.project_id) AS released "
+                            "FROM hierarchy_project_bindings b WHERE b.owner_id=? AND b.delegation_id=?",
                             (actor['owner_id'], row['id'])).fetchone()) else None)) for row in rows[:limit]],
                         next_after=rows[limit - 1]['id'] if len(rows) > limit else None)
 

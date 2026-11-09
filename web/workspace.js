@@ -1638,7 +1638,7 @@ const Workspace = (() => {
       const appendRows = rows => rows.forEach(row => list.append(panel(`Délégation ${row.id}`, el("div", { class: "panel-body" },
         el("p", {}, `Profil : ${row.beneficiary_id} · ${row.parent_id ? `Parent : ${row.parent_id}` : "Racine accordée par le propriétaire"}`),
         el("p", {}, `État enregistré : ${row.status} · Version : ${row.version}`), scope(row.policy), quota(row.policy, row.counters),
-        row.project_binding ? btn("Archiver projet et Lead", guard(() => archiveHierarchyProject(row.project_binding.project_id))) : null,
+        row.project_binding ? (row.project_binding.released ? el("p", {class:"muted"}, "Archivage projet et Lead confirmé ; historique conservé.") : btn("Archiver projet et Lead", guard(() => archiveHierarchyProject(row.project_binding.project_id)))) : null,
         row.status === "active" ? el("div", {class:"button-row"}, btn("Réduire les droits", guard(() => hierarchyLimitsEditor("reduce", row.id))), btn("Révoquer", guard(() => revokeHierarchy(row.id)))) : null))));
       appendRows(data.delegations);
       if (!data.delegations.length) list.append(empty("Aucune délégation enregistrée."));

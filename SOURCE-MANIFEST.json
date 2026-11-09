@@ -80,7 +80,7 @@
     "hierarchy_api.py": "a34bdceac9b49328ad8e584a8757e627afa45dbd64bca893dec213423ea4c7f8",
     "hierarchy_mcp.py": "69ae1189cbc0d6bd5c40a069c854cff55ed75143f5dbc2630c959954aa572c7e",
     "hierarchy_policy.py": "41ff919bba487d1daf0239248433970b07b24c8650574ee68319ff6986a6d2c7",
-    "hierarchy_store.py": "521049b9cea9c9dcdecbbb91f0447101d16734548ba8b20dab381aa824581d9b",
+    "hierarchy_store.py": "a33323b3c2fefadf704574c6af80a8ba1a08fc1040fdc13b92c24ea9fb1db0a7",
     "integrations/codex-personal/.gitignore": "3f11bb55129ce391fc04ec545183991b8c641934fc6c949a0c8699f3b72ff2b7",
     "integrations/codex-personal/ADMISSION_AND_READ_FRAMES.md": "b8b06c763ed2d5464796c328a28b95b87b8af58cfe3adcd2837ed8bb0fc09e71",
     "integrations/codex-personal/CLOUD-WORKERS.md": "c61afee9d22af92ff5b5313542cc29fef55a0a57494f8b293aaa0ba3aa20944e",
@@ -616,7 +616,7 @@
     "tests/browser_family.cjs": "ea17478d3c44275bd122d25bcbb66db7a25e8171b020dc3018e875ee2010b37e",
     "tests/browser_followups.cjs": "8259df28aa9566ec62c76ee42740a2a0d7db90e6a04cc273802997e7d632f771",
     "tests/browser_group_mentions.cjs": "d0ea2931cd959fd1aa55d52194c83a7e0e1dfa13e5696c8d5511d178c9046a28",
-    "tests/browser_hierarchy.py": "fd1ca231705e36e25537607297699821d6a159362390226ac763fb05c9826a5c",
+    "tests/browser_hierarchy.py": "707d92b628258815149a650aa995dd7b227c7036f6224b7911063f113a916e77",
     "tests/browser_markdown.cjs": "c67620788aeee3cd5d7d705ddd786029f73708ab6f04ee0c05338c01dad98c04",
     "tests/browser_messages_append.cjs": "9f6cdf88a60256bd4af142aad23e93cbf0f155103a01d54a8ea6adaa2ae7caca",
     "tests/browser_overhaul.cjs": "6313e1bbafa9dde9309ac83d0c20a937defc705219ff0c050e01abc8ae1e3f8f",
@@ -881,6 +881,6 @@
     "web/vendor/README.md": "a10b2b4942125bdc95e68a1281c710385e8c7e570f147c40c3ffab1801efdf26",
     "web/vendor/markdown-it-15.0.2.min.js": "181116741d0825979665a3d08a8eac9eadad4a7a524a1b6dba3f5fdf696bc8d7",
     "web/vendor/markdown-it-LICENSE.txt": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473",
-    "web/workspace.js": "defb08e644f7f8a375513d1774ba6385b5d115195220771620064a413a1378fd"
+    "web/workspace.js": "a480980d889e31fcec7e52d044f503b1294d986f76d42650ae59e5330eec92d7"
   }
 }

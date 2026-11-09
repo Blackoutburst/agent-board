@@ -60,14 +60,42 @@ def run():
                     dialog.get_by_role('button', name='Confirmer la révocation', exact=True).click()
                     expect(dialog).not_to_be_visible()
                     expect(page.get_by_text('État enregistré : revoked · Version : 3', exact=True)).to_be_visible()
-                    page.screenshot(path='/tmp/lead80-browser77-desktop.png', full_page=True)
+                    # Prepare a second chain through normal fixture-only APIs.
+                    from hierarchy_store import HierarchyStore
+                    from test_hierarchy_policy import policy, child
+                    store = HierarchyStore(board)
+                    ceiling = policy(project_ids=[], actions=[], resources=[])
+                    store.configure(human, 1, ceiling, 'archive-fixture-limits')
+                    creator = board.create_agent_profile(human, 'Archive creator', project_ids=[], policy=dict(
+                        allow_read=True, allow_messages=False, allow_requests=True,
+                        actions=[], resources=[], autonomy='queue'))
+                    device = board.create_device(human, 'Archive fixture', [])
+                    board.bind_agent_profile(human, creator['id'], creator['version'], device['id'], 'archive-creator', 'codex')
+                    raw = board.authenticate(device['token'])
+                    board.register_agent(raw, 'archive-creator', 'Archive fixture', [], 'codex', True, 'archive-creator')
+                    root = store.create_root(human, creator['id'], ceiling, 'archive-fixture-root')
+                    created = store.create_project_lead(board.actor_session(raw, 'archive-creator'), root['id'],
+                        'Archive project', 'Archive Lead', child(project_ids=[], actions=[], resources=[]), 1, 'archive-fixture-project')
+                    page.get_by_role('button', name='Refresh', exact=True).click()
+                    page.get_by_role('button', name='Archiver projet et Lead', exact=True).click()
+                    expect(dialog.get_by_text('La restauration sans nouvelle comptabilisation sera refusée.', exact=False)).to_be_visible()
+                    dialog.get_by_role('button', name='Confirmer l’archivage', exact=True).click()
+                    expect(dialog).not_to_be_visible()
+                    expect(page.get_by_text('Archivage projet et Lead confirmé ; historique conservé.', exact=True)).to_be_visible()
+                    expect(page.get_by_role('button', name='Archiver projet et Lead', exact=True)).to_have_count(0)
+                    assert board.get_project(human, created['project_id'])['archived']
+                    assert board.get_agent_profile(human, created['profile_id'])['status'] == 'archived'
+                    assert store.project_archive_preview(human, created['project_id'])['released']
+                    limits = store.list_for_owner(human)['limits']['counters']
+                    assert limits['projects'] == dict(live=0, created=1)
+                    page.screenshot(path='/tmp/lead80-browser82-desktop.png', full_page=True)
                     page.set_viewport_size(dict(width=390, height=844))
-                    page.screenshot(path='/tmp/lead80-browser77-mobile.png', full_page=True)
+                    page.screenshot(path='/tmp/lead80-browser82-mobile.png', full_page=True)
                     assert not errors, errors
-                    print('PASS browser: login, limits, explicit root, reduction, revoke, retained history; no JS errors')
+                    print('PASS browser: login, limits, explicit root, reduction, revoke, retained history, project/Lead archive and quota conservation; no JS errors')
                 except Exception:
                     if 'page' in locals():
-                        page.screenshot(path='/tmp/lead80-browser77-failure.png', full_page=True)
+                        page.screenshot(path='/tmp/lead80-browser82-failure.png', full_page=True)
                         print(page.locator('body').inner_text()[-2500:])
                     raise
                 finally:
