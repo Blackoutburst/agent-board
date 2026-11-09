@@ -66,7 +66,7 @@ def project_allowed(db, board, actor, profile, project_id):
     return False
 
 
-def runtime_scope(db, board, actor, profile, ticket_id):
+def runtime_scope(db, board, actor, profile, ticket_id, *, permission="allow_requests"):
     """Server-only admission pin; current scope must match before start/result."""
     identifier = creation_delegation(db, profile)
     if identifier is None:
@@ -75,7 +75,7 @@ def runtime_scope(db, board, actor, profile, ticket_id):
     from projects import _json
     store = HierarchyStore(board)
     chain = store._chain(db, actor['owner_id'], identifier)
-    ceiling = profile_ceiling(db, board, actor, profile, 'allow_requests')
+    ceiling = profile_ceiling(db, board, actor, profile, permission)
     ticket = db.execute('SELECT resource FROM tickets WHERE id=?', (ticket_id,)).fetchone()
     if ticket is None or ticket['resource'] and ticket['resource'] not in ceiling['resources']:
         _fail('hierarchy_runtime_resource_denied', 403)

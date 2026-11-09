@@ -516,6 +516,15 @@ class RuntimeMixin:
                 row['message_id'],row['source_sha256'],row['profile_version'])
             if any(row[key] != linked[key] for key in ('project_id','ticket_id')):
                 _fail('message_context_changed',409)
+            from hierarchy_access import runtime_scope
+            current = runtime_scope(db, self, actor, profile, linked['ticket_id'], permission='allow_reply')
+            if current is not None:
+                try:
+                    payload = json.loads(row['payload'])
+                except (ValueError, TypeError):
+                    _fail('execution_scope_invalid', 409)
+                if type(payload) is not dict or payload.get('hierarchy_scope') != current:
+                    _fail('hierarchy_execution_scope_changed', 409)
             return actor, profile
         # Only a server-created reservation carries this marker. Old ticket
         # Runtime rows never acquire review authority from a later status change.
@@ -644,8 +653,11 @@ class RuntimeMixin:
             _fail('invalid_source_sha256')
         with self._tx() as db:
             actor,profile,linked = self._runtime_message_authorize(db,actor,thread_id,message_id,source_sha256)
+            from hierarchy_access import runtime_scope
+            hierarchy_pin = runtime_scope(db, self, actor, profile, linked['ticket_id'], permission='allow_reply')
             payload = _json(values | linked | {'scope_kind':'message','source_sha256':source_sha256,
-                'agent_id':profile['id'],'profile_version':profile['version']})
+                'agent_id':profile['id'],'profile_version':profile['version']}
+                | ({'hierarchy_scope': hierarchy_pin} if hierarchy_pin is not None else {}))
             existing = db.execute('''SELECT * FROM runtime_executions WHERE owner_id=?
                 AND device_id=? AND session_id=? AND idempotency_key=?''',
                 (actor['owner_id'],actor['device_id'],actor['session_id'],idempotency_key)).fetchone()
@@ -732,8 +744,11 @@ class RuntimeMixin:
                     ((device_id=? AND session_id=? AND idempotency_key=?) OR (work_id=? AND turn_id=?)) LIMIT 1''',
                     (actor['owner_id'],actor['device_id'],actor['session_id'],idempotency_key,work_id,turn_id)).fetchone():
                 _fail('execution_admission_conflict',409)
+            from hierarchy_access import runtime_scope
+            hierarchy_pin = runtime_scope(db, self, actor, profile, linked['ticket_id'], permission='allow_reply')
             payload=_json(values | linked | {'scope_kind':'message','source_sha256':source_sha256,
-                'agent_id':profile['id'],'profile_version':profile['version']})
+                'agent_id':profile['id'],'profile_version':profile['version']}
+                | ({'hierarchy_scope': hierarchy_pin} if hierarchy_pin is not None else {}))
             arguments={**values,'source_sha256':source_sha256,'session_id':actor['session_id']}
             response=_message_admission_seal(actor,profile,arguments)
             exact={key:actor[key] for key in ('owner_id','device_id','session_id')} | {

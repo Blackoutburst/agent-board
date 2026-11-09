@@ -153,3 +153,54 @@ def test_ancestor_policy_pin_blocks_changed_admission_and_success_result(setup):
     with pytest.raises(BoardError, match='hierarchy_execution_scope_changed'):
         s['b'].finish_execution(actor, running['id'], running['revision'], 'completed', True, 'completed')
     assert s['b'].get_execution_control(actor, reserved['id'])['control_reason'] == 'authorization_changed'
+
+
+def reserved_message_hierarchy(s):
+    root = enabled(s); result = new_project(s, root); b = s['b']
+    # Messaging remains a separate explicit profile grant in this fixture.
+    profile = b.get_agent_profile(s['human'], result['profile_id'])
+    policy = dict(profile['policy'], allow_messages=True)
+    b.update_agent_profile(s['human'], result['profile_id'], profile['version'], policy=policy)
+    device = b.create_device(s['human'], 'message-lead', [])
+    b.bind_agent_profile(s['human'], result['profile_id'], 2, device['id'], 'message-lead', 'codex')
+    raw = b.authenticate(device['token'])
+    b.register_agent(raw, 'message-lead', 'message-lead', [], 'codex', True, 'message-lead')
+    actor = b.actor_session(raw, 'message-lead')
+    ticket = b.create_ticket(s['human'], result['project_id'], 'Conversation', resource='repo:work', idempotency_key='message-ticket')
+    source = b.post_message(s['human'], ticket['thread_id'], 'Please reply',
+        mentions=['agent:' + result['profile_id']], idempotency_key='source')
+    sha = b.get_message(actor, ticket['thread_id'], source['id'])['source_sha256']
+    execution = b.reserve_message_execution(actor, 'message-turn', ticket['thread_id'], source['id'], sha,
+        'message-work', 'message-turn', 'codex_chatgpt', 'fixture')['execution']
+    return root, result, actor, execution, ticket, source
+
+
+def test_message_admission_pin_changes_after_ancestor_policy_reduction(setup):
+    s = setup; root, result, actor, reserved, ticket, source = reserved_message_hierarchy(s)
+    s['store'].change(s['human'], root['id'], 1, 'reduce-message', policy=s['ceiling'](actions=['repo.read_file']))
+    with pytest.raises(BoardError, match='hierarchy_execution_scope_changed'):
+        s['b'].start_execution(actor, reserved['id'], reserved['revision'])
+    assert s['b'].get_execution_control(actor, reserved['id'])['should_stop']
+    assert s['b'].finish_execution(actor, reserved['id'], reserved['revision'], 'cancelled', True, 'policy_changed')['state'] == 'finished'
+
+
+def test_message_success_and_all_new_publications_are_refused_after_revoke(setup):
+    s = setup; root, result, actor, reserved, ticket, source = reserved_message_hierarchy(s)
+    b = s['b']; running = b.start_execution(actor, reserved['id'], reserved['revision'])
+    s['store'].change(s['human'], root['id'], 1, 'revoke-message', revoke=True)
+    for call in (lambda: b.post_message(actor, ticket['thread_id'], 'Success', reply_to=source['id'], idempotency_key='publish'),
+                 lambda: b.update_ticket(actor, ticket['id'], ticket['version'], progress='Done'),
+                 lambda: b.add_attachment(actor, ticket['thread_id'], 'result.txt', 'text/plain', b'new result', 'publish-file'),
+                 lambda: b.finish_execution(actor, running['id'], running['revision'], 'completed', True, 'completed')):
+        with pytest.raises(BoardError, match='hierarchy_revoked'): call()
+
+
+def test_message_seal_and_reservation_use_the_same_hierarchy_payload(setup):
+    s = setup; root, result, actor, reserved, ticket, source = reserved_message_hierarchy(s)
+    b = s['b']; sha = b.get_message(actor, ticket['thread_id'], source['id'])['source_sha256']
+    args = (actor, 'sealed-turn', ticket['thread_id'], source['id'], sha,
+            'sealed-work', 'sealed-turn', 'codex_chatgpt', 'fixture')
+    first = b.seal_message_execution_admission(*args)
+    assert b.seal_message_execution_admission(*args) == first
+    with pytest.raises(BoardError, match='execution_admission_refused'):
+        b.reserve_message_execution(*args)
